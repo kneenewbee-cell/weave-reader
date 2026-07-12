@@ -1,0 +1,75 @@
+/*
+ * Obsidian 原生 Modal 确认/选择对话框样式。
+ * 这些对话框渲染在 document.body 下，不在 .weave-app 内，因此必须保持全局类名。
+ */
+
+.obsidian-confirm-message {
+	margin-bottom: 4px;
+}
+
+.obsidian-confirm-message p {
+	margin: 0 0 8px;
+}
+
+.obsidian-confirm-message p:last-child {
+	margin-bottom: 0;
+}
+
+.obsidian-choice-buttons {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 12px;
+	margin-top: 16px;
+}
+
+.obsidian-choice-buttons.is-horizontal {
+	flex-direction: row;
+}
+
+.obsidian-choice-buttons.is-horizontal .obsidian-choice-option {
+	flex: 1;
+	min-width: 0;
+}
+
+.obsidian-choice-option {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.obsidian-choice-option > button {
+	width: 100%;
+}
+
+.obsidian-choice-buttons.is-horizontal .obsidian-choice-option > button {
+	text-align: center;
+}
+
+.obsidian-confirm-buttons,
+.obsidian-confirm-footer {
+	display: flex;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	margin-top: 16px;
+}
+
+.obsidian-confirm-footer.is-horizontal {
+	margin-top: 20px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.obsidian-confirm-input {
+	width: 100%;
+	margin-top: 8px;
+	margin-bottom: 16px;
+}
+
+.obsidian-input-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+}

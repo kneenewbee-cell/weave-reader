@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"moduleResolution": "bundler",
+		"types": ["svelte", "node", "bun-types", "vitest/globals", "@testing-library/jest-dom"]
+	},
+	"include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "vitest.config.ts"],
+	"exclude": [
+		"src/demo/**",
+		"src/test-integration.ts",
+		"src/tests/preview-fix-test.ts",
+		"src/tests/run-tests.ts"
+	]
+}

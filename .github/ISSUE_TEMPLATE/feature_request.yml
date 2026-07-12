@@ -1,0 +1,39 @@
+name: 功能建议
+description: 新功能或改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        大功能请在本机用 Cursor 填写本地 spec（`docs/specs/TEMPLATE-feature.md`，不随公开仓发布）后交给 AI 实现；也可直接在本 Issue 写清验收标准。
+  - type: textarea
+    id: story
+    attributes:
+      label: 用户故事
+      description: 作为读者，我希望…以便…
+      placeholder: 作为读者，我希望在段落模式里一键复制当前段，以便贴到笔记里
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准（完成时你怎么判断「好了」）
+      placeholder: |
+        - 桌面端选中段落后…
+        - 移动端…
+    validations:
+      required: true
+  - type: checkboxes
+    id: priority
+    attributes:
+      label: 优先级
+      options:
+        - label: 必须有
+        - label: 应该有
+        - label: 可以有（可分期）
+  - type: textarea
+    id: notes
+    attributes:
+      label: 不要动 / 约束（可选）
+      placeholder: 例如：不要改 vendor；保持与现有高亮同步逻辑一致

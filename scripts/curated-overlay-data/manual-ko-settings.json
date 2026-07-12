@@ -1,0 +1,20 @@
+{
+  "epub.settings.tabs.basic": "기본",
+  "epub.settings.tabs.license": "라이선스",
+  "epub.settings.tabs.about": "정보",
+  "epub.settings.groups.premiumPreview": "프리미엄 미리보기",
+  "epub.settings.groups.reading": "읽기 위치와 책갈피",
+  "epub.settings.groups.features": "기능 및 발췌",
+  "epub.settings.groups.diagnostics": "개발 및 진단",
+  "epub.settings.notifications.bookmarkFolderUpdated": "책갈피 폴더를 업데이트했습니다",
+  "epub.settings.notifications.premiumPreviewEnabled": "프리미엄 기능 미리보기를 켰습니다",
+  "epub.settings.notifications.premiumPreviewDisabled": "프리미엄 기능 미리보기를 껐습니다",
+  "epub.settings.notifications.debugEnabled": "디버그 모드를 켰습니다",
+  "epub.settings.notifications.debugDisabled": "디버그 모드를 껐습니다",
+  "epub.settings.notifications.bookshelfDisplayModeUpdated": "책장 기본 보기를 {mode}(으)로 바꿨습니다",
+  "epub.settings.notifications.autoSaveEnabled": "읽기 위치 자동 저장을 켰습니다",
+  "epub.settings.notifications.autoSaveDisabled": "읽기 위치 자동 저장을 껐습니다",
+  "epub.settings.notifications.autoSavePagesUpdated": "자동 저장 임계값을 {pages}페이지로 업데이트했습니다",
+  "epub.settings.notifications.templateSwitched": "{template}(으)로 전환했습니다",
+  "epub.settings.notifications.premiumRequired": "이 설정은 프리미엄 기능입니다. 먼저 라이선스를 활성화하세요"
+}

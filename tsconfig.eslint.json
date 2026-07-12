@@ -1,0 +1,18 @@
+{
+	"extends": "./tsconfig.json",
+	"include": [
+		"src/**/*.ts",
+		"src/**/*.svelte",
+		"src/**/*.d.ts"
+	],
+	"exclude": [
+		"dist/**",
+		"backup-before-migration/**",
+		"src/demo/**",
+		"src/tests/**",
+		"src/test-integration.ts",
+		"src/**/*.test.ts",
+		"src/**/*.spec.ts",
+		"src/**/__tests__/**"
+	]
+}

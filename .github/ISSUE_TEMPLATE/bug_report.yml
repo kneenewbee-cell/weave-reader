@@ -1,0 +1,58 @@
+name: Bug 报告
+description: 阅读器、摘录、高亮、书架等问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量写清复现步骤。维护者无需懂编程；AI 会据此修复。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 期望发生什么？实际发生什么？
+      placeholder: 例如：选中文字后高亮没有出现在书上
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开某 EPUB
+        2. 选中一段文字
+        3. 点击黄色高亮
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Windows 桌面
+        - macOS 桌面
+        - Linux 桌面
+        - iOS
+        - Android
+    validations:
+      required: true
+  - type: checkboxes
+    id: areas
+    attributes:
+      label: 相关功能
+      options:
+        - label: 阅读 / 翻页 / 段落模式
+        - label: 高亮 / 想法 / 摘录笔记
+        - label: 书架 / 导入书籍
+        - label: 回链 / Canvas / Weave 制卡
+        - label: 设置 / 主题 / 语言
+  - type: input
+    id: version
+    attributes:
+      label: 插件版本（设置 → 社区插件 → Weave EPUB Reader）
+      placeholder: 例如 0.6.28
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息（截图、书籍格式、是否与 Weave 主插件同时启用等）

@@ -1,0 +1,112 @@
+.epub-bookshelf-root,
+.epub-reader-root {
+	--epub-progress-tone-start: color-mix(in srgb, var(--text-faint) 78%, var(--background-modifier-border));
+	--epub-progress-tone-start-flat: #9aa3b2;
+	--epub-progress-tone-low: #6d9eff;
+	--epub-progress-tone-mid: #4ec7d8;
+	--epub-progress-tone-high: #f0b44b;
+	--epub-progress-tone-near: #ff8f5c;
+	--epub-progress-tone-complete: #3ecf8e;
+	--epub-progress-ring-track: color-mix(in srgb, var(--background-modifier-border) 66%, transparent);
+	--epub-progress-ring-accent: color-mix(in srgb, var(--interactive-accent) 64%, var(--text-muted));
+	--epub-progress-ring-center: color-mix(in srgb, var(--weave-elevated-background, var(--background-primary)) 98%, transparent);
+	--epub-progress-ring-center-inset: color-mix(in srgb, var(--weave-elevated-background, var(--background-primary)) 99%, transparent);
+}
+
+.epub-bookshelf-root {
+	--epub-progress-ring-size: var(--weave-bookshelf-progress-size, 46px);
+	--epub-progress-ring-font-size: var(--weave-bookshelf-progress-font-size, var(--font-ui-smaller));
+}
+
+.epub-progress-ring-badge {
+	--epub-progress-ring-fill: 0%;
+	--epub-progress-ring-color: var(--epub-progress-ring-accent);
+	width: var(--epub-progress-ring-size);
+	height: var(--epub-progress-ring-size);
+	flex: 0 0 var(--epub-progress-ring-size);
+	border: none;
+	padding: 0;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	position: relative;
+	color: var(--text-normal);
+	font-size: var(--epub-progress-ring-font-size);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	background:
+		radial-gradient(
+			circle at center,
+			var(--epub-progress-ring-center) 63%,
+			transparent 64%
+		),
+		conic-gradient(
+			from -90deg,
+			var(--epub-progress-ring-color) 0 var(--epub-progress-ring-fill),
+			var(--epub-progress-ring-track) var(--epub-progress-ring-fill) 100%
+		);
+	box-shadow:
+		inset 0 0 0 1px color-mix(in srgb, var(--background-modifier-border) 62%, transparent),
+		0 3px 8px rgba(0, 0, 0, 0.035);
+	cursor: default;
+	user-select: none;
+}
+
+.epub-progress-ring-badge::after {
+	content: '';
+	position: absolute;
+	inset: 5px;
+	border-radius: 50%;
+	background: var(--epub-progress-ring-center-inset);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--background-modifier-border) 50%, transparent);
+	pointer-events: none;
+}
+
+.epub-progress-ring-badge-value {
+	position: relative;
+	z-index: 1;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+}
+
+.epub-progress-ring-badge.is-progress-start {
+	--epub-progress-ring-color: var(--epub-progress-tone-start);
+}
+
+.epub-progress-ring-badge.is-progress-start .epub-progress-ring-badge-value {
+	color: var(--text-faint);
+}
+
+.epub-progress-ring-badge.is-progress-low {
+	--epub-progress-ring-color: var(--epub-progress-tone-low);
+}
+
+.epub-progress-ring-badge.is-progress-mid {
+	--epub-progress-ring-color: var(--epub-progress-tone-mid);
+}
+
+.epub-progress-ring-badge.is-progress-high {
+	--epub-progress-ring-color: var(--epub-progress-tone-high);
+}
+
+.epub-progress-ring-badge.is-progress-near {
+	--epub-progress-ring-color: var(--epub-progress-tone-near);
+}
+
+.epub-progress-ring-badge.is-progress-complete {
+	--epub-progress-ring-color: var(--epub-progress-tone-complete);
+}
+
+.epub-progress-ring-badge.is-progress-complete .epub-progress-ring-badge-value {
+	color: color-mix(in srgb, var(--epub-progress-tone-complete) 72%, var(--text-normal));
+}
+
+@media (max-width: 768px) {
+	.epub-bookshelf-root :global(.book-list-progress-badge) {
+		width: calc(var(--weave-bookshelf-progress-size, 46px) - var(--size-4-2) + 2px);
+		height: calc(var(--weave-bookshelf-progress-size, 46px) - var(--size-4-2) + 2px);
+		flex-basis: calc(var(--weave-bookshelf-progress-size, 46px) - var(--size-4-2) + 2px);
+		font-size: 10px;
+	}
+}

@@ -1,0 +1,335 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+.env.*
+!.env.example
+.env.test
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+.mobile-hot-reload/
+.desktop-hot-reload/
+
+# Gatsby files
+.cache/
+public
+!public/
+public/*
+!public/versions.json
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# Temporary folders
+tmp/
+temp/
+*.bak
+*.bak-*
+*.check.output.txt
+*.test.output.txt
+check-output.txt
+biome-*.txt
+*_check*.txt
+_check_*.js
+_commit_msg.txt
+vitest-*.json
+
+# Local development artifacts
+.dev-watch.lock.json
+.mobile-watch.lock.json
+.lint-obsidian.json
+.cursor-lint-*.json
+.tmp-*.json
+.tmp-*.txt
+stdout
+tmp-snippet.ts
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Build output
+build/
+main.js
+/app.css
+# 只忽略根目录的构建输出 CSS，保留 src/styles/ 下的源码 CSS
+/styles.css
+
+# Build cache and mappings
+importMappings.json
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Bun
+.bun
+bun.lockb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test vault (optional - remove if you want to include it)
+test-vault/
+
+# ============================================
+# 🔒 激活码系统安全规则（最高优先级）
+# ============================================
+
+# 私钥文件（任何可能的命名方式）
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+*private-key*
+*private_key*
+*privatekey*
+*-private.*
+*.private.*
+
+# 旧版本激活码生成脚本（包含私钥，必须忽略）
+scripts/generate-activation-codes.cjs
+
+# 生成的激活码文件（所有可能的格式）
+generated-*.json
+generated-*.txt
+codes-*.txt
+codes-*.json
+activation-codes*.txt
+activation-codes*.json
+*activation-code*.txt
+*activation-code*.json
+*activation-codes*.txt
+*activation-codes*.json
+
+# 中文命名的敏感文件
+激活码*
+*激活码*
+发卡*
+*发卡*
+用户激活码/
+密钥管理*
+*密钥管理*
+
+# 激活码相关文档（包含敏感信息）
+*激活码使用说明*
+*激活码管理*
+*激活码密钥*
+*开源安全指南*
+scripts/generateMatchingCode.js
+scripts/*private*.js
+scripts/*secret*.js
+服务端激活码生成器.js
+
+# 项目外的私钥目录（防止意外添加）
+../tuanki-private/
+../../tuanki-private/
+D:/tuanki-private/
+%USERPROFILE%/tuanki-private/
+
+# 环境变量和配置
+.env.local
+.env.production
+config/private.json
+config/secrets.json
+
+# 调试和测试数据
+debug-logs/
+test-activation-codes/
+*.activation
+*.license
+type-errors*.txt
+test-modal-editor.md
+test-csv-files/
+
+# ============================================
+# 禁止推送到公开仓库的开发/设计文档
+# ============================================
+
+# AI 助手配置
+.augment/
+.mcp.json
+
+# 移动端配置
+.mobile-config.json
+
+# 后端代码
+backend/
+
+# 备份文件
+backup-before-migration/
+
+# 设计文档和原型
+design/
+design-prototypes/
+heatmap-designs/
+heatmap_prototype.html
+legacy-weave-archive/
+scratch/
+output/
+.windsurf/
+# Cursor / AI 开发文档 — 仅本地，禁止提交或推送到公开 GitHub
+.cursor/
+AGENTS.md
+.playwright-cli/
+开发规则.zh-CN.md
+版本更新文档/
+QUICK_START_REFERENCE_COUNT.md
+REFERENCE_COUNT_IMPLEMENTATION.md
+Weave EPUB Reader 插件完整介绍.md
+EPUB摘录笔记使用教程.md
+EPUB摘录笔记使用教程.html
+promo-*.html
+promo-*.css
+promo-*.js
+
+# 内部文档（含 docs/specs、docs/architecture — 禁止推公开仓）
+docs/
+DEVELOPMENT.md
+ERROR_CHECK_REPORT.md
+HOT_RELOAD_GUIDE.md
+IMPORTANT_REMOVAL_REPORT.md
+SIMPLIFIED_CARD_PARSING_SYSTEM.md
+SPEC_MD_CARD_PARSING_V2.zh-CN.md
+SVELTE5_MIGRATION_GUIDE.md
+SVELTE5_STOPPROPAGATION_FIX_PROGRESS.md
+TROUBLESHOOTING_CASE_SVELTE5_INPUT_DISABLED.md
+TYPE_ERRORS_ANALYSIS.md
+TYPE_ERRORS_FULL_REPORT.md
+important-usage-analysis.csv
+
+# 开发工具
+platform-tools/
+public-repo-github-workflows/
+public-repo.gitignore
+start-dev.bat
+start-dev.sh
+
+# 脚本（含激活码生成等敏感工具）
+scripts/*
+!scripts/clean-cache.cjs
+!scripts/copy-manifest.cjs
+!scripts/dev-watch.cjs
+!scripts/hot-reload-utils.cjs
+!scripts/kill-vite.cjs
+!scripts/verify-release-assets.cjs
+!scripts/verify-public-repo-safety.cjs
+!scripts/obsidian-lint-targets.cjs
+!scripts/run-obsidian-lint.cjs
+!scripts/lint-obsidian-strict.cjs
+!scripts/lint-community-audit.cjs
+!scripts/run-obsidian-community-lint.cjs
+!scripts/check-forbidden-eslint-disables.cjs
+!scripts/sync-obsidian-community-version.cjs
+!scripts/ci-install-dependencies.cjs
+!scripts/ci-run-tests.cjs
+!scripts/ci-run-build.cjs
+!scripts/patch-foliate-paginator.mjs
+!scripts/check-mojibake.cjs
+!scripts/verify-no-dynamic-script.cjs
+!scripts/set-github-release-title.cjs
+!scripts/check-bundle-footprint.cjs
+!scripts/find-unreachable-src.cjs
+!scripts/verify-plugin-scope.cjs
+!scripts/build-quality-overlays.py
+!scripts/i18n-validate.ts
+!scripts/export-zh-snapshot.ts
+!scripts/export-i18n-keys.ts
+!scripts/export-tutorial-en.ts
+!scripts/curated-overlay-data/
+!scripts/curated-overlay-data/**
+scripts/.plugin-scope-unreachable.txt
+
+# 测试文件
+test/
+tests/
+!src/tests/
+!src/tests/**
+COMMIT_MSG.txt
+
+# 非代码内部文档
+非常重要的文档*/
+
+# 庆祝消息等非必要数据
+celebration-messages.json
+
+# i18n 临时拆分文件（正式语言包在 src/utils/i18n/flat-locales/）
+scripts/locale-work/
+src/utils/i18n/flat-locales/ja-JP.json
+src/utils/i18n/flat-locales/ko-KR.json
+src/components/epub/tutorial-locales/ja-JP.json
+src/components/epub/tutorial-locales/ko-KR.json
+
+# public 目录
+public/
+
+# 不必要的配置和文档
+CHANGELOG.md
+INSTALLATION.md
+biome.json
+uno.config.ts
+eslint.config.mjs

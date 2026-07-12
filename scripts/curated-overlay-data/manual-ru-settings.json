@@ -1,0 +1,20 @@
+{
+  "epub.settings.groups.diagnostics": "Разработка и диагностика",
+  "epub.settings.groups.features": "Функции и цитаты",
+  "epub.settings.groups.premiumPreview": "Предпросмотр премиум",
+  "epub.settings.groups.reading": "Позиция чтения и закладки",
+  "epub.settings.notifications.autoSaveDisabled": "Автосохранение позиции чтения отключено",
+  "epub.settings.notifications.autoSaveEnabled": "Автосохранение позиции чтения включено",
+  "epub.settings.notifications.autoSavePagesUpdated": "Порог автосохранения обновлён: {pages} стр.",
+  "epub.settings.notifications.bookmarkFolderUpdated": "Папка закладок обновлена",
+  "epub.settings.notifications.bookshelfDisplayModeUpdated": "Вид полки по умолчанию: {mode}",
+  "epub.settings.notifications.debugDisabled": "Режим отладки отключён",
+  "epub.settings.notifications.debugEnabled": "Режим отладки включён",
+  "epub.settings.notifications.premiumPreviewDisabled": "Предпросмотр премиум-функций отключён",
+  "epub.settings.notifications.premiumPreviewEnabled": "Предпросмотр премиум-функций включён",
+  "epub.settings.notifications.premiumRequired": "Эта настройка — премиум-функция. Сначала активируйте лицензию.",
+  "epub.settings.notifications.templateSwitched": "Переключено на {template}",
+  "epub.settings.tabs.about": "О плагине",
+  "epub.settings.tabs.basic": "Основные",
+  "epub.settings.tabs.license": "Лицензия"
+}
