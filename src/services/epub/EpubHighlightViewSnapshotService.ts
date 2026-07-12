@@ -10,7 +10,16 @@ import type { EpubAnnotationService } from "./EpubAnnotationService";
 import { shouldIncludeHighlightInSidebarSnapshot } from "./reader-annotation-model";
 import type { EpubReaderEngine, ReaderHighlight } from "./reader-engine-types";
 
-export type EpubHighlightColor = "yellow" | "green" | "blue" | "red" | "purple";
+export type EpubHighlightColor =
+	| "yellow"
+	| "green"
+	| "blue"
+	| "red"
+	| "purple"
+	| "orange"
+	| "cyan"
+	| "pink"
+	| "gray";
 export type EpubHighlightNoteType = "高亮" | "下划线" | "删除线" | "波浪线";
 
 export interface EpubDisplayHighlight {
@@ -608,9 +617,11 @@ export class EpubHighlightViewSnapshotService {
 			case "blue":
 			case "red":
 			case "purple":
-				return color;
+			case "orange":
+			case "cyan":
 			case "pink":
-				return "red";
+			case "gray":
+				return color;
 			default:
 				return "yellow";
 		}
@@ -626,6 +637,14 @@ export class EpubHighlightViewSnapshotService {
 				return "红色";
 			case "purple":
 				return "紫色";
+			case "orange":
+				return "橙色";
+			case "cyan":
+				return "青色";
+			case "pink":
+				return "粉色";
+			case "gray":
+				return "灰色";
 			default:
 				return "黄色";
 		}

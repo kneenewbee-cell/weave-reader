@@ -1,5 +1,5 @@
 <script lang="ts">
-	type HighlightColor = 'yellow' | 'green' | 'blue' | 'red' | 'purple';
+	type HighlightColor = 'yellow' | 'green' | 'blue' | 'red' | 'purple' | 'orange' | 'cyan' | 'pink' | 'gray';
 
 	interface Props {
 		color?: string;
@@ -43,9 +43,11 @@
 			case 'blue':
 			case 'red':
 			case 'purple':
-				return currentColor;
+			case 'orange':
+			case 'cyan':
 			case 'pink':
-				return 'red';
+			case 'gray':
+				return currentColor;
 			default:
 				return 'yellow';
 		}
@@ -407,6 +409,30 @@
 		color: color-mix(in srgb, var(--text-normal) 95%, #6b2e93 5%);
 		background: linear-gradient(180deg, rgba(171, 71, 188, 0.16) 0%, rgba(139, 92, 246, 0.12) 100%);
 		border-color: rgba(107, 46, 147, 0.18);
+	}
+
+	.hl-orange {
+		color: color-mix(in srgb, var(--text-normal) 95%, #8a4d00 5%);
+		background: linear-gradient(180deg, rgba(255, 152, 0, 0.18) 0%, rgba(245, 124, 0, 0.12) 100%);
+		border-color: rgba(138, 77, 0, 0.18);
+	}
+
+	.hl-cyan {
+		color: color-mix(in srgb, var(--text-normal) 95%, #006c78 5%);
+		background: linear-gradient(180deg, rgba(0, 188, 212, 0.18) 0%, rgba(8, 145, 178, 0.12) 100%);
+		border-color: rgba(0, 108, 120, 0.18);
+	}
+
+	.hl-pink {
+		color: color-mix(in srgb, var(--text-normal) 95%, #9d174d 5%);
+		background: linear-gradient(180deg, rgba(244, 114, 182, 0.18) 0%, rgba(219, 39, 119, 0.12) 100%);
+		border-color: rgba(157, 23, 77, 0.18);
+	}
+
+	.hl-gray {
+		color: color-mix(in srgb, var(--text-normal) 95%, #4b5563 5%);
+		background: linear-gradient(180deg, rgba(156, 163, 175, 0.18) 0%, rgba(107, 114, 128, 0.12) 100%);
+		border-color: rgba(75, 85, 99, 0.18);
 	}
 
 	.annotation-quote :global(mark),

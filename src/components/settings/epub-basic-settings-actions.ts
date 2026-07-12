@@ -11,7 +11,13 @@ import {
 	type CustomWebTranslationProvider,
 	type SelectionTranslationSettings,
 } from "../../config/selection-translation-settings";
-import { getEpubStorageService, normalizeEpubBookmarkFolderPath } from "../../services/epub";
+import {
+	getEpubStorageService,
+	normalizeEpubBookmarkFolderPath,
+	normalizeEpubReaderUiMode,
+	notifyEpubReaderUiModeChanged,
+	type EpubReaderUiMode,
+} from "../../services/epub";
 import { notifyExcerptSettingsChanged } from "../../services/epub/excerpt-settings-events";
 import { ensureDefaultBookNotesExportTemplates } from "../../services/epub/book-notes-export/install-templates";
 import { resolveBookNotesExportTemplateFolder } from "../../services/epub/book-notes-export/template-folder";
@@ -32,6 +38,7 @@ export interface EpubBasicSettingsActionDeps {
 	getTranslate: () => EpubSettingsTranslateFn;
 	getBookmarkFolderValue: () => string;
 	getInterfaceLanguageValue: () => InterfaceLanguagePreference;
+	getReaderUiMode: () => EpubReaderUiMode;
 	getPremiumPreviewEnabled: () => boolean;
 	getContinuousReadingPositionAutoSaveEnabled: () => boolean;
 	getContinuousReadingPositionAutoSavePages: () => number;
@@ -111,6 +118,24 @@ export function createEpubBasicSettingsActions(deps: EpubBasicSettingsActionDeps
 			setInterfaceLanguagePreference(normalizedValue);
 			await deps.save();
 			showNotification(t("epub.settings.notifications.interfaceLanguageUpdated"), "success");
+		},
+
+		async updateReaderUiMode(value: EpubReaderUiMode): Promise<void> {
+			const normalizedMode = normalizeEpubReaderUiMode(value);
+			if (deps.getReaderUiMode() === normalizedMode) {
+				return;
+			}
+
+			plugin.settings.readerUiMode = normalizedMode;
+			plugin.settings.expertModeEnabled = normalizedMode === "expert";
+			await deps.save();
+			notifyEpubReaderUiModeChanged(normalizedMode);
+			showNotification(
+				t("epub.settings.notifications.readerUiModeUpdated", {
+					mode: t(`epub.settings.basic.${normalizedMode}Mode`),
+				}),
+				"success"
+			);
 		},
 
 		async updatePremiumPreview(enabled: boolean): Promise<void> {

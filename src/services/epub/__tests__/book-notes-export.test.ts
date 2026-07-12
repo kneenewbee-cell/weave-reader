@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getBuiltinBookNotesExportTemplate } from "../book-notes-export/builtin-templates";
 import { buildBookNotesExportLabelsFromTranslator } from "../book-notes-export/export-labels";
 import { buildBookNotesExportContext } from "../book-notes-export/export-context";
@@ -131,6 +131,7 @@ describe("book-notes-export template renderer", () => {
 			return String(vars?.value ?? key);
 		});
 
+		const buildQuoteBlock = vi.fn(() => "> [!EPUB|yellow+semantic:important]\n> Quote one");
 		const context = buildBookNotesExportContext({
 			book: {
 				id: "book-1",
@@ -148,11 +149,12 @@ describe("book-notes-export template renderer", () => {
 					createdTime: Date.parse("2026-06-10T21:30:00.000Z"),
 					pageNumber: 42,
 					pageLabel: "P.42",
+					semanticId: "important",
 				},
 			],
 			linkService: {
 				buildEpubLink: () => "[[Books/demo.epub]]",
-				buildQuoteBlock: () => "> Quote one",
+				buildQuoteBlock,
 			} as any,
 			labels,
 			formatTimestamp: () => "2026-06-10 21:30",
@@ -164,6 +166,21 @@ describe("book-notes-export template renderer", () => {
 		});
 
 		expect(rendered).toContain("Quote one");
+		expect(buildQuoteBlock).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"cfi",
+			"Quote one",
+			0,
+			"yellow",
+			"Chapter 1",
+			"2026-06-10 21:30",
+			undefined,
+			"",
+			undefined,
+			undefined,
+			undefined,
+			"important"
+		);
 		expect(rendered).toContain("——《Demo Book》· Chapter 1 · P.42");
 		expect(rendered).toContain("2026-06-10 21:30");
 	});

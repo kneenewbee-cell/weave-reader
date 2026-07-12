@@ -9,6 +9,7 @@ import { BUILTIN_WEB_TRANSLATION_PROVIDERS } from "../../config/web-translation-
 import { getEpubBacklinkHighlightService } from "../../services/epub/epub-backlink-highlight-access";
 import { scheduleEpubAnnotationIndexWarmup } from "../../services/epub/epub-annotation-index";
 import { listBookNotesExportTemplateFiles } from "../../services/epub/book-notes-export/template-catalog";
+import type { EpubReaderUiMode } from "../../services/epub";
 import { getVaultFileBasename } from "../../utils/VaultMarkdownFileSuggest";
 import { showNotification } from "../../utils/notifications";
 import type { InterfaceLanguagePreference } from "../../utils/i18n";
@@ -31,6 +32,15 @@ const INTERFACE_LANGUAGE_OPTIONS: Array<{
 	{ value: "ja-JP", labelKey: "epub.settings.basic.interfaceLanguageJaJP" },
 	{ value: "ko-KR", labelKey: "epub.settings.basic.interfaceLanguageKoKR" },
 	{ value: "ru-RU", labelKey: "epub.settings.basic.interfaceLanguageRuRU" },
+];
+
+const READER_UI_MODE_OPTIONS: Array<{
+	value: EpubReaderUiMode;
+	labelKey: string;
+}> = [
+	{ value: "minimal", labelKey: "epub.settings.basic.minimalMode" },
+	{ value: "standard", labelKey: "epub.settings.basic.standardMode" },
+	{ value: "expert", labelKey: "epub.settings.basic.expertMode" },
 ];
 
 function clearHosts(hosts: EpubBasicSettingsMountOptions["hosts"]): void {
@@ -177,6 +187,20 @@ export function mountEpubBasicSettings(options: EpubBasicSettingsMountOptions): 
 			dropdown.setValue(snapshot.interfaceLanguageValue);
 			dropdown.onChange(async (value) => {
 				await callbacks.updateInterfaceLanguage(value as InterfaceLanguagePreference);
+			});
+		});
+
+	new Setting(hosts.interface)
+		.setName(t("epub.settings.basic.readerUiMode"))
+		.setDesc(t("epub.settings.basic.readerUiModeDesc"))
+		.setClass("epub-reader-ui-mode-setting")
+		.addDropdown((dropdown) => {
+			for (const option of READER_UI_MODE_OPTIONS) {
+				dropdown.addOption(option.value, t(option.labelKey));
+			}
+			dropdown.setValue(snapshot.readerUiMode);
+			dropdown.onChange(async (value) => {
+				await callbacks.updateReaderUiMode(value as EpubReaderUiMode);
 			});
 		});
 

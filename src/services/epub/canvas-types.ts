@@ -46,6 +46,10 @@ export const HIGHLIGHT_TO_CANVAS_COLOR: Record<string, string> = {
 	blue: "6",
 	red: "1",
 	purple: "3",
+	orange: "2",
+	cyan: "6",
+	pink: "1",
+	gray: "0",
 };
 
 export const DEFAULT_NODE_WIDTH = 300;

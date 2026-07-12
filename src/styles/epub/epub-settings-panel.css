@@ -388,6 +388,212 @@
   min-width: 8.5rem;
 }
 
+.weave-epub-semantic-settings {
+  min-width: 0;
+}
+
+.weave-epub-semantic-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.weave-epub-semantic-scope-button {
+  min-height: 1.8rem;
+  padding: 0 0.65rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+}
+
+.weave-epub-semantic-scope-button.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.weave-epub-semantic-settings-body {
+  min-width: 0;
+}
+
+.weave-epub-semantic-loading,
+.weave-epub-semantic-settings-error,
+.weave-epub-semantic-inheritance-note {
+  padding: 0.55rem 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.weave-epub-semantic-inheritance-note {
+  border-left: 3px solid var(--interactive-accent);
+  padding-left: 0.65rem;
+}
+
+.weave-epub-semantic-book-select,
+.weave-epub-semantic-scheme-select {
+  max-width: min(28rem, 100%);
+}
+
+.weave-epub-semantic-settings-list {
+  display: grid;
+  gap: 0;
+  margin: 0.4rem 0 0.75rem;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.weave-epub-semantic-setting-row {
+  display: grid;
+  grid-template-columns:
+    minmax(6rem, 0.8fr)
+    minmax(7rem, 1fr)
+    minmax(13.5rem, 1.7fr)
+    minmax(6rem, 0.75fr)
+    minmax(5.8rem, auto)
+    2rem;
+  gap: 0.55rem;
+  align-items: center;
+  min-width: 0;
+  padding: 0.55rem 0.15rem;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.weave-epub-semantic-setting-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.weave-epub-semantic-dot {
+  width: 0.72rem;
+  height: 0.72rem;
+  min-width: 0.72rem;
+  border-radius: 999px;
+  background: var(--weave-semantic-color, #ffe58a);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 65%, var(--background-modifier-border));
+}
+
+.weave-epub-semantic-setting-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weave-epub-semantic-name-input,
+.weave-epub-semantic-style-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.weave-epub-semantic-color-swatches {
+  display: flex;
+  align-items: center;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  min-width: 0;
+  max-width: 14rem;
+}
+
+.weave-epub-semantic-color-swatch {
+  position: relative;
+  width: 1.45rem;
+  height: 1.45rem;
+  min-width: 1.45rem;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.weave-epub-semantic-color-swatch::before {
+  content: "";
+  position: absolute;
+  inset: 0.25rem;
+  border-radius: 999px;
+  background: var(--weave-semantic-color);
+}
+
+.weave-epub-semantic-color-swatch.is-selected {
+  border-color: var(--text-normal);
+  box-shadow:
+    0 0 0 2px var(--background-primary),
+    0 0 0 3px var(--interactive-accent);
+}
+
+.weave-epub-semantic-color-swatch:disabled {
+  opacity: 0.45;
+}
+
+.weave-epub-semantic-standard-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 0.28rem;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+}
+
+.weave-epub-semantic-delete-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.weave-epub-semantic-delete-button:hover:not(:disabled) {
+  border-color: var(--background-modifier-border);
+  background: var(--background-modifier-hover);
+  color: var(--text-error);
+}
+
+.weave-epub-semantic-delete-button:disabled {
+  opacity: 0.35;
+}
+
+.weave-epub-semantic-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.weave-epub-semantic-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.weave-epub-semantic-add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0 0.65rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+}
+
+.weave-epub-semantic-add-button:hover:not(:disabled) {
+  background: var(--interactive-hover);
+}
+
 @media (max-width: 720px) {
   .epub-settings-tabs .tab-navigation {
     gap: var(--epub-settings-gap-xs);
@@ -439,6 +645,81 @@
   }
 
   .epub-native-settings-host .epub-custom-translation-panel__actions {
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 900px) {
+  .weave-epub-semantic-setting-row {
+    grid-template-columns: minmax(6rem, 1fr) minmax(7rem, 1fr);
+  }
+
+  .weave-epub-semantic-color-swatches,
+  .weave-epub-semantic-standard-toggle {
+    justify-self: start;
+    max-width: 100%;
+  }
+
+  .weave-epub-semantic-delete-button {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 760px) {
+  .weave-epub-semantic-scope {
+    width: 100%;
+  }
+
+  .weave-epub-semantic-scope-button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .weave-epub-semantic-settings-body > .setting-item {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.65rem !important;
+    align-items: start !important;
+  }
+
+  .weave-epub-semantic-settings-body > .setting-item > .setting-item-control {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+  }
+
+  .weave-epub-semantic-scheme-select,
+  .weave-epub-semantic-book-select {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .weave-epub-semantic-setting-row {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.48rem;
+    padding: 0.65rem 2.55rem 0.65rem 0.15rem;
+  }
+
+  .weave-epub-semantic-setting-preview,
+  .weave-epub-semantic-color-swatches,
+  .weave-epub-semantic-standard-toggle {
+    justify-self: start;
+  }
+
+  .weave-epub-semantic-color-swatches {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .weave-epub-semantic-delete-button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.15rem;
+    justify-self: auto;
+  }
+
+  .weave-epub-semantic-settings-footer {
     justify-content: space-between;
   }
 }

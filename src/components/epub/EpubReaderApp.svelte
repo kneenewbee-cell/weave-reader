@@ -18,7 +18,7 @@
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_RUNTIME, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, activeSemanticEntries, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
 	import {
@@ -35,7 +35,7 @@
 		type WeaveEpubCanvasLayoutDirectionPayload,
 	} from '../../services/epub/canvas-excerpt-anchor';
 	import type { EpubVisibleFrameLike, ScreenshotRect } from '../../services/epub/EpubScreenshotService';
-	import type { EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReadingReferencePoint, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderParagraph, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
+	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderParagraph, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
 	import { PremiumFeatureGuard, PREMIUM_FEATURES } from '../../services/premium/PremiumFeatureGuard';
 	import { getBookFormatDisplayLabel, isSupportedBookFile } from '../../services/epub/book-format';
 	import {
@@ -236,6 +236,9 @@
 	let canvasService = untrack(() => new EpubCanvasService(app));
 	let backlinkService = untrack(() => getEpubBacklinkHighlightService(app));
 	let referenceStatsService = untrack(() => new EpubReferenceStatsService(app, backlinkService));
+	let readerUiMode = $state<EpubReaderUiMode>(untrack(() => getHostReaderUiMode()));
+	let semanticSettings = $state<EpubSemanticSettings>(untrack(() => normalizeEpubSemanticSettings(getHostSemanticSettings())));
+	let semanticSettingsLoadToken = 0;
 
 	let book = $state<EpubBook | null>(null);
 	let loading = $state(true);
@@ -1523,6 +1526,117 @@
 		return resolveEpubHost(app);
 	}
 
+	function getHostReaderUiMode(): EpubReaderUiMode {
+		const host = resolveEpubHost(app) as {
+			settings?: {
+				readerUiMode?: unknown;
+				expertModeEnabled?: unknown;
+			};
+		} | null;
+		return normalizeEpubReaderUiMode(
+			host?.settings?.readerUiMode,
+			host?.settings?.expertModeEnabled
+		);
+	}
+
+	function getHostSemanticSettings(): unknown {
+		const host = resolveEpubHost(app) as { settings?: unknown } | null;
+		return host?.settings || {};
+	}
+
+	async function refreshSemanticSettings(options?: { reloadHighlights?: boolean }): Promise<void> {
+		const token = ++semanticSettingsLoadToken;
+		try {
+			const fallbackSettings = getHostSemanticSettings();
+			const nextSettings = book?.id
+				? (await loadEffectiveEpubSemanticProfile(app, book.id, fallbackSettings)).settings
+				: normalizeEpubSemanticSettings(fallbackSettings);
+			if (componentDisposed || token !== semanticSettingsLoadToken) {
+				return;
+			}
+			semanticSettings = normalizeEpubSemanticSettings(nextSettings);
+			if (options?.reloadHighlights && readerReady) {
+				void reloadHighlights({ invalidateCache: true });
+			}
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to load semantic profile:', error);
+			if (token === semanticSettingsLoadToken) {
+				semanticSettings = normalizeEpubSemanticSettings(getHostSemanticSettings());
+			}
+		}
+	}
+
+	function findSemanticById(semanticId?: string): EpubAnnotationSemantic | null {
+		const id = String(semanticId || '').trim();
+		if (!id || semanticSettings.annotationSemanticsEnabled === false) {
+			return null;
+		}
+		return (activeSemanticEntries(semanticSettings) as EpubAnnotationSemantic[])
+			.find((semantic) => String(semantic.id || '').trim() === id) || null;
+	}
+
+	function resolveSemanticFromHighlightInfo(info: HighlightClickInfo): EpubAnnotationSemantic | undefined {
+		const semantic = findSemanticById(info.semanticId);
+		if (semantic) {
+			return semantic;
+		}
+		const id = String(info.semanticId || '').trim();
+		if (!id) {
+			return undefined;
+		}
+		return {
+			id,
+			label: info.semanticLabel || id,
+			color: info.color || 'yellow',
+			style: info.style || 'highlight',
+			group: info.semanticGroup || 'study',
+			description: info.semanticDescription || '',
+			source: info.semanticSource || 'custom',
+			active: true,
+		};
+	}
+
+	function toReaderHighlightStyle(style?: string): EpubHighlightStyle | undefined {
+		const normalized = normalizeAnnotationStyle(style);
+		return normalized === 'highlight' ? undefined : normalized as EpubHighlightStyle;
+	}
+
+	function applySemanticPresentation(highlight: ReaderHighlight): ReaderHighlight {
+		const semantic = findSemanticById(highlight.semanticId);
+		if (!semantic) {
+			return highlight;
+		}
+		const style = toReaderHighlightStyle(semantic.style);
+		return {
+			...highlight,
+			color: semantic.color || highlight.color || 'yellow',
+			style,
+			semanticId: semantic.id,
+			semanticLabel: semantic.label,
+			semanticGroup: semantic.group || highlight.semanticGroup,
+			semanticDescription: semantic.description || highlight.semanticDescription,
+			semanticSource: semantic.source || highlight.semanticSource || 'preset',
+		};
+	}
+
+	function applySemanticPresentationToHighlights(highlights: ReaderHighlight[]): ReaderHighlight[] {
+		if (semanticSettings.annotationSemanticsEnabled === false) {
+			return highlights;
+		}
+		return highlights.map((highlight) => applySemanticPresentation(highlight));
+	}
+
+	function clearReaderSelection(frame?: { window?: Window | null; frameDocument?: Document | null }): void {
+		try {
+			frame?.window?.getSelection?.()?.removeAllRanges?.();
+			frame?.frameDocument?.getSelection?.()?.removeAllRanges?.();
+			activeDocument.getSelection?.()?.removeAllRanges?.();
+			window.getSelection?.()?.removeAllRanges?.();
+		} catch {
+			// Selection cleanup is best effort across EPUB iframe boundaries.
+		}
+	}
+
 	function getContinuousReadingPositionAutoSaveConfig(): { enabled: boolean; pages: number } {
 		const host = getEpubActionHost() as {
 			settings?: {
@@ -1887,7 +2001,7 @@
 				getBoundCanvasPath()
 			);
 			remainingFromSource = fromSource.map((highlight) => ({
-				...highlight,
+				...applySemanticPresentation(highlight),
 				presentation: 'highlight' as const,
 			}));
 		} catch (error) {
@@ -1980,9 +2094,10 @@
 		if (incoming.length === 0) {
 			return false;
 		}
+		const incomingWithSemanticPresentation = applySemanticPresentationToHighlights(incoming);
 		const previousHighlights = pendingLoadedHighlights || [];
-		pendingLoadedHighlights = mergeReaderHighlightsByIdentity(previousHighlights, incoming);
-		syncReaderHighlightsFromCollection(incoming, previousHighlights);
+		pendingLoadedHighlights = mergeReaderHighlightsByIdentity(previousHighlights, incomingWithSemanticPresentation);
+		syncReaderHighlightsFromCollection(incomingWithSemanticPresentation, previousHighlights);
 		publishSidebarHighlights(pendingLoadedHighlights);
 		return true;
 	}
@@ -2285,6 +2400,7 @@
 			}
 
 			book = loadedBook;
+			await refreshSemanticSettings();
 			bookCompletionPromptDismissedBookId = '';
 			currentChapterIndex = loadedBook.currentPosition?.chapterIndex ?? 0;
 			syncReadingProgressDisplay(loadedBook.currentPosition?.percent ?? 0);
@@ -3069,7 +3185,8 @@
 		cfiRange: string,
 		color?: string,
 		style?: EpubHighlightStyle,
-		forEditorInsert = false
+		forEditorInsert = false,
+		semantic?: EpubAnnotationSemantic
 	): string {
 		const chapterIndex = readerService.getCurrentChapterIndex();
 		const chapterTitle = resolveExcerptChapterTitle();
@@ -3086,7 +3203,8 @@
 			book?.sourceId,
 			undefined,
 			style,
-			resolveExcerptChapterLabelMaxLength()
+			resolveExcerptChapterLabelMaxLength(),
+			semantic?.id
 		);
 	}
 
@@ -3171,16 +3289,22 @@
 		}
 	}
 
-	function outputNote(text: string, cfiRange: string, color?: string, style?: EpubHighlightStyle) {
+	function outputNote(
+		text: string,
+		cfiRange: string,
+		color?: string,
+		style?: EpubHighlightStyle,
+		semantic?: EpubAnnotationSemantic
+	) {
 		if (!hasExcerptNotesCapability()) {
 			return;
 		}
 		if (canvasMode && canvasService.isActive() && hasCanvasExcerptCapability()) {
-			addToCanvas(text, cfiRange, color, style);
+			addToCanvas(text, cfiRange, color, style, semantic);
 			return;
 		}
 
-		const content = buildNoteContent(text, cfiRange, color, style, autoInsert);
+		const content = buildNoteContent(text, cfiRange, color, style, autoInsert, semantic);
 		if (autoInsert) {
 			insertToEditorAndTrack(content);
 		} else {
@@ -3228,7 +3352,8 @@
 		text: string,
 		cfiRange: string,
 		color?: string,
-		style?: EpubHighlightStyle
+		style?: EpubHighlightStyle,
+		semantic?: EpubAnnotationSemantic
 	) {
 		if (!ensureEpubPremiumFeature(app, PREMIUM_FEATURES.EPUB_CANVAS_EXCERPTS, t('epub.reader.canvasExcerptFeatureNotice'))) {
 			return;
@@ -3247,7 +3372,8 @@
 			timestamp,
 			book?.sourceId,
 			style,
-			resolveExcerptChapterLabelMaxLength()
+			resolveExcerptChapterLabelMaxLength(),
+			semantic?.id
 		);
 		if (node) {
 			rememberHighlightSourcePath(canvasService.getCanvasPath());
@@ -3495,7 +3621,9 @@
 		}
 
 		const chapterIndex = draft.chapterIndex;
-		let chapterHighlights = (await annotationService.collectAllHighlights(book.id, filePath, backlinkService))
+		let chapterHighlights = applySemanticPresentationToHighlights(
+			await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+		)
 			.filter((highlight) =>
 				highlightBelongsToChapterExport(highlight, chapterIndex, draft.chapterHref, {
 					getSectionIndexForCfi: (cfi) => readerService.getSectionIndexForCfi?.(cfi) ?? null,
@@ -3859,7 +3987,9 @@
 			}
 
 			const keySet = new Set(selectionKeys);
-			const highlights = (await annotationService.collectAllHighlights(book.id, filePath, backlinkService))
+			const highlights = applySemanticPresentationToHighlights(
+				await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+			)
 				.filter((highlight) => keySet.has(buildReaderHighlightSelectionKey(highlight)))
 				.filter(isHighlightSelectedForBookNotesExport);
 			if (highlights.length === 0) {
@@ -3891,7 +4021,9 @@
 
 			const chapterIndex = readerService.getCurrentChapterIndex();
 			const chapterTitle = readerService.getCurrentChapterTitle() || t('epub.reader.epubChapterDefaultTitle');
-			const highlights = (await annotationService.collectAllHighlights(book.id, filePath, backlinkService))
+			const highlights = applySemanticPresentationToHighlights(
+				await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+			)
 				.filter((highlight) => getHighlightChapterIndex(highlight) === chapterIndex)
 				.filter(isHighlightSelectedForBookNotesExport);
 			if (highlights.length === 0) {
@@ -3934,7 +4066,9 @@
 				return;
 			}
 
-			const highlights = (await annotationService.collectAllHighlights(book.id, filePath, backlinkService))
+			const highlights = applySemanticPresentationToHighlights(
+				await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+			)
 				.filter(isHighlightSelectedForBookNotesExport);
 			if (highlights.length === 0) {
 				new Notice(t('epub.reader.noExportableNotes'));
@@ -3970,7 +4104,14 @@
 
 	async function handleHighlightExtractToCard(info: HighlightClickInfo) {
 		await extractContentToCard(
-			buildNoteContent(info.text, info.cfiRange, info.color, info.style),
+			buildNoteContent(
+				info.text,
+				info.cfiRange,
+				info.color,
+				info.style,
+				false,
+				resolveSemanticFromHighlightInfo(info)
+			),
 			t('epub.reader.createCardSuccess'),
 			'Failed to extract highlight to card',
 			t('epub.reader.highlightExtractFailed'),
@@ -3984,12 +4125,32 @@
 		text: string,
 		cfiRange: string,
 		color?: string,
-		style?: EpubHighlightStyle
+		style?: EpubHighlightStyle,
+		semantic?: EpubAnnotationSemantic
 	) {
 		if (!hasExcerptNotesCapability()) {
 			return;
 		}
-		outputNote(text, cfiRange, color, style);
+		if (book) {
+			void annotationService.savePortableHighlight(book.id, {
+				cfiRange,
+				color: color || semantic?.color || 'yellow',
+				...(style ? { style } : {}),
+				...(semantic?.id ? {
+					semanticId: semantic.id,
+					semanticLabel: semantic.label,
+					semanticGroup: semantic.group || 'study',
+					semanticDescription: semantic.description,
+					semanticSource: semantic.source || 'preset',
+				} : {}),
+				text,
+				chapterIndex: readerService.getCurrentChapterIndex(),
+				chapterTitle: resolveExcerptChapterTitle(),
+				createdTime: Date.now(),
+				presentation: 'highlight',
+			});
+		}
+		outputNote(text, cfiRange, color, style, semantic);
 	}
 
 	async function handleConcealSelection(text: string, cfiRange: string) {
@@ -4270,6 +4431,11 @@
 			cfiRange: info.cfiRange,
 			color: info.color,
 			style: info.style,
+			semanticId: info.semanticId,
+			semanticLabel: info.semanticLabel,
+			semanticGroup: info.semanticGroup,
+			semanticDescription: info.semanticDescription,
+			semanticSource: info.semanticSource,
 			text: info.text,
 			commentText: hydrated,
 			hasCommentDivider: true,
@@ -4879,6 +5045,11 @@
 			cfiRange: resolveHighlightMutationCfi(info, source),
 			color: info.color,
 			style: info.style,
+			semanticId: info.semanticId,
+			semanticLabel: info.semanticLabel,
+			semanticGroup: info.semanticGroup,
+			semanticDescription: info.semanticDescription,
+			semanticSource: info.semanticSource,
 			text: info.text,
 			commentText: commentEditorDraft,
 			hasCommentDivider: true,
@@ -5029,7 +5200,7 @@
 				return;
 			}
 
-			const allHighlights = collectedHighlights;
+			const allHighlights = applySemanticPresentationToHighlights(collectedHighlights);
 
 			const referenceStats = referenceStatsService.computeReferenceStatsFromHighlights(
 				allHighlights,
@@ -5282,6 +5453,37 @@
 			EPUB_RUNTIME.events.bookDisplayTitleChanged,
 			handleBookDisplayTitleChanged
 		);
+		const handleReaderUiModeChanged = (event: Event) => {
+			readerUiMode = readEpubReaderUiModeChange(event) || getHostReaderUiMode();
+			if (readerUiMode === 'minimal') {
+				highlightToolbarInfo = null;
+				commentEditorInfo = null;
+				referencePopoverInfo = null;
+				clearParagraphModeSelection();
+				clearReaderSelection();
+			}
+		};
+		window.addEventListener(EPUB_READER_UI_MODE_CHANGED_EVENT, handleReaderUiModeChanged);
+		readerUiMode = getHostReaderUiMode();
+		const handleSemanticProfileChanged = (event: Event) => {
+			const detail = (event as CustomEvent<{ scope?: unknown; bookId?: unknown }>).detail || {};
+			const eventScope = String(detail.scope || '').trim();
+			const eventBookId = String(detail.bookId || '').trim();
+			if (eventScope === 'book' && book?.id && eventBookId && eventBookId !== book.id) {
+				return;
+			}
+			if (readerReady) {
+				pendingLoadedHighlights = [];
+				trackedHighlightSourceFiles = new Set<string>();
+				highlightToolbarInfo = null;
+				commentEditorInfo = null;
+				getExcerptPipeline().syncCollectedHighlights([]);
+				void readerService.applyHighlights([]);
+				publishSidebarHighlights([]);
+			}
+			void refreshSemanticSettings({ reloadHighlights: true });
+		};
+		window.addEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
 		const canvasDirectionRef = app.workspace.on(
 			WEAVE_EPUB_CANVAS_LAYOUT_DIRECTION_EVENT,
 			(payload: WeaveEpubCanvasLayoutDirectionPayload) => {
@@ -5451,6 +5653,8 @@
 				EPUB_RUNTIME.events.bookDisplayTitleChanged,
 				handleBookDisplayTitleChanged
 			);
+			window.removeEventListener(EPUB_READER_UI_MODE_CHANGED_EVENT, handleReaderUiModeChanged);
+			window.removeEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
 			componentDisposed = true;
 			getBookSessionManager(app).releaseIfNoOpenLeaves(app, filePath);
 			clearParagraphModeSelection();
@@ -5515,6 +5719,29 @@
 	});
 
 	$effect(() => {
+		const mode = readerUiMode;
+		const service = readerService;
+		if (mode !== 'minimal') {
+			return;
+		}
+
+		untrack(() => {
+			highlightToolbarInfo = null;
+			commentEditorInfo = null;
+			referencePopoverInfo = null;
+			paragraphModeSelection = null;
+			clearReaderSelection();
+		});
+
+		const offSelection = service.onSelectionChange(({ frame }) => {
+			clearReaderSelection(frame);
+		});
+		return () => {
+			offSelection();
+		};
+	});
+
+	$effect(() => {
 		const _flowMode = settings.flowMode;
 		const _showScrolledSideNav = settings.showScrolledSideNav;
 		const _widthMode = settings.widthMode;
@@ -5575,6 +5802,7 @@
 	data-flow={settings.flowMode}
 	data-layout={settings.layoutMode}
 	data-width={settings.widthMode}
+	data-reader-ui-mode={readerUiMode}
 	data-paragraph-mode={settings.paragraphModeEnabled ? 'active' : 'inactive'}
 	data-scrolled-side-nav={isDesktopScrolledSideNavVisible() ? 'visible' : 'hidden'}
 	style={getReaderRootStyle()}
@@ -5786,24 +6014,26 @@
 				}}
 			/>
 
-			<EpubHighlightToolbar
-				readerService={readerService}
-				mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
-				info={hasExcerptNotesCapability() ? highlightToolbarInfo : null}
-				canUseStyledExcerpts={hasStyledExcerptCapability()}
-				canUseSourceLocation={hasSourceLocationCapability()}
-				showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled()}
-				onRequestPremiumFeaturePreview={openPremiumFeaturePreview}
-				onDelete={handleHighlightDelete}
-				onTemporarilyReveal={handleTemporarilyRevealConcealed}
-				onChangeColor={handleHighlightChangeColor}
-				onChangeStyle={handleHighlightChangeStyle}
-				onBacklink={handleHighlightBacklink}
-				onExtractToCard={handleHighlightExtractToCard}
-				onCopyText={handleHighlightCopyText}
-				onEditComment={handleHighlightEditComment}
-				onDismiss={() => highlightToolbarInfo = null}
-			/>
+			{#if readerUiMode !== 'minimal'}
+				<EpubHighlightToolbar
+					readerService={readerService}
+					mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
+					info={hasExcerptNotesCapability() ? highlightToolbarInfo : null}
+					canUseStyledExcerpts={hasStyledExcerptCapability()}
+					canUseSourceLocation={hasSourceLocationCapability()}
+					showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled()}
+					onRequestPremiumFeaturePreview={openPremiumFeaturePreview}
+					onDelete={handleHighlightDelete}
+					onTemporarilyReveal={handleTemporarilyRevealConcealed}
+					onChangeColor={handleHighlightChangeColor}
+					onChangeStyle={handleHighlightChangeStyle}
+					onBacklink={handleHighlightBacklink}
+					onExtractToCard={handleHighlightExtractToCard}
+					onCopyText={handleHighlightCopyText}
+					onEditComment={handleHighlightEditComment}
+					onDismiss={() => highlightToolbarInfo = null}
+				/>
+			{/if}
 
 			<EpubCommentEditorPopover
 				open={hasExcerptNotesCapability() && commentEditorInfo !== null}
@@ -5836,31 +6066,35 @@
 				onClose={closeReferencePopover}
 			/>
 
-			<SelectionToolbar
-				{app}
-				{readerService}
-				{book}
-				{readerVersion}
-				boundsEl={viewportEl}
-				mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
-				externalSelection={settings.paragraphModeEnabled ? paragraphModeSelection : null}
-				{autoInsert}
-				{canvasMode}
-				canUseExcerptNotes={hasExcerptNotesCapability()}
-				canUseStyledExcerpts={hasStyledExcerptCapability()}
-				showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled()}
-				onRequestPremiumFeaturePreview={openPremiumFeaturePreview}
-				onInsertToNote={hasExcerptNotesCapability() ? handleInsertToNote : undefined}
-				onCopySelectionLink={
-					hasExcerptNotesCapability() || isPremiumFeaturePreviewEnabled()
-						? handleCopySelectionLink
-						: undefined
-				}
-				onExtractToCard={handleExtractToCard}
-				onCreateReadingPoint={hasCreateReadingPointCapability() ? handleCreateReadingPoint : undefined}
-				onAutoInsert={hasExcerptNotesCapability() ? handleAutoInsertSelection : undefined}
-				onOpenAIMenu={showSelectedTextAIMenu}
-			/>
+			{#if readerUiMode !== 'minimal'}
+				<SelectionToolbar
+					{app}
+					{readerService}
+					{book}
+					{readerVersion}
+					readerUiMode={readerUiMode}
+					semanticSettings={semanticSettings}
+					boundsEl={viewportEl}
+					mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
+					externalSelection={settings.paragraphModeEnabled ? paragraphModeSelection : null}
+					{autoInsert}
+					{canvasMode}
+					canUseExcerptNotes={hasExcerptNotesCapability()}
+					canUseStyledExcerpts={hasStyledExcerptCapability()}
+					showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled()}
+					onRequestPremiumFeaturePreview={openPremiumFeaturePreview}
+					onInsertToNote={hasExcerptNotesCapability() ? handleInsertToNote : undefined}
+					onCopySelectionLink={
+						hasExcerptNotesCapability() || isPremiumFeaturePreviewEnabled()
+							? handleCopySelectionLink
+							: undefined
+					}
+					onExtractToCard={handleExtractToCard}
+					onCreateReadingPoint={hasCreateReadingPointCapability() ? handleCreateReadingPoint : undefined}
+					onAutoInsert={hasExcerptNotesCapability() ? handleAutoInsertSelection : undefined}
+					onOpenAIMenu={showSelectedTextAIMenu}
+				/>
+			{/if}
 
 			<EpubPremiumFeaturePopover
 				open={premiumFeaturePreviewFeatureId !== null}

@@ -19,6 +19,23 @@ describe("highlight-identity", () => {
 		);
 	});
 
+	it("keeps same quote at same cfi separate when semantic ids differ", () => {
+		const base = {
+			cfiRange: "epubcfi(/6/26)",
+			text: "same quote",
+			color: "yellow",
+		} as const;
+		expect(getReaderHighlightIdentityKey({ ...base, semanticId: "important" })).not.toBe(
+			getReaderHighlightIdentityKey({ ...base, semanticId: "question" })
+		);
+
+		const merged = mergeReaderHighlightsByIdentity([], [
+			{ ...base, semanticId: "important", semanticLabel: "重点" },
+			{ ...base, semanticId: "question", semanticLabel: "疑问", color: "purple" },
+		] as ReaderHighlight[]);
+		expect(merged).toHaveLength(2);
+	});
+
 	it("prefers the first merged highlight's comment text over stale in-memory data", () => {
 		const merged = mergeReaderHighlightsByIdentity(
 			[

@@ -2,10 +2,23 @@ import { t } from "../../utils/i18n";
 import { generateCardUUID } from "../identifier/WeaveIDGenerator";
 import type { EpubBacklinkHighlightService } from "./EpubBacklinkHighlightService";
 import { EpubLinkService } from "./EpubLinkService";
-import { getReaderHighlightIdentityKey } from "./highlight/highlight-identity";
+import {
+	getReaderHighlightIdentityKey,
+	mergeReaderHighlightsByIdentity,
+} from "./highlight/highlight-identity";
 import type { EpubStorageService } from "./EpubStorageService";
 import type { HighlightSourceLocator, ReaderHighlight } from "./reader-engine-types";
 import { resolveDisplayProgress } from "./book-progress";
+import {
+	loadEffectiveEpubSemanticProfile,
+	readEffectiveEpubPortableAnnotations,
+	writeBookEpubPortableAnnotations,
+} from "./semantic/semantic-store";
+import {
+	activeSemanticEntries,
+	resolveAnnotationPresentation,
+	toReaderAnnotationStyle,
+} from "./semantic/profiles";
 import type { ConcealedText, HighlightColor } from "./types";
 
 export class EpubAnnotationService {
@@ -140,7 +153,9 @@ export class EpubAnnotationService {
 					undefined,
 					book.sourceId,
 					highlight.excerptId,
-					highlight.style
+					highlight.style,
+					EpubLinkService.MAX_CHAPTER_LABEL_LENGTH,
+					highlight.semanticId
 				);
 				markdown += "\n";
 			}
@@ -202,6 +217,144 @@ export class EpubAnnotationService {
 				...(sourceLocators ? { sourceLocators } : {}),
 			};
 		});
+	}
+
+	private getApp() {
+		return typeof this.storageService.getApp === "function"
+			? this.storageService.getApp()
+			: null;
+	}
+
+	private isActiveSemanticAnnotation(annotation: unknown, profile?: unknown): boolean {
+		if (!annotation || typeof annotation !== "object") {
+			return false;
+		}
+		const semanticId = String((annotation as { semanticId?: unknown }).semanticId || "").trim();
+		if (!semanticId || !profile) {
+			return true;
+		}
+		return (activeSemanticEntries(profile) as Array<{ id?: unknown }>).some(
+			(entry) => String(entry?.id || "").trim() === semanticId
+		);
+	}
+
+	private async loadEffectiveSemanticProfile(bookId: string): Promise<unknown | null> {
+		const app = this.getApp();
+		if (!app) {
+			return null;
+		}
+		try {
+			return (await loadEffectiveEpubSemanticProfile(app, bookId, {})).effectiveProfile;
+		} catch (error) {
+			console.warn("[EpubAnnotationService] Failed to load semantic profile:", error);
+			return null;
+		}
+	}
+
+	private normalizePortableAnnotation(annotation: unknown, profile?: unknown): ReaderHighlight | null {
+		if (!annotation || typeof annotation !== "object") {
+			return null;
+		}
+		if (!this.isActiveSemanticAnnotation(annotation, profile)) {
+			return null;
+		}
+		const presentedAnnotation = profile
+			? resolveAnnotationPresentation(annotation, profile)
+			: annotation as Record<string, unknown>;
+		const cfiRange = EpubLinkService.normalizeCfi(
+			String((presentedAnnotation as { cfiRange?: unknown }).cfiRange || "").trim()
+		);
+		const text = String((presentedAnnotation as { text?: unknown }).text || "").trim();
+		if (!cfiRange || !text) {
+			return null;
+		}
+		const color = String((presentedAnnotation as { color?: unknown }).color || "yellow")
+			.trim()
+			.toLowerCase() as HighlightColor;
+		const rawStyle = String((presentedAnnotation as { style?: unknown }).style || "").trim();
+		const style = toReaderAnnotationStyle(rawStyle);
+		const semanticId = String((presentedAnnotation as { semanticId?: unknown }).semanticId || "").trim();
+		const semanticLabel = String((presentedAnnotation as { semanticLabel?: unknown }).semanticLabel || "").trim();
+		const semanticGroup = String((presentedAnnotation as { semanticGroup?: unknown }).semanticGroup || "").trim();
+		const semanticDescription = String(
+			(presentedAnnotation as { semanticDescription?: unknown }).semanticDescription || ""
+		).trim();
+		const semanticSource = String((presentedAnnotation as { semanticSource?: unknown }).semanticSource || "").trim();
+		const chapterTitle = String((presentedAnnotation as { chapterTitle?: unknown }).chapterTitle || "").trim();
+		const commentText = String((presentedAnnotation as { commentText?: unknown }).commentText || "").trim();
+		const chapterIndex = (presentedAnnotation as { chapterIndex?: unknown }).chapterIndex;
+		const createdTime = (presentedAnnotation as { createdTime?: unknown }).createdTime;
+		const updatedAt = (presentedAnnotation as { updatedAt?: unknown }).updatedAt;
+
+		return {
+			cfiRange,
+			color,
+			...(style ? { style } : {}),
+			...(semanticId ? { semanticId } : {}),
+			...(semanticLabel ? { semanticLabel } : {}),
+			...(semanticGroup ? { semanticGroup } : {}),
+			...(semanticDescription ? { semanticDescription } : {}),
+			...(semanticSource ? { semanticSource } : {}),
+			text,
+			...(commentText ? { commentText } : {}),
+			...((presentedAnnotation as { hasCommentDivider?: unknown }).hasCommentDivider === true
+				? { hasCommentDivider: true }
+				: {}),
+			...(typeof chapterIndex === "number" && Number.isFinite(chapterIndex) ? { chapterIndex } : {}),
+			...(chapterTitle ? { chapterTitle } : {}),
+			...(typeof createdTime === "number" && Number.isFinite(createdTime) ? { createdTime } : {}),
+			...(typeof updatedAt === "number" && Number.isFinite(updatedAt) ? { updatedAt } : {}),
+			presentation: "highlight",
+		};
+	}
+
+	private async loadPortableHighlights(
+		bookId: string,
+		effectiveProfile?: unknown | null
+	): Promise<ReaderHighlight[]> {
+		const app = this.getApp();
+		if (!app) {
+			return [];
+		}
+		try {
+			const [resolvedProfile, payload] =
+				effectiveProfile === undefined
+					? await Promise.all([
+							this.loadEffectiveSemanticProfile(bookId),
+							readEffectiveEpubPortableAnnotations(app, bookId),
+						])
+					: [effectiveProfile, await readEffectiveEpubPortableAnnotations(app, bookId)];
+			return payload.annotations
+				.map((annotation) => this.normalizePortableAnnotation(annotation, resolvedProfile))
+				.filter((highlight): highlight is ReaderHighlight => Boolean(highlight));
+		} catch (error) {
+			console.warn("[EpubAnnotationService] Failed to load portable annotations:", error);
+			return [];
+		}
+	}
+
+	async savePortableHighlight(bookId: string, highlight: ReaderHighlight): Promise<void> {
+		const app = this.getApp();
+		if (!app || !String(bookId || "").trim()) {
+			return;
+		}
+		try {
+			const [profileResult, payload] = await Promise.all([
+				loadEffectiveEpubSemanticProfile(app, bookId, {}),
+				readEffectiveEpubPortableAnnotations(app, bookId),
+			]);
+			const normalizedIncoming = this.normalizePortableAnnotation(highlight, profileResult.effectiveProfile);
+			if (!normalizedIncoming) {
+				return;
+			}
+			const existing = payload.annotations
+				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
+				.filter((item): item is ReaderHighlight => Boolean(item));
+			const merged = mergeReaderHighlightsByIdentity(existing, [normalizedIncoming]);
+			await writeBookEpubPortableAnnotations(app, bookId, merged);
+		} catch (error) {
+			console.warn("[EpubAnnotationService] Failed to save portable annotation:", error);
+		}
 	}
 
 	private async clearLegacyHighlightCache(bookId: string): Promise<void> {
@@ -336,6 +489,15 @@ export class EpubAnnotationService {
 			// 现在统一以 md/canvas/卡片中的真实摘录为准，因此这里直接移除遗留缓存文件。
 			await this.clearLegacyHighlightCache(bookId);
 
+			const effectiveSemanticProfile = await this.loadEffectiveSemanticProfile(bookId);
+			const portableHighlights = await this.loadPortableHighlights(bookId, effectiveSemanticProfile);
+			for (const portableHighlight of portableHighlights) {
+				const identity = getReaderHighlightIdentityKey(portableHighlight);
+				if (identity) {
+					allHighlightsByKey.set(identity, portableHighlight);
+				}
+			}
+
 			const backlinkHighlights = useDiskIncremental
 				? await backlinkService.refreshBookHighlightsIncremental(
 						filePath,
@@ -348,6 +510,9 @@ export class EpubAnnotationService {
 						hasAdditionalSourcePaths ? options : undefined
 				  );
 			for (const bh of backlinkHighlights) {
+				if (!this.isActiveSemanticAnnotation(bh, effectiveSemanticProfile)) {
+					continue;
+				}
 				const incomingLocators = this.collectHighlightSourceLocators(bh);
 				const incomingIdentity = getReaderHighlightIdentityKey(bh);
 				const existing = allHighlightsByKey.get(incomingIdentity);
@@ -364,6 +529,13 @@ export class EpubAnnotationService {
 					}
 					if (existing.style === undefined && bh.style !== undefined) {
 						existing.style = bh.style;
+					}
+					if (!existing.semanticId && bh.semanticId) {
+						existing.semanticId = bh.semanticId;
+						existing.semanticLabel = bh.semanticLabel;
+						existing.semanticGroup = bh.semanticGroup;
+						existing.semanticDescription = bh.semanticDescription;
+						existing.semanticSource = bh.semanticSource;
 					}
 					if (bh.commentText !== undefined) {
 						existing.commentText = bh.commentText;
@@ -386,6 +558,11 @@ export class EpubAnnotationService {
 						cfiRange: bh.cfiRange,
 						color: bh.color,
 						style: bh.style,
+						semanticId: bh.semanticId,
+						semanticLabel: bh.semanticLabel,
+						semanticGroup: bh.semanticGroup,
+						semanticDescription: bh.semanticDescription,
+						semanticSource: bh.semanticSource,
 						text: bh.text,
 						commentText: bh.commentText,
 						hasCommentDivider: bh.hasCommentDivider,

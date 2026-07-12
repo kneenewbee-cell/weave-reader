@@ -1,3 +1,5 @@
+import { CURRENT_PLUGIN_ID } from "../../config/plugin-runtime";
+
 export interface EpubRuntimeConfig {
 	pluginId: string;
 	pluginDirName: string;
@@ -53,8 +55,8 @@ const highlightSyncRequestedEvent = isStandalone
 	: "Weave:epub-highlight-sync-requested";
 
 export const EPUB_RUNTIME: EpubRuntimeConfig = {
-	pluginId: isStandalone ? "weave-epub-reader" : "weave",
-	pluginDirName: isStandalone ? "weave-epub-reader" : "weave",
+	pluginId: isStandalone ? CURRENT_PLUGIN_ID : "weave",
+	pluginDirName: isStandalone ? CURRENT_PLUGIN_ID : "weave",
 	viewTypes: {
 		reader: isStandalone ? "weave-epub-reader-standalone" : "weave-epub-reader",
 		sidebar: isStandalone ? "weave-epub-sidebar-standalone" : "weave-epub-sidebar",

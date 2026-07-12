@@ -8,6 +8,10 @@ export const CHAPTER_MARKED_HIGHLIGHT_COLORS: Record<string, string> = {
 	blue: "rgba(33, 150, 243, 0.3)",
 	red: "rgba(239, 68, 68, 0.3)",
 	purple: "rgba(171, 71, 188, 0.3)",
+	orange: "rgba(255, 152, 0, 0.3)",
+	cyan: "rgba(0, 188, 212, 0.3)",
+	pink: "rgba(244, 114, 182, 0.3)",
+	gray: "rgba(156, 163, 175, 0.3)",
 };
 
 export interface ChapterMarkedSpan {

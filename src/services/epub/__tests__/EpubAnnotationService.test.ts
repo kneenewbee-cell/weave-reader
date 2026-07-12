@@ -17,6 +17,41 @@ vi.mock('obsidian', () => ({
 }));
 
 import { EpubAnnotationService } from '../EpubAnnotationService';
+import { PROFILE_FORMAT, PROFILE_VERSION } from '../semantic/profiles';
+import {
+	clearBookEpubPortableSemanticAnnotations,
+	readEffectiveEpubPortableAnnotations,
+} from '../semantic/semantic-store';
+
+function createPortableMockApp(files: Record<string, unknown>, folders: string[] = []) {
+	const normalize = (value: string) => String(value || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+	const serialized = new Map(
+		Object.entries(files).map(([path, value]) => [normalize(path), JSON.stringify(value)])
+	);
+	const folderSet = new Set(folders.map((folder) => normalize(folder)));
+	return {
+		vault: {
+			adapter: {
+				exists: vi.fn(async (path: string) => serialized.has(normalize(path)) || folderSet.has(normalize(path))),
+				read: vi.fn(async (path: string) => serialized.get(normalize(path)) ?? ''),
+				write: vi.fn(async (path: string, value: string) => {
+					serialized.set(normalize(path), value);
+				}),
+				mkdir: vi.fn(async (path: string) => {
+					folderSet.add(normalize(path));
+				}),
+				list: vi.fn(async (path: string) => {
+					const root = normalize(path);
+					const prefix = `${root}/`;
+					const childFolders = Array.from(folderSet)
+						.filter((folder) => folder.startsWith(prefix))
+						.filter((folder) => !folder.slice(prefix.length).includes('/'));
+					return { files: [], folders: childFolders };
+				}),
+			},
+		},
+	};
+}
 
 describe('EpubAnnotationService', () => {
 	it('clears legacy stored highlights at most once per book and keeps backlink highlights as the live source', async () => {
@@ -88,6 +123,317 @@ describe('EpubAnnotationService', () => {
 			},
 		]);
 		expect(backlinkService.collectHighlights).toHaveBeenCalledTimes(2);
+	});
+
+	it('loads portable annotations from the only legacy book folder when the current runtime book id is empty', async () => {
+		const currentBookId = 'epub-book-rv441q';
+		const legacyBookId = 'epub-book-i6zqes';
+		const app = createPortableMockApp(
+			{
+				'weave/epub-data/index.json': {
+					books: {
+						[currentBookId]: { bookId: currentBookId },
+					},
+				},
+				'weave/epub-data/semantic-profiles/default.json': {
+					format: PROFILE_FORMAT,
+					version: PROFILE_VERSION,
+					scope: 'global',
+					annotationSemanticsEnabled: true,
+					semanticSchemeId: 'custom',
+					semantics: [
+						{
+							id: 'important',
+							label: 'Important',
+							color: 'blue',
+							style: 'underline',
+							group: 'study',
+							description: 'Portable semantic mapping',
+							showInStandard: true,
+							source: 'preset',
+							active: true,
+						},
+					],
+					standardSemanticIds: ['important'],
+					updatedAt: 1,
+				},
+				[`weave/epub-data/books/${legacyBookId}/annotations.json`]: {
+					format: 'weave-reader-annotations/v1',
+					version: 1,
+					bookId: legacyBookId,
+					updatedAt: 2,
+					annotations: [
+						{
+							cfiRange: 'epubcfi(/6/4)',
+							semanticId: 'important',
+							text: 'Portable highlight',
+							chapterIndex: 1,
+							chapterTitle: 'Chapter',
+							createdTime: 3,
+						},
+					],
+				},
+			},
+			[
+				'weave/epub-data/books',
+				`weave/epub-data/books/${currentBookId}`,
+				`weave/epub-data/books/${legacyBookId}`,
+			]
+		);
+
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			loadConcealedTexts: vi.fn(async () => []),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const backlinkService = {
+			collectHighlights: vi.fn(async () => []),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		await expect(service.collectAllHighlights(currentBookId, 'Books/demo.epub', backlinkService)).resolves.toEqual([
+			expect.objectContaining({
+				cfiRange: 'epubcfi(/6/4)',
+				text: 'Portable highlight',
+				semanticId: 'important',
+				semanticLabel: 'Important',
+				color: 'blue',
+				style: 'underline',
+				presentation: 'highlight',
+			}),
+		]);
+	});
+
+	it('clears effective portable annotations and prevents old book id fallback', async () => {
+		const currentBookId = 'epub-book-rv441q';
+		const legacyBookId = 'epub-book-i6zqes';
+		const app = createPortableMockApp(
+			{
+				'weave/epub-data/index.json': {
+					books: {
+						[currentBookId]: { bookId: currentBookId },
+					},
+				},
+				[`weave/epub-data/books/${legacyBookId}/annotations.json`]: {
+					format: 'weave-reader-annotations/v1',
+					version: 1,
+					bookId: legacyBookId,
+					updatedAt: 2,
+					annotations: [
+						{
+							cfiRange: 'epubcfi(/6/4)',
+							semanticId: 'important',
+							text: 'Old semantic highlight',
+							createdTime: 3,
+						},
+						{
+							cfiRange: 'epubcfi(/6/6)',
+							color: 'yellow',
+							style: 'wavy',
+							text: 'Old plain highlight',
+							createdTime: 4,
+						},
+					],
+				},
+			},
+			[
+				'weave/epub-data/books',
+				`weave/epub-data/books/${currentBookId}`,
+				`weave/epub-data/books/${legacyBookId}`,
+			]
+		) as any;
+
+		await expect(readEffectiveEpubPortableAnnotations(app, currentBookId)).resolves.toMatchObject({
+			bookId: currentBookId,
+			annotations: [
+				expect.objectContaining({ semanticId: 'important' }),
+				expect.objectContaining({ style: 'wavy' }),
+			],
+		});
+
+		await expect(clearBookEpubPortableSemanticAnnotations(app, currentBookId)).resolves.toBe(2);
+		await expect(readEffectiveEpubPortableAnnotations(app, currentBookId)).resolves.toMatchObject({
+			bookId: currentBookId,
+			annotations: [],
+			authoritative: true,
+		});
+	});
+
+	it('does not render portable semantic annotations outside the active scheme', async () => {
+		const bookId = 'epub-book-current';
+		const app = createPortableMockApp(
+			{
+				'weave/epub-data/index.json': {
+					books: {
+						[bookId]: { bookId },
+					},
+				},
+				'weave/epub-data/semantic-profiles/default.json': {
+					format: PROFILE_FORMAT,
+					version: PROFILE_VERSION,
+					scope: 'global',
+					annotationSemanticsEnabled: true,
+					semanticSchemeId: 'custom',
+					semantics: [
+						{
+							id: 'important',
+							label: 'Important',
+							color: 'blue',
+							style: 'underline',
+							group: 'study',
+							description: 'Current scheme semantic',
+							showInStandard: true,
+							source: 'preset',
+							active: true,
+						},
+						{
+							id: 'theorem',
+							label: 'Theorem',
+							color: 'red',
+							style: 'wavy',
+							group: 'archived',
+							description: 'Archived semantic from a previous scheme',
+							showInStandard: false,
+							source: 'preset',
+							active: false,
+						},
+					],
+					standardSemanticIds: ['important'],
+					updatedAt: 1,
+				},
+				[`weave/epub-data/books/${bookId}/annotations.json`]: {
+					format: 'weave-reader-annotations/v1',
+					version: 1,
+					bookId,
+					updatedAt: 2,
+					annotations: [
+						{
+							cfiRange: 'epubcfi(/6/4)',
+							semanticId: 'important',
+							text: 'Current scheme highlight',
+							createdTime: 3,
+						},
+						{
+							cfiRange: 'epubcfi(/6/6)',
+							semanticId: 'theorem',
+							text: 'Old scheme highlight',
+							createdTime: 4,
+						},
+						{
+							cfiRange: 'epubcfi(/6/8)',
+							semanticId: 'drug-dose',
+							text: 'Unknown scheme highlight',
+							createdTime: 5,
+						},
+					],
+				},
+			},
+			['weave/epub-data/books', `weave/epub-data/books/${bookId}`]
+		);
+
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			loadConcealedTexts: vi.fn(async () => []),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const backlinkService = {
+			collectHighlights: vi.fn(async () => []),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		await expect(service.collectAllHighlights(bookId, 'Books/demo.epub', backlinkService)).resolves.toEqual([
+			expect.objectContaining({
+				cfiRange: 'epubcfi(/6/4)',
+				text: 'Current scheme highlight',
+				semanticId: 'important',
+				color: 'blue',
+				style: 'underline',
+			}),
+		]);
+	});
+
+	it('does not render backlink semantic annotations outside the active scheme', async () => {
+		const bookId = 'epub-book-current';
+		const app = createPortableMockApp(
+			{
+				'weave/epub-data/index.json': {
+					books: {
+						[bookId]: { bookId },
+					},
+				},
+				'weave/epub-data/semantic-profiles/default.json': {
+					format: PROFILE_FORMAT,
+					version: PROFILE_VERSION,
+					scope: 'global',
+					annotationSemanticsEnabled: true,
+					semanticSchemeId: 'custom',
+					semantics: [
+						{
+							id: 'important',
+							label: 'Important',
+							color: 'blue',
+							style: 'underline',
+							group: 'study',
+							description: 'Current scheme semantic',
+							showInStandard: true,
+							source: 'preset',
+							active: true,
+						},
+						{
+							id: 'theorem',
+							label: 'Theorem',
+							color: 'red',
+							style: 'wavy',
+							group: 'archived',
+							description: 'Archived semantic from a previous scheme',
+							showInStandard: false,
+							source: 'preset',
+							active: false,
+						},
+					],
+					standardSemanticIds: ['important'],
+					updatedAt: 1,
+				},
+			},
+			['weave/epub-data/books', `weave/epub-data/books/${bookId}`]
+		);
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			loadConcealedTexts: vi.fn(async () => []),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const backlinkService = {
+			collectHighlights: vi.fn(async () => [
+				{
+					cfiRange: 'epubcfi(/6/4)',
+					color: 'blue',
+					style: 'underline',
+					semanticId: 'important',
+					text: 'Current backlink highlight',
+					sourceFile: 'Notes/demo.md',
+				},
+				{
+					cfiRange: 'epubcfi(/6/6)',
+					color: 'red',
+					style: 'wavy',
+					semanticId: 'theorem',
+					text: 'Old backlink highlight',
+					sourceFile: 'Notes/demo.md',
+				},
+			]),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		await expect(service.collectAllHighlights(bookId, 'Books/demo.epub', backlinkService)).resolves.toEqual([
+			expect.objectContaining({
+				cfiRange: 'epubcfi(/6/4)',
+				text: 'Current backlink highlight',
+				semanticId: 'important',
+			}),
+		]);
 	});
 
 	it('keeps separate highlights for the same coarse cfi when excerpt ids differ', async () => {
@@ -285,6 +631,8 @@ describe('EpubAnnotationService', () => {
 					chapterTitle: '雪夜的故事',
 					sourceFile: 'Notes/demo.md',
 					excerptId: 'excerpt-a',
+					semanticId: 'important',
+					semanticLabel: '重点',
 					createdTime: new Date('2026-04-27T13:32:00').getTime(),
 					presentation: 'highlight',
 				},
@@ -315,7 +663,7 @@ describe('EpubAnnotationService', () => {
 		expect(markdown).toContain('- **阅读进度**: 42%');
 		expect(markdown).toContain('## 高亮');
 		expect(markdown).toMatch(
-			/> \[!EPUB\|yellow\] \[\[Books\/demo\.epub#weave-cfi=epubcfi\(\/6\/4\).*&sid=epubsrc-demo&eid=excerpt-a\|demo\]\] \[雪夜的故事\] 2026-04-27 13:32\n> 第一条高亮\n/
+			/> \[!EPUB\|yellow\+semantic:important\] \[\[Books\/demo\.epub#weave-cfi=epubcfi\(\/6\/4\).*&sid=epubsrc-demo&eid=excerpt-a\|demo\]\] \[雪夜的故事\] 2026-04-27 13:32\n> 第一条高亮\n/
 		);
 		expect(markdown).toMatch(
 			/> \[!EPUB\|blue\] \[\[Books\/demo\.epub#weave-cfi=epubcfi\(\/6\/6\).*&sid=epubsrc-demo&eid=excerpt-b\|demo\]\] \[晨光\] 2026-04-28 09:15\n> 第二条高亮\n/

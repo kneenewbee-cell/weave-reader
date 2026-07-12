@@ -3,7 +3,7 @@ import type { HighlightSourceLocator, ReaderHighlight } from "../reader-engine-t
 
 export type HighlightIdentityFields = Pick<
 	ReaderHighlight,
-	"cfiRange" | "excerptId" | "sourceFile" | "sourceRef" | "createdTime" | "text"
+	"cfiRange" | "excerptId" | "sourceFile" | "sourceRef" | "createdTime" | "text" | "semanticId"
 >;
 
 /** Normalizes excerpt quote text for stable identity comparison. */
@@ -76,13 +76,20 @@ export function getReaderHighlightIdentityKey(highlight: HighlightIdentityFields
 		return `${cfiKey}\0eid:${excerptId}`;
 	}
 
+	const semanticId = String(highlight.semanticId || "").trim();
 	const textKey = normalizeHighlightQuoteText(highlight.text);
 	if (textKey) {
+		if (semanticId) {
+			return `${cfiKey}\0semantic:${semanticId}\0text:${textKey}`;
+		}
 		return `${cfiKey}\0text:${textKey}`;
 	}
 
 	const sourceFile = String(highlight.sourceFile || "").trim();
 	const sourceRef = String(highlight.sourceRef || "").trim();
+	if (semanticId) {
+		return `${cfiKey}\0semantic:${semanticId}\0src:${sourceFile}\0${sourceRef}\0${highlight.createdTime ?? ""}`;
+	}
 	return `${cfiKey}\0src:${sourceFile}\0${sourceRef}\0${highlight.createdTime ?? ""}`;
 }
 
@@ -154,6 +161,11 @@ function mergeReaderHighlightRecords(
 		chapterIndex: prior.chapterIndex ?? later.chapterIndex,
 		chapterTitle: prior.chapterTitle || later.chapterTitle,
 		style: prior.style ?? later.style,
+		semanticId: prior.semanticId || later.semanticId,
+		semanticLabel: prior.semanticLabel || later.semanticLabel,
+		semanticGroup: prior.semanticGroup || later.semanticGroup,
+		semanticDescription: prior.semanticDescription || later.semanticDescription,
+		semanticSource: prior.semanticSource || later.semanticSource,
 		createdTime: prior.createdTime ?? later.createdTime,
 	};
 }
@@ -169,6 +181,8 @@ export function hasReaderHighlightPresentationChanged(
 		previous.text !== next.text ||
 		previous.color !== next.color ||
 		previous.style !== next.style ||
+		previous.semanticId !== next.semanticId ||
+		previous.semanticLabel !== next.semanticLabel ||
 		previous.presentation !== next.presentation
 	);
 }

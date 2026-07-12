@@ -6,10 +6,18 @@
 	import { tr } from '../../utils/i18n';
 	import { isWeaveMainPluginEnabled } from '../../utils/weave-reader-access';
 	import { logger } from '../../utils/logger';
+	import {
+		activeSemanticEntries,
+		normalizeAnnotationStyle,
+		SEMANTIC_COLOR_HEX,
+	} from '../../services/epub';
 	import type {
+		EpubAnnotationSemantic,
 		EpubBook,
 		EpubHighlightStyle,
 		EpubReaderEngine,
+		EpubReaderUiMode,
+		EpubSemanticSettings,
 		ReaderAnchorPoint,
 		ReaderFrame,
 		ReaderViewportRect,
@@ -46,6 +54,7 @@
 		readerService: EpubReaderEngine;
 		book: EpubBook | null;
 		readerVersion?: number;
+		readerUiMode?: EpubReaderUiMode;
 		autoInsert?: boolean;
 		canvasMode?: boolean;
 		canUseExcerptNotes?: boolean;
@@ -55,13 +64,20 @@
 		boundsEl?: HTMLElement | null;
 		mobileDockBottomOffset?: number;
 		externalSelection?: ExternalSelectionState | null;
+		semanticSettings?: EpubSemanticSettings | null;
 		onInsertToNote?: (text: string, cfiRange: string, color?: string, style?: EpubHighlightStyle) => void;
 		onCopySelectionLink?: (
 			action: 'protocolMarkdown' | 'vaultWikilink' | 'obsidianUri' | 'plainText',
 			text: string,
 			cfiRange: string
 		) => void | Promise<void>;
-		onAutoInsert?: (text: string, cfiRange: string, color?: string, style?: EpubHighlightStyle) => void;
+		onAutoInsert?: (
+			text: string,
+			cfiRange: string,
+			color?: string,
+			style?: EpubHighlightStyle,
+			semantic?: EpubAnnotationSemantic
+		) => void;
 		onExtractToCard?: (text: string, cfiRange: string) => void;
 		onCreateReadingPoint?: (text: string, cfiRange: string) => void;
 		onOpenAIMenu: (event: MouseEvent, text: string, cfiRange: string) => void;
@@ -72,6 +88,7 @@
 		readerService,
 		book,
 		readerVersion = 0,
+		readerUiMode = 'standard',
 		autoInsert = false,
 		canvasMode = false,
 		canUseExcerptNotes = true,
@@ -81,6 +98,7 @@
 		boundsEl = null,
 		mobileDockBottomOffset = 0,
 		externalSelection = null,
+		semanticSettings = null,
 		onInsertToNote,
 		onCopySelectionLink,
 		onAutoInsert,
@@ -90,6 +108,21 @@
 	}: Props = $props();
 	let t = $derived($tr);
 	let canUseAiSplit = $derived(isWeaveMainPluginEnabled(app));
+	let showExpertControls = $derived(readerUiMode === 'expert');
+	let showStandardHighlight = $derived(readerUiMode === 'standard');
+	let activeSemantics = $derived(
+		semanticSettings?.annotationSemanticsEnabled === false
+			? []
+			: (activeSemanticEntries(semanticSettings || {}) as EpubAnnotationSemantic[])
+	);
+	let standardSemantics = $derived.by(() => {
+		if (!semanticSettings?.annotationSemanticsEnabled) {
+			return [];
+		}
+		const standardIds = new Set(semanticSettings.standardSemanticIds || []);
+		return activeSemantics.filter((semantic) => standardIds.has(semantic.id)).slice(0, 4);
+	});
+	let expertSemantics = $derived(activeSemantics);
 
 	let toolbarEl: HTMLDivElement | undefined = $state(undefined);
 	let isVisible = $state(false);
@@ -108,6 +141,14 @@
 	let activeClearSelection: (() => void) | null = null;
 	let pendingExternalSelectionHideFrame: number | null = null;
 	let activeToolbarMenu: Menu | null = null;
+	let pendingHighlightTimer: ReturnType<typeof window.setTimeout> | null = null;
+	let pendingHighlightAttempts = 0;
+
+	type HighlightAction = {
+		color: string;
+		style?: EpubHighlightStyle | 'highlight';
+		semantic?: EpubAnnotationSemantic;
+	};
 
 	const isMobileToolbar = Platform.isMobile || activeDocument.body.classList.contains('is-mobile');
 
@@ -238,6 +279,14 @@
 		}
 	}
 
+	function clearPendingHighlightAction() {
+		if (pendingHighlightTimer !== null) {
+			window.clearTimeout(pendingHighlightTimer);
+			pendingHighlightTimer = null;
+		}
+		pendingHighlightAttempts = 0;
+	}
+
 	function stopPositionTracking() {
 		clearPendingSync();
 		teardownPositionTracking?.();
@@ -259,6 +308,7 @@
 	function hideToolbar() {
 		dismissActiveToolbarMenu();
 		clearPendingExternalSelectionHide();
+		clearPendingHighlightAction();
 		isVisible = false;
 		isBelowSelection = false;
 		toolbarMode = 'floating';
@@ -292,7 +342,57 @@
 		clearAndHide();
 	}
 
-	async function handleHighlight(color: string, style?: EpubHighlightStyle) {
+	function toReaderHighlightStyle(style?: EpubHighlightStyle | 'highlight'): EpubHighlightStyle | undefined {
+		const normalized = normalizeAnnotationStyle(style);
+		return normalized === 'highlight' ? undefined : normalized as EpubHighlightStyle;
+	}
+
+	function getSemanticColorHex(color?: string): string {
+		const key = String(color || 'yellow').trim().toLowerCase();
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow;
+	}
+
+	function buildSemanticFields(semantic?: EpubAnnotationSemantic) {
+		if (!semantic?.id) {
+			return {};
+		}
+		return {
+			semanticId: semantic.id,
+			semanticLabel: semantic.label,
+			semanticGroup: semantic.group || 'study',
+			...(semantic.description ? { semanticDescription: semantic.description } : {}),
+			semanticSource: semantic.source || 'preset',
+		};
+	}
+
+	function isHighlightSelectionReady(): boolean {
+		return Boolean(book && selectedText && currentCfiRange);
+	}
+
+	function queueHighlightAction(action: HighlightAction): void {
+		clearPendingHighlightAction();
+		pendingHighlightAttempts = 0;
+		const flush = () => {
+			pendingHighlightTimer = null;
+			if (isHighlightSelectionReady()) {
+				void handleHighlight(action.color, toReaderHighlightStyle(action.style), action.semantic);
+				return;
+			}
+			pendingHighlightAttempts += 1;
+			if (pendingHighlightAttempts > 8) {
+				clearAndHide();
+				return;
+			}
+			pendingHighlightTimer = window.setTimeout(flush, 60);
+		};
+		pendingHighlightTimer = window.setTimeout(flush, 0);
+	}
+
+	async function handleHighlight(
+		color: string,
+		style?: EpubHighlightStyle,
+		semantic?: EpubAnnotationSemantic
+	) {
 		if (!canUseExcerptNotes) {
 			if (showPremiumFeaturePreviewEnabled) {
 				handlePremiumExcerptFeaturePreview();
@@ -309,24 +409,31 @@
 			clearAndHide();
 			return;
 		}
-		if (!book || !selectedText || !currentCfiRange) {
-			clearAndHide();
+		if (!isHighlightSelectionReady()) {
+			queueHighlightAction({ color, style, semantic });
 			return;
 		}
 
 		try {
-			const highlight = { cfiRange: currentCfiRange, color, style, text: selectedText };
-			if (autoInsert || canvasMode) {
-				readerService.addHighlight(highlight);
-			} else {
-				readerService.addTemporaryHighlight(highlight, 2000);
-			}
+			const highlight = {
+				cfiRange: currentCfiRange,
+				color,
+				style,
+				...buildSemanticFields(semantic),
+				text: selectedText
+			};
+			readerService.addHighlight(highlight);
 		} catch (e) {
 			logger.warn('[SelectionToolbar] Failed to apply highlight:', e);
 		}
 
-		onAutoInsert?.(selectedText, currentCfiRange, color, style);
+		onAutoInsert?.(selectedText, currentCfiRange, color, style, semantic);
 		clearAndHide();
+	}
+
+	function handleSemanticHighlight(semantic: EpubAnnotationSemantic) {
+		const style = toReaderHighlightStyle(semantic.style);
+		void handleHighlight(semantic.color || 'yellow', style, semantic);
 	}
 
 	function handleInsertToNote() {
@@ -819,6 +926,7 @@
 			stopPositionTracking();
 			clearPendingSync();
 			clearPendingExternalSelectionHide();
+			clearPendingHighlightAction();
 		};
 	});
 </script>
@@ -832,8 +940,24 @@
 	bind:this={toolbarEl}
 >
 	<div class="selection-main-row">
-		{#if canUseExcerptNotes || canPreviewLockedExcerptFeature()}
+		{#if showExpertControls && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
 			<div class="selection-top-row">
+				{#if expertSemantics.length > 0}
+					<div class="toolbar-row weave-epub-expert-semantic-row">
+						{#each expertSemantics as semantic (semantic.id)}
+							<button
+								class="clickable-icon action-item weave-epub-semantic-chip"
+								data-semantic-id={semantic.id}
+								onclick={() => handleSemanticHighlight(semantic)}
+								title={semantic.description || semantic.label}
+								aria-label={semantic.label}
+							>
+								<span class="action-icon weave-epub-semantic-dot" style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}></span>
+								<span class="action-label">{semantic.label}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
 				<div class="toolbar-row colors-row selection-color-row selection-primary-row">
 					<button class="color-btn yellow" onclick={() => handleHighlight('yellow')} aria-label={t('epub.selectionToolbar.highlightYellow')} title={t('epub.selectionToolbar.highlightYellow')}><span class="color-btn-core"></span></button>
 					<button class="color-btn blue" onclick={() => handleHighlight('blue')} aria-label={t('epub.selectionToolbar.highlightBlue')} title={t('epub.selectionToolbar.highlightBlue')}><span class="color-btn-core"></span></button>
@@ -860,6 +984,24 @@
 
 		<div class="selection-actions-shell">
 			<div class="toolbar-row actions-row selection-actions-row">
+				{#if showStandardHighlight && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
+					<button class="clickable-icon action-item weave-epub-standard-highlight-btn" onclick={() => handleHighlight('yellow')} title={t('epub.selectionToolbar.highlight')} aria-label={t('epub.selectionToolbar.highlight')}>
+						<span class="action-icon weave-epub-standard-highlight-dot"></span>
+						<span class="action-label">{t('epub.selectionToolbar.highlight')}</span>
+					</button>
+					{#each standardSemantics as semantic (semantic.id)}
+						<button
+							class="clickable-icon action-item weave-epub-standard-semantic-btn weave-epub-semantic-chip"
+							data-semantic-id={semantic.id}
+							onclick={() => handleSemanticHighlight(semantic)}
+							title={semantic.description || semantic.label}
+							aria-label={semantic.label}
+						>
+							<span class="action-icon weave-epub-semantic-dot" style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}></span>
+							<span class="action-label">{semantic.label}</span>
+						</button>
+					{/each}
+				{/if}
 				{#if canUseExcerptNotes || canPreviewLockedExcerptFeature()}
 					<button class="clickable-icon action-item" onclick={handleInsertToNote} title={autoInsert ? t('epub.selectionToolbar.insert') : t('epub.selectionToolbar.copy')} aria-label={autoInsert ? t('epub.selectionToolbar.insert') : t('epub.selectionToolbar.copy')}>
 						<span class="action-icon" use:icon={autoInsert ? 'clipboard-paste' : 'clipboard-copy'}></span>
@@ -886,6 +1028,18 @@
 					<button class="clickable-icon action-item accent" onclick={handleCreateReadingPoint} title={t('epub.selectionToolbar.readingPointTitle')} aria-label={t('epub.selectionToolbar.readingPointTitle')}>
 						<span class="action-icon" use:icon={'book-plus'}></span>
 						<span class="action-label">{t('epub.selectionToolbar.readingPoint')}</span>
+					</button>
+				{/if}
+				{#if showExpertControls && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
+					<button
+						class="clickable-icon action-item weave-epub-expert-strikethrough-btn"
+						data-style="strikethrough"
+						onclick={() => handleHighlight('yellow', 'strikethrough')}
+						title={t('epub.selectionToolbar.strikethrough')}
+						aria-label={t('epub.selectionToolbar.strikethrough')}
+					>
+						<span class="action-icon style-icon strikethrough-style-icon" use:icon={'strikethrough'}></span>
+						<span class="action-label">{t('epub.selectionToolbar.strikethrough')}</span>
 					</button>
 				{/if}
 				{#if canUseAiSplit}

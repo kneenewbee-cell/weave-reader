@@ -380,7 +380,6 @@
 }
 
 .callout[data-callout="epub"][data-callout-metadata="red"],
-.callout[data-callout="epub"][data-callout-metadata="pink"],
 .callout[data-callout="epub"][data-weave-epub-color="red"] {
 	--callout-color: 239, 68, 68;
 	--epub-callout-title: #9f1f1f;
@@ -390,6 +389,30 @@
 .callout[data-callout="epub"][data-weave-epub-color="purple"] {
 	--callout-color: 171, 71, 188;
 	--epub-callout-title: #6b2e93;
+}
+
+.callout[data-callout="epub"][data-callout-metadata="orange"],
+.callout[data-callout="epub"][data-weave-epub-color="orange"] {
+	--callout-color: 255, 152, 0;
+	--epub-callout-title: #8a4d00;
+}
+
+.callout[data-callout="epub"][data-callout-metadata="cyan"],
+.callout[data-callout="epub"][data-weave-epub-color="cyan"] {
+	--callout-color: 0, 188, 212;
+	--epub-callout-title: #006c78;
+}
+
+.callout[data-callout="epub"][data-callout-metadata="pink"],
+.callout[data-callout="epub"][data-weave-epub-color="pink"] {
+	--callout-color: 244, 114, 182;
+	--epub-callout-title: #9d174d;
+}
+
+.callout[data-callout="epub"][data-callout-metadata="gray"],
+.callout[data-callout="epub"][data-weave-epub-color="gray"] {
+	--callout-color: 156, 163, 175;
+	--epub-callout-title: #4b5563;
 }
 
 .callout[data-callout="epub"] .callout-title,
@@ -2189,4 +2212,3 @@ body.is-mobile .epub-selected-text-ai-panel-slot :global(.weave-ai-card-panel .c
 	color: var(--text-normal);
 	background-color: var(--background-modifier-hover);
 }
-

@@ -19,8 +19,16 @@ import {
 	navigateToPublicationChapter,
 	buildPublicationChapterMarkdownLink,
 	normalizeEpubBookmarkFolderPath,
+	normalizeEpubReaderUiMode,
+	normalizeEpubSemanticSettings,
+	notifyEpubReaderUiModeChanged,
 	resetEpubStorageServiceCache,
+	DEFAULT_EPUB_ANNOTATION_SEMANTICS,
+	DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+	DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
+	type EpubAnnotationSemantic,
 	type TocItem,
+	type EpubReaderUiMode,
 } from "./services/epub";
 import {
 	DEFAULT_CONTINUOUS_READING_POSITION_AUTO_SAVE_ENABLED,
@@ -107,6 +115,14 @@ interface StandaloneEpubPluginSettings {
 	aiConfig?: AIConfig;
 	allowInheritedLicenses: boolean;
 	enableDebugMode: boolean;
+	readerUiMode: EpubReaderUiMode;
+	expertModeEnabled: boolean;
+	annotationSemanticsEnabled: boolean;
+	semanticSchemeId: string;
+	annotationSemantics: EpubAnnotationSemantic[];
+	standardSemanticIds: string[];
+	semanticSettingsScope: "global" | "book";
+	semanticSettingsBookId: string;
 	showPremiumFeaturesPreview: boolean;
 	bookshelfAutoViewByLocationEnabled: boolean;
 	bookshelfDisplayMode: BookshelfDisplayMode;
@@ -126,6 +142,14 @@ const DEFAULT_STANDALONE_EPUB_SETTINGS: StandaloneEpubPluginSettings = {
 	licenseState: DEFAULT_LICENSE_STORE,
 	allowInheritedLicenses: true,
 	enableDebugMode: false,
+	readerUiMode: "standard",
+	expertModeEnabled: false,
+	annotationSemanticsEnabled: true,
+	semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+	annotationSemantics: DEFAULT_EPUB_ANNOTATION_SEMANTICS,
+	standardSemanticIds: DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
+	semanticSettingsScope: "global",
+	semanticSettingsBookId: "",
 	showPremiumFeaturesPreview: false,
 	bookshelfAutoViewByLocationEnabled: false,
 	bookshelfDisplayMode: DEFAULT_BOOKSHELF_DISPLAY_MODE,
@@ -140,6 +164,37 @@ const DEFAULT_STANDALONE_EPUB_SETTINGS: StandaloneEpubPluginSettings = {
 	interfaceLanguage: "auto",
 	selectionTranslation: DEFAULT_SELECTION_TRANSLATION_SETTINGS,
 };
+
+const LOCAL_TEST_LICENSE: LicenseInfo = {
+	activationCode: "local-test-license",
+	isActivated: true,
+	activatedAt: "2026-07-11T00:00:00.000Z",
+	deviceFingerprint: "local-test",
+	expiresAt: "2099-12-31T23:59:59.999Z",
+	productVersion: "0.6.44",
+	licenseType: "lifetime",
+	entitlements: ["weave-premium", "epub-premium"],
+	issuedProductId: LICENSED_PRODUCTS.WEAVE,
+	source: "local",
+};
+
+function withLocalTestLicenseState(state: EffectiveLicenseState): EffectiveLicenseState {
+	const localLicenses = state.localLicenses.some(
+		(license) => license.activationCode === LOCAL_TEST_LICENSE.activationCode
+	)
+		? state.localLicenses
+		: [LOCAL_TEST_LICENSE, ...state.localLicenses];
+	const activeLicenses = state.activeLicenses.length ? state.activeLicenses : [LOCAL_TEST_LICENSE];
+
+	return {
+		...state,
+		localLicenses,
+		activeLicenses,
+		entitlements: ["weave-premium", "epub-premium"],
+		primaryLicense: state.primaryLicense ?? LOCAL_TEST_LICENSE,
+		isPremiumActive: true,
+	};
+}
 
 type PersistedStandaloneEpubPluginSettings = Omit<
 	StandaloneEpubPluginSettings,
@@ -172,11 +227,11 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 	}
 
 	getEffectiveLicenseState(): EffectiveLicenseState {
-		return resolveEffectiveLicenseState({
+		return withLocalTestLicenseState(resolveEffectiveLicenseState({
 			product: this.getLicensedProductId(),
-			localLicenses: this.getLocalLicenses(),
+			localLicenses: [LOCAL_TEST_LICENSE, ...this.getLocalLicenses()],
 			inheritedLicenses: this.getInheritedLicenses(),
-		});
+		}));
 	}
 
 	hasEpubPremiumAccess(): boolean {
@@ -231,6 +286,39 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		PremiumFeatureGuard.getInstance().setPremiumFeaturesPreview(
 			this.settings.showPremiumFeaturesPreview
 		);
+	}
+
+	private syncReaderUiModeSettings(options?: { notify?: boolean }): void {
+		this.settings.readerUiMode = normalizeEpubReaderUiMode(
+			this.settings.readerUiMode,
+			this.settings.expertModeEnabled
+		);
+		this.settings.expertModeEnabled = this.settings.readerUiMode === "expert";
+		if (options?.notify) {
+			notifyEpubReaderUiModeChanged(this.settings.readerUiMode);
+		}
+	}
+
+	private syncAnnotationSemanticSettings(): void {
+		if (
+			!("semanticSchemeId" in this.settings) &&
+			Array.isArray((this.settings as Partial<StandaloneEpubPluginSettings>).annotationSemantics)
+		) {
+			this.settings.semanticSchemeId = "custom";
+		}
+		const normalizedSettings = normalizeEpubSemanticSettings({
+			annotationSemanticsEnabled: this.settings.annotationSemanticsEnabled,
+			semanticSchemeId: this.settings.semanticSchemeId,
+			annotationSemantics: this.settings.annotationSemantics,
+			standardSemanticIds: this.settings.standardSemanticIds,
+		});
+		this.settings.annotationSemanticsEnabled = normalizedSettings.annotationSemanticsEnabled;
+		this.settings.semanticSchemeId = normalizedSettings.semanticSchemeId;
+		this.settings.annotationSemantics = normalizedSettings.annotationSemantics;
+		this.settings.standardSemanticIds = normalizedSettings.standardSemanticIds;
+		this.settings.semanticSettingsScope =
+			this.settings.semanticSettingsScope === "book" ? "book" : "global";
+		this.settings.semanticSettingsBookId = String(this.settings.semanticSettingsBookId || "").trim();
 	}
 
 	private syncBookshelfDisplaySettings(): void {
@@ -384,6 +472,8 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		const licenseSettingsChanged = this.syncLicenseSettings();
 		this.syncDebugSettings();
 		this.syncPremiumPreviewSettings();
+		this.syncReaderUiModeSettings({ notify: true });
+		this.syncAnnotationSemanticSettings();
 		this.syncBookshelfDisplaySettings();
 		this.syncReadingPositionAutoSaveSettings();
 		this.syncSelectionTranslationSettings();
@@ -410,6 +500,8 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 
 		this.syncDebugSettings();
 		this.syncPremiumPreviewSettings();
+		this.syncReaderUiModeSettings({ notify: true });
+		this.syncAnnotationSemanticSettings();
 		this.syncBookshelfDisplaySettings();
 		this.syncReadingPositionAutoSaveSettings();
 		this.syncSelectionTranslationSettings();

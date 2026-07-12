@@ -71,6 +71,11 @@ export interface HighlightClickInfo {
 	cfiRange: string;
 	color: string;
 	style?: EpubHighlightStyle;
+	semanticId?: string;
+	semanticLabel?: string;
+	semanticGroup?: string;
+	semanticDescription?: string;
+	semanticSource?: string;
 	text: string;
 	commentText?: string;
 	hasCommentDivider?: boolean;
@@ -91,6 +96,11 @@ export interface ReaderHighlightInput {
 	cfiRange: string;
 	color: string;
 	style?: EpubHighlightStyle;
+	semanticId?: string;
+	semanticLabel?: string;
+	semanticGroup?: string;
+	semanticDescription?: string;
+	semanticSource?: string;
 	text?: string;
 	commentText?: string;
 	hasCommentDivider?: boolean;

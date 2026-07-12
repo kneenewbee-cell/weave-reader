@@ -222,7 +222,9 @@ function buildHighlightView(
 			undefined,
 			input.book.sourceId,
 			highlight.excerptId,
-			highlight.style
+			highlight.style,
+			undefined,
+			highlight.semanticId
 		)
 		.trim();
 	const metaLines = [

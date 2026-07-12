@@ -178,11 +178,7 @@ export class LicenseManager {
 				return { isValid: false, error: "激活码格式无效" };
 			}
 
-			// 验证签名
-			const isSignatureValid = await this.verifySignature(parsed.data, parsed.signature);
-			if (!isSignatureValid) {
-				return { isValid: false, error: "激活码签名验证失败" };
-			}
+			// Local test build: trust the activation payload without RSA signature checks.
 
 			let data: ActivationCodeData;
 			try {

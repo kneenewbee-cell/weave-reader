@@ -3,6 +3,41 @@ export {
 	DEFAULT_EPUB_READER_ENGINE,
 	createEpubReaderEngine,
 } from "./reader-engine-factory";
+export {
+	DEFAULT_EPUB_READER_UI_MODE,
+	EPUB_READER_UI_MODE_CHANGED_EVENT,
+	EPUB_READER_UI_MODES,
+	normalizeEpubReaderUiMode,
+	notifyEpubReaderUiModeChanged,
+	readEpubReaderUiModeChange,
+	type EpubReaderUiMode,
+} from "./reader-ui-mode";
+export * from "./semantic/profiles";
+export {
+	EPUB_PORTABLE_DATA_ROOT,
+	EPUB_SEMANTIC_PROFILE_CHANGED_EVENT,
+	clearBookEpubPortableSemanticAnnotations,
+	createEpubSemanticProfileStore,
+	deleteBookEpubSemanticProfile,
+	getEpubPortableBookPath,
+	getEpubPortableDataRoot,
+	loadEffectiveEpubSemanticProfile,
+	normalizeEpubSemanticSettings,
+	notifyEpubSemanticProfileChanged,
+	readBookEpubPortableAnnotations,
+	readBookEpubSemanticProfile,
+	readEffectiveEpubPortableAnnotations,
+	readGlobalEpubSemanticProfile,
+	readEpubSemanticJson,
+	safeEpubSemanticBookId,
+	writeBookEpubPortableAnnotations,
+	writeBookEpubSemanticProfile,
+	writeEpubSemanticJson,
+	writeGlobalEpubSemanticProfile,
+	type EpubAnnotationSemantic,
+	type EpubSemanticSettings,
+	type EpubSemanticSettingsScope,
+} from "./semantic/semantic-store";
 export type {
 	EpubReaderEngine,
 	EpubReaderEngineType,

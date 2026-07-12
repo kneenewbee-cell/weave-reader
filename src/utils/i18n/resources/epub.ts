@@ -221,6 +221,7 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 				highlightRed: "红色高亮",
 				highlightPurple: "紫色高亮",
 				highlightGreen: "绿色高亮",
+				highlight: "高亮",
 				underline: "下划线",
 				strikethrough: "删除线",
 				wavy: "波浪线",
@@ -879,6 +880,7 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					bookNotesExportTemplateFolderUpdated: "导出模板目录已更新",
 					premiumPreviewEnabled: "已开启高级功能预览",
 					premiumPreviewDisabled: "已关闭高级功能预览",
+					readerUiModeUpdated: "阅读界面模式已切换为{mode}",
 					debugEnabled: "已开启调试模式",
 					debugDisabled: "已关闭调试模式",
 					bookshelfDisplayModeUpdated: "我的书架默认显示已切换为{mode}",
@@ -903,6 +905,12 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					showPremiumPreview: "显示高级功能预览",
 					showPremiumPreviewDesc:
 						"开启后，基础设置页与阅读器中会显示锁定状态的高级功能入口，点击后可查看功能分层说明。",
+					readerUiMode: "阅读界面模式",
+					readerUiModeDesc:
+						"选择阅读器工具密度：极简只读，普通保留默认高亮与常用动作，专家显示完整标注工具。",
+					minimalMode: "极简模式",
+					standardMode: "普通模式",
+					expertMode: "专家模式",
 					bookmarkFolder: "书签目录",
 					bookmarkFolderDesc: "书签文件会保存到所选文件夹，属于基础免费能力。",
 					bookmarkFolderPlaceholder: "选择文件夹路径",
@@ -1431,6 +1439,7 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 				highlightRed: "Red highlight",
 				highlightPurple: "Purple highlight",
 				highlightGreen: "Green highlight",
+				highlight: "Highlight",
 				underline: "Underline",
 				strikethrough: "Strikethrough",
 				wavy: "Wavy underline",
@@ -2111,6 +2120,7 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					bookNotesExportTemplateFolderUpdated: "Export template folder updated",
 					premiumPreviewEnabled: "Premium feature preview enabled",
 					premiumPreviewDisabled: "Premium feature preview disabled",
+					readerUiModeUpdated: "Reader interface mode switched to {mode}",
 					debugEnabled: "Debug mode enabled",
 					debugDisabled: "Debug mode disabled",
 					bookshelfDisplayModeUpdated: "Default bookshelf view switched to {mode}",
@@ -2135,6 +2145,12 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					showPremiumPreview: "Show premium feature preview",
 					showPremiumPreviewDesc:
 						"When enabled, locked premium entries remain visible in settings and the reader so users can inspect feature tiers.",
+					readerUiMode: "Reader interface mode",
+					readerUiModeDesc:
+						"Choose the reader tool density: Minimal is read-only, Standard keeps default highlight and common actions, and Expert shows the full annotation tool surface.",
+					minimalMode: "Minimal mode",
+					standardMode: "Standard mode",
+					expertMode: "Expert mode",
 					bookmarkFolder: "Bookmark folder",
 					bookmarkFolderDesc:
 						"Bookmark files are saved to the selected folder as a free basic capability.",

@@ -5,6 +5,7 @@ import type {
 } from "../../config/selection-translation-settings";
 import type { InterfaceLanguagePreference } from "../../utils/i18n";
 import type StandaloneEpubPlugin from "../../main";
+import type { EpubReaderUiMode } from "../../services/epub";
 
 export type EpubSettingsTabId = "basic" | "license" | "about";
 
@@ -25,6 +26,8 @@ export interface EpubBasicSettingsHosts {
 
 export interface EpubBasicSettingsSnapshot {
 	interfaceLanguageValue: InterfaceLanguagePreference;
+	readerUiMode: EpubReaderUiMode;
+	expertModeEnabled: boolean;
 	premiumPreviewEnabled: boolean;
 	bookmarkFolderValue: string;
 	bookmarkFolderInput: string;
@@ -48,6 +51,7 @@ export interface EpubBasicSettingsCallbacks {
 	setAutoSavePagesTextControl: (control: TextComponent | null) => void;
 	updateBookmarkFolder: (folderPath: string) => Promise<void>;
 	updateInterfaceLanguage: (value: InterfaceLanguagePreference) => Promise<void>;
+	updateReaderUiMode: (value: EpubReaderUiMode) => Promise<void>;
 	updatePremiumPreview: (enabled: boolean) => Promise<void>;
 	updateBookNotesExportTemplatePath: (templatePath: string) => Promise<void>;
 	updateBookNotesExportTemplateFolder: (folderPath: string) => Promise<void>;

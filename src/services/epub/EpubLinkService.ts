@@ -102,15 +102,17 @@ export class EpubLinkService {
 				.toLowerCase()
 		) {
 			case "blue":
+			case "cyan":
+			case "gray":
 			case "green":
+			case "orange":
+			case "pink":
 			case "purple":
 			case "red":
 			case "yellow":
 				return String(color || "")
 					.trim()
 					.toLowerCase();
-			case "pink":
-				return "red";
 			default:
 				return undefined;
 		}
@@ -127,14 +129,17 @@ export class EpubLinkService {
 	static parseHighlightCalloutMeta(meta?: string): {
 		color?: string;
 		style?: EpubHighlightStyle;
+		semanticId?: string;
 	} {
 		const tokens = String(meta || "")
 			.split(/[+\s]+/)
-			.map((token) => token.trim().toLowerCase())
+			.map((token) => token.trim())
 			.filter(Boolean);
 		let color: string | undefined;
 		let style: EpubHighlightStyle | undefined;
-		for (const token of tokens) {
+		let semanticId: string | undefined;
+		for (const rawToken of tokens) {
+			const token = rawToken.toLowerCase();
 			const normalizedColor = EpubLinkService.normalizeHighlightColorToken(token);
 			if (normalizedColor) {
 				color = normalizedColor;
@@ -142,14 +147,32 @@ export class EpubLinkService {
 			}
 			if (EpubLinkService.isHighlightStyleToken(token)) {
 				style = token;
+				continue;
+			}
+			if (token.startsWith("semantic:")) {
+				const rawSemanticId = rawToken.slice(rawToken.indexOf(":") + 1).trim();
+				try {
+					semanticId = decodeURIComponent(rawSemanticId);
+				} catch {
+					semanticId = rawSemanticId;
+				}
 			}
 		}
-		return { color, style };
+		return { color, style, semanticId: semanticId || undefined };
 	}
 
-	static buildHighlightCalloutMeta(color?: string, style?: EpubHighlightStyle): string {
+	static buildHighlightCalloutMeta(
+		color?: string,
+		style?: EpubHighlightStyle,
+		semanticId?: string
+	): string {
 		const normalizedColor = EpubLinkService.normalizeHighlightColorToken(color);
-		const tokens = [normalizedColor, style].filter((token): token is string => Boolean(token));
+		const normalizedStyle = EpubLinkService.isHighlightStyleToken(style) ? style : undefined;
+		const normalizedSemanticId = String(semanticId || "").trim();
+		const semanticToken = normalizedSemanticId
+			? `semantic:${encodeURIComponent(normalizedSemanticId)}`
+			: undefined;
+		const tokens = [normalizedColor, normalizedStyle, semanticToken].filter((token): token is string => Boolean(token));
 		return tokens.join("+");
 	}
 
@@ -1033,7 +1056,8 @@ export class EpubLinkService {
 		sourceId?: string,
 		excerptId?: string,
 		style?: EpubHighlightStyle,
-		chapterLabelMaxLength = EpubLinkService.MAX_CHAPTER_LABEL_LENGTH
+		chapterLabelMaxLength = EpubLinkService.MAX_CHAPTER_LABEL_LENGTH,
+		semanticId?: string
 	): string {
 		const resolvedExcerptId = EpubLinkService.resolveExcerptBlockId(excerptId);
 		const link = this.buildEpubLink(
@@ -1051,7 +1075,7 @@ export class EpubLinkService {
 				preferCompactLocator: true,
 			}
 		);
-		const calloutMetaValue = EpubLinkService.buildHighlightCalloutMeta(color, style);
+		const calloutMetaValue = EpubLinkService.buildHighlightCalloutMeta(color, style, semanticId);
 		const calloutMeta = calloutMetaValue ? `|${calloutMetaValue}` : "";
 		const titleSuffix = EpubLinkService.buildQuoteTitleSuffix(
 			chapterIndex,

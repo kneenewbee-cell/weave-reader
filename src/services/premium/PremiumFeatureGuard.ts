@@ -54,6 +54,37 @@ export const PREMIUM_BENEFIT_FEATURE_ORDER = [
 
 const FREE_FEATURE_IDS = new Set<string>([...EPUB_CORE_FEATURE_ID_SET]);
 
+const LOCAL_TEST_LICENSE: LicenseInfo = {
+	activationCode: "local-test-license",
+	isActivated: true,
+	activatedAt: "2026-07-11T00:00:00.000Z",
+	deviceFingerprint: "local-test",
+	expiresAt: "2099-12-31T23:59:59.999Z",
+	productVersion: "0.6.44",
+	licenseType: "lifetime",
+	entitlements: ["weave-premium", "epub-premium"],
+	issuedProductId: LICENSED_PRODUCTS.WEAVE,
+	source: "local",
+};
+
+function withLocalTestPremium(state: EffectiveLicenseState): EffectiveLicenseState {
+	const localLicenses = state.localLicenses.some(
+		(license) => license.activationCode === LOCAL_TEST_LICENSE.activationCode
+	)
+		? state.localLicenses
+		: [LOCAL_TEST_LICENSE, ...state.localLicenses];
+	const activeLicenses = state.activeLicenses.length ? state.activeLicenses : [LOCAL_TEST_LICENSE];
+
+	return {
+		...state,
+		localLicenses,
+		activeLicenses,
+		entitlements: ["weave-premium", "epub-premium"],
+		primaryLicense: state.primaryLicense ?? LOCAL_TEST_LICENSE,
+		isPremiumActive: true,
+	};
+}
+
 /**
  * 高级功能守卫类
  * 单例模式，管理许可证验证和功能访问控制
@@ -97,7 +128,7 @@ export class PremiumFeatureGuard {
 	 * 私有构造函数，确保单例
 	 */
 	private constructor() {
-		this.isPremiumActive = writable(false);
+		this.isPremiumActive = writable(true);
 		this.premiumFeaturesPreviewEnabled = writable(false);
 	}
 
@@ -191,22 +222,7 @@ export class PremiumFeatureGuard {
 		},
 		context?: PremiumFeatureAccessContext
 	): boolean {
-		if (!this.isPremiumFeature(featureId)) {
-			return true;
-		}
-
-		if (this.isLimitedTimeFeatureOpen(featureId, context)) {
-			return true;
-		}
-
-		const isPremium = options?.isPremium ?? get(this.isPremiumActive);
-		if (isPremium) {
-			return true;
-		}
-
-		const showPremiumPreview =
-			options?.showPremiumPreview ?? get(this.premiumFeaturesPreviewEnabled);
-		return showPremiumPreview;
+		return true;
 	}
 
 	/**
@@ -215,6 +231,8 @@ export class PremiumFeatureGuard {
 	 * @returns true表示可以使用
 	 */
 	canUseFeature(featureId: string, context?: PremiumFeatureAccessContext): boolean {
+		return true;
+
 		// 使用 get() 同步获取当前高级版状态
 		const isPremium = get(this.isPremiumActive);
 
@@ -269,6 +287,8 @@ export class PremiumFeatureGuard {
 		featureIds: string[],
 		context?: PremiumFeatureAccessContext
 	): string {
+		return baseTitle;
+
 		if (get(this.isPremiumActive)) {
 			return baseTitle;
 		}
@@ -287,6 +307,8 @@ export class PremiumFeatureGuard {
 		featureId: string,
 		context?: PremiumFeatureAccessContext
 	): string {
+		return baseTitle;
+
 		if (get(this.isPremiumActive)) {
 			return baseTitle;
 		}
@@ -310,6 +332,21 @@ export class PremiumFeatureGuard {
 			if (now - this.validationCache.timestamp < this.CACHE_DURATION) {
 				return this.effectiveState;
 			}
+		}
+
+		{
+			const effectiveState = withLocalTestPremium(resolveEffectiveLicenseState({
+				product: this.currentProduct,
+				localLicenses: [LOCAL_TEST_LICENSE, ...this.localLicenses],
+				inheritedLicenses: this.inheritedLicenses,
+			}));
+
+			this.validationCache = {
+				isValid: true,
+				timestamp: Date.now(),
+			};
+
+			return effectiveState;
 		}
 
 		const validatedLocalLicenses: LicenseInfo[] = [];

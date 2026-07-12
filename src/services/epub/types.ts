@@ -88,7 +88,16 @@ export interface Highlight {
 	linkedNotePath?: string;
 }
 
-export type HighlightColor = "yellow" | "green" | "blue" | "red" | "purple";
+export type HighlightColor =
+	| "yellow"
+	| "green"
+	| "blue"
+	| "red"
+	| "purple"
+	| "orange"
+	| "cyan"
+	| "pink"
+	| "gray";
 
 export type ConcealedTextMode = "mask";
 

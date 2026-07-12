@@ -5,6 +5,7 @@ import {
 	dedupeLicenses,
 	normalizeLicenseStore,
 } from "./license-state";
+import { CURRENT_PLUGIN_ID } from "../config/plugin-runtime";
 
 export type PluginLookupApp = {
 	vault?: unknown;
@@ -81,7 +82,7 @@ export type CompatibleAISelectedTextPanelHost = CompatiblePlugin & {
 	dataStorage: CompatibleAIDataStorage;
 };
 
-export const STANDALONE_PLUGIN_ID = "weave-epub-reader";
+export const STANDALONE_PLUGIN_ID = CURRENT_PLUGIN_ID;
 export const LEGACY_WEAVE_PLUGIN_ID = "weave";
 
 function normalizeOptionalString(value: unknown): string | undefined {

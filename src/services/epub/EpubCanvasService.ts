@@ -193,7 +193,8 @@ export class EpubCanvasService {
 		timestamp?: string,
 		sourceId?: string,
 		style?: EpubHighlightStyle,
-		chapterLabelMaxLength?: number
+		chapterLabelMaxLength?: number,
+		semanticId?: string
 	): Promise<CanvasNode | null> {
 		if (!this.canvasPath) return null;
 
@@ -209,7 +210,8 @@ export class EpubCanvasService {
 			sourceId,
 			undefined,
 			style,
-			chapterLabelMaxLength
+			chapterLabelMaxLength,
+			semanticId
 		);
 
 		return this.insertCanvasTextNode(noteContent, color, "add excerpt node");

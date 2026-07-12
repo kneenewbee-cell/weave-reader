@@ -13,7 +13,17 @@ import {
 } from "./reader-annotation-model";
 import { unknownPlainText } from "../../utils/unknown-plain-text";
 
-const HIGHLIGHT_COLORS = new Set(["yellow", "green", "blue", "red", "purple"]);
+const HIGHLIGHT_COLORS = new Set([
+	"yellow",
+	"green",
+	"blue",
+	"red",
+	"purple",
+	"orange",
+	"cyan",
+	"pink",
+	"gray",
+]);
 
 export type EpubBookmarkAnalyticsBuildOptions = Pick<
 	EpubExcerptSettings,

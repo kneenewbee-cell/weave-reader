@@ -6,12 +6,17 @@
     normalizeContinuousReadingPositionAutoSavePages,
   } from "../../config/reading-position-auto-save";
   import { normalizeSelectionTranslationSettings } from "../../config/selection-translation-settings";
-  import { EPUB_RUNTIME, normalizeEpubBookmarkFolderPath } from "../../services/epub";
+  import {
+    EPUB_RUNTIME,
+    normalizeEpubBookmarkFolderPath,
+    normalizeEpubReaderUiMode,
+  } from "../../services/epub";
   import type { CustomWebTranslationProvider } from "../../config/selection-translation-settings";
   import { normalizeInterfaceLanguagePreference, tr } from "../../utils/i18n";
   import type StandaloneEpubPlugin from "../../main";
   import { createEpubBasicSettingsActions } from "./epub-basic-settings-actions";
   import { mountEpubBasicSettings } from "./mount-epub-basic-settings";
+  import { mountEpubSemanticSettings } from "./mount-epub-semantic-settings";
 
   interface Props {
     plugin: StandaloneEpubPlugin;
@@ -25,6 +30,7 @@
   let interfaceSettingsHost = $state<HTMLDivElement | null>(null);
   let premiumPreviewSettingsHost = $state<HTMLDivElement | null>(null);
   let readingSettingsHost = $state<HTMLDivElement | null>(null);
+  let semanticSettingsHost = $state<HTMLDivElement | null>(null);
   let selectionTranslationSettingsHost = $state<HTMLDivElement | null>(null);
   let diagnosticsSettingsHost = $state<HTMLDivElement | null>(null);
 
@@ -81,6 +87,14 @@
     return normalizeInterfaceLanguagePreference(plugin.settings?.interfaceLanguage);
   });
 
+  let readerUiMode = $derived.by(() => {
+    stateVersion;
+    return normalizeEpubReaderUiMode(
+      plugin.settings?.readerUiMode,
+      plugin.settings?.expertModeEnabled
+    );
+  });
+
   let selectionTranslationSettings = $derived.by(() => {
     stateVersion;
     return normalizeSelectionTranslationSettings(plugin.settings?.selectionTranslation);
@@ -105,6 +119,7 @@
     getTranslate: () => t,
     getBookmarkFolderValue: () => bookmarkFolderValue,
     getInterfaceLanguageValue: () => interfaceLanguageValue,
+    getReaderUiMode: () => readerUiMode,
     getPremiumPreviewEnabled: () => premiumPreviewEnabled,
     getContinuousReadingPositionAutoSaveEnabled: () => continuousReadingPositionAutoSaveEnabled,
     getContinuousReadingPositionAutoSavePages: () => continuousReadingPositionAutoSavePages,
@@ -182,6 +197,7 @@
       || !interfaceSettingsHost
       || !premiumPreviewSettingsHost
       || !readingSettingsHost
+      || !semanticSettingsHost
       || !selectionTranslationSettingsHost
       || !diagnosticsSettingsHost
     ) {
@@ -193,6 +209,7 @@
     selectionTranslationCustomProviderCount;
 
     let dispose: (() => void) | undefined;
+    let disposeSemantic: (() => void) | undefined;
 
     untrack(() => {
       dispose = mountEpubBasicSettings({
@@ -207,6 +224,8 @@
         },
         snapshot: {
           interfaceLanguageValue,
+          readerUiMode,
+          expertModeEnabled: readerUiMode === "expert",
           premiumPreviewEnabled,
           bookmarkFolderValue,
           bookmarkFolderInput,
@@ -237,6 +256,7 @@
           },
           updateBookmarkFolder: actions.updateBookmarkFolder,
           updateInterfaceLanguage: actions.updateInterfaceLanguage,
+          updateReaderUiMode: actions.updateReaderUiMode,
           updatePremiumPreview: actions.updatePremiumPreview,
           updateBookNotesExportTemplatePath: actions.updateBookNotesExportTemplatePath,
           updateBookNotesExportTemplateFolder: actions.updateBookNotesExportTemplateFolder,
@@ -255,9 +275,19 @@
           updateDebugMode: actions.updateDebugMode,
         },
       });
+      disposeSemantic = mountEpubSemanticSettings({
+        plugin,
+        host: semanticSettingsHost,
+        onSaved: () => {
+          stateVersion += 1;
+        },
+      });
     });
 
-    return () => dispose?.();
+    return () => {
+      dispose?.();
+      disposeSemantic?.();
+    };
   });
 </script>
 
@@ -281,6 +311,13 @@
       <h3 class="epub-settings-group-title with-accent-bar accent-purple">{t("epub.settings.groups.reading")}</h3>
     </div>
     <div bind:this={readingSettingsHost} class="epub-native-settings-host"></div>
+  </div>
+
+  <div class="epub-settings-group epub-settings-group--panel">
+    <div class="epub-settings-group-header">
+      <h3 class="epub-settings-group-title with-accent-bar accent-cyan">语义标注</h3>
+    </div>
+    <div bind:this={semanticSettingsHost} class="epub-native-settings-host"></div>
   </div>
 
   <div class="epub-settings-group epub-settings-group--panel">

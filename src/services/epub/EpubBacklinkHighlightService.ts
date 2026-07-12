@@ -40,6 +40,11 @@ export interface BacklinkHighlight {
 	cfiRange: string;
 	color: string;
 	style?: EpubHighlightStyle;
+	semanticId?: string;
+	semanticLabel?: string;
+	semanticGroup?: string;
+	semanticDescription?: string;
+	semanticSource?: string;
 	text: string;
 	commentText?: string;
 	hasCommentDivider?: boolean;
@@ -77,6 +82,7 @@ export interface CardDataHighlightDeletionAnalysis {
 interface ParsedEpubCallout {
 	color: string;
 	style?: EpubHighlightStyle;
+	semanticId?: string;
 	linkMarkup: string;
 	quotedText: string;
 	commentText: string;
@@ -1367,6 +1373,7 @@ export class EpubBacklinkHighlightService {
 					cfiRange: resolvedLink.cfi,
 					color: callout.color,
 					style: callout.style,
+					semanticId: callout.semanticId,
 					text,
 					commentText: callout.commentText || undefined,
 					hasCommentDivider: callout.hasCommentDivider,
@@ -3880,7 +3887,8 @@ logger.debug("[EpubBacklinkHighlightService] deleteHighlightFromCardData failed:
 				const nextStyle = applyStyle ? newStyle : callout.style;
 				const metaValue = EpubLinkService.buildHighlightCalloutMeta(
 					newColor ?? callout.color,
-					nextStyle
+					nextStyle,
+					callout.semanticId
 				);
 				const newCalloutHeader = oldCalloutHeader.replace(
 					/> \[!EPUB(?:\|[^\]]+)?\]/,
@@ -4156,6 +4164,7 @@ logger.debug("[EpubBacklinkHighlightService] deleteHighlightFromCardData failed:
 				cfiRange: resolvedLink.cfi,
 				color: callout.color,
 				style: callout.style,
+				semanticId: callout.semanticId,
 				text: this.normalizeQuotedHighlightText(text, callout.style),
 				commentText: callout.commentText || undefined,
 				hasCommentDivider: callout.hasCommentDivider,
@@ -4221,6 +4230,7 @@ logger.debug("[EpubBacklinkHighlightService] deleteHighlightFromCardData failed:
 			results.push({
 				color: this.normalizeHighlightColor(appearance.color),
 				style: appearance.style,
+				semanticId: appearance.semanticId,
 				linkMarkup,
 				quotedText: quoteLines.join("\n"),
 				commentText: this.stripQuotedBlockLines(commentLines).join("\n").trim(),

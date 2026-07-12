@@ -204,6 +204,10 @@ body.styled-scrollbars
 	--epub-hl-blue: rgba(33, 150, 243, 0.3);
 	--epub-hl-red: rgba(239, 68, 68, 0.3);
 	--epub-hl-purple: rgba(171, 71, 188, 0.3);
+	--epub-hl-orange: rgba(255, 152, 0, 0.3);
+	--epub-hl-cyan: rgba(0, 188, 212, 0.3);
+	--epub-hl-pink: rgba(244, 114, 182, 0.3);
+	--epub-hl-gray: rgba(156, 163, 175, 0.3);
 
 	--epub-toc-mark-important: var(--color-red, #e93147);
 	--epub-toc-mark-question: var(--color-yellow, #e5a500);
