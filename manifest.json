@@ -3,6 +3,6 @@
   "name": "weave reader",
   "version": "0.6.44",
   "minAppVersion": "1.8.7",
-  "description": "Multi-format ebook reader for desktop and mobile: bookshelf, highlights, excerpts, and deep links (EPUB and TXT free; more formats with Premium).",
+  "description": "Obsidian 本地电子书阅读器自定义版：书架、阅读模式、语义标注、摘录、深链与后续导入导出支持。",
   "isDesktopOnly": false
 }
