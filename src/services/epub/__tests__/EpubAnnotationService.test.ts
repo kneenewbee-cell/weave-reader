@@ -54,6 +54,91 @@ function createPortableMockApp(files: Record<string, unknown>, folders: string[]
 }
 
 describe('EpubAnnotationService', () => {
+	it('removes one portable annotation by reader highlight identity', async () => {
+		const bookId = 'epub-book-undo';
+		const app = createPortableMockApp({
+			'weave/epub-data/semantic-profiles/default.json': {
+				format: PROFILE_FORMAT,
+				version: PROFILE_VERSION,
+				scope: 'global',
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: 'custom',
+				semantics: [
+					{
+						id: 'important',
+						label: '重点',
+						color: 'yellow',
+						style: 'highlight',
+						group: 'study',
+						source: 'custom',
+						active: true,
+					},
+					{
+						id: 'question',
+						label: '疑问',
+						color: 'purple',
+						style: 'wavy',
+						group: 'study',
+						source: 'custom',
+						active: true,
+					},
+				],
+			},
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2)',
+						semanticId: 'important',
+						text: 'Marked text',
+						chapterIndex: 1,
+						chapterTitle: 'Chapter one',
+						createdTime: 100,
+					},
+					{
+						cfiRange: 'epubcfi(/6/4!/4/2)',
+						semanticId: 'question',
+						text: 'Other text',
+						chapterIndex: 1,
+						chapterTitle: 'Chapter one',
+						createdTime: 101,
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const removed = await service.removePortableHighlight(bookId, {
+			cfiRange: 'epubcfi(/6/2!/4/2)',
+			color: 'yellow',
+			text: 'Marked text',
+			semanticId: 'important',
+			presentation: 'highlight',
+		});
+
+		expect(removed).toMatchObject({
+			cfiRange: 'epubcfi(/6/2!/4/2)',
+			semanticId: 'important',
+			text: 'Marked text',
+			chapterIndex: 1,
+			chapterTitle: 'Chapter one',
+		});
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			cfiRange: 'epubcfi(/6/4!/4/2)',
+			semanticId: 'question',
+			text: 'Other text',
+		});
+	});
+
 	it('clears legacy stored highlights at most once per book and keeps backlink highlights as the live source', async () => {
 		let concealedTexts: any[] = [];
 

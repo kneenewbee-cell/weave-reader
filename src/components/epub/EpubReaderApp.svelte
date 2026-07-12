@@ -56,6 +56,10 @@
 		resolveBookLoadRestoredPosition,
 	} from '../../services/epub/epub-reader-book-load-helpers';
 	import {
+		EpubAnnotationUndoStack,
+		type EpubAnnotationUndoPatch,
+	} from '../../services/epub/annotation-undo-stack';
+	import {
 		ensureDefaultBookNotesExportTemplates,
 		isMarkdownVaultFile,
 		buildBookNotesExportLabelsFromTranslator,
@@ -99,6 +103,7 @@
 	import { createEpubNavigationController } from './useEpubNavigation';
 	import { resolveReadingViewportLockTarget } from '../../utils/mobile-reading-viewport-lock';
 	import { domInstanceOf } from '../../utils/dom-instance-of';
+	import { shouldIgnoreEpubReaderShortcut } from '../../utils/epub-reader-keyboard-guards';
 	import { shouldDismissToolbarOnPointerDown } from './toolbar-positioning';
 	import { buildEpubMarkdownLocateCandidates } from '../../services/ui/source-locate-candidates';
 	import { attachExternalHighlightSyncReload } from './external-highlight-sync-reload';
@@ -324,6 +329,8 @@
 	let bookSession = untrack(() => getBookSessionManager(app).acquire(filePath));
 	let vaultEventRefs: EventRef[] = [];
 	let pendingLoadedHighlights: ReaderHighlight[] | null = null;
+	const annotationUndoStack = new EpubAnnotationUndoStack();
+	let annotationMutationQueue: Promise<void> = Promise.resolve();
 	let highlightReloadToken = 0;
 	let highlightReloading = $state(false);
 	let annotationRevision = $state(0);
@@ -1920,7 +1927,126 @@
 			sourceFile: info.sourceFile,
 			sourceRef: info.sourceRef,
 			createdTime: info.createdTime,
+			semanticId: info.semanticId,
 		};
+	}
+
+	function buildReaderHighlightFromInfo(info: HighlightClickInfo): ReaderHighlight {
+		return {
+			cfiRange: info.cfiRange,
+			color: info.color || 'yellow',
+			...(info.style ? { style: info.style } : {}),
+			...(info.semanticId ? { semanticId: info.semanticId } : {}),
+			...(info.semanticLabel ? { semanticLabel: info.semanticLabel } : {}),
+			...(info.semanticGroup ? { semanticGroup: info.semanticGroup } : {}),
+			...(info.semanticDescription ? { semanticDescription: info.semanticDescription } : {}),
+			...(info.semanticSource ? { semanticSource: info.semanticSource } : {}),
+			text: info.text,
+			...(info.commentText ? { commentText: info.commentText } : {}),
+			...(info.hasCommentDivider ? { hasCommentDivider: true } : {}),
+			...(info.sourceFile ? { sourceFile: info.sourceFile } : {}),
+			...(info.sourceRef ? { sourceRef: info.sourceRef } : {}),
+			...(info.excerptId ? { excerptId: info.excerptId } : {}),
+			...(info.sourceLocators ? { sourceLocators: info.sourceLocators } : {}),
+			...(typeof info.createdTime === 'number' ? { createdTime: info.createdTime } : {}),
+			presentation: info.presentation || 'highlight',
+		};
+	}
+
+	function enqueueAnnotationMutation(operation: () => Promise<void>): Promise<void> {
+		const run = annotationMutationQueue.then(operation, operation);
+		annotationMutationQueue = run.catch((error) => {
+			logger.warn('[EpubReaderApp] Annotation mutation failed:', error);
+		});
+		return run;
+	}
+
+	function removeHighlightFromCurrentView(highlight: ReaderHighlight): void {
+		const key = getReaderHighlightIdentityKey(highlight);
+		if (key) {
+			readerService.removeHighlightByIdentityKey(key);
+			pendingLoadedHighlights = (pendingLoadedHighlights || []).filter(
+				(item) => getReaderHighlightIdentityKey(item) !== key
+			);
+		} else {
+			readerService.removeHighlight(highlight.cfiRange);
+			const normalizedCfi = EpubLinkService.normalizeCfi(highlight.cfiRange);
+			pendingLoadedHighlights = (pendingLoadedHighlights || []).filter(
+				(item) => EpubLinkService.normalizeCfi(item.cfiRange) !== normalizedCfi
+			);
+		}
+		publishSidebarHighlights(pendingLoadedHighlights || []);
+		highlightToolbarInfo = null;
+	}
+
+	function addHighlightToCurrentView(highlight: ReaderHighlight): void {
+		const presentedHighlight = applySemanticPresentation({
+			...highlight,
+			presentation: highlight.presentation || 'highlight',
+		});
+		readerService.addHighlight(presentedHighlight);
+		pendingLoadedHighlights = mergeReaderHighlightsByIdentity(
+			pendingLoadedHighlights || [],
+			[presentedHighlight]
+		);
+		publishSidebarHighlights(pendingLoadedHighlights);
+	}
+
+	async function applyAnnotationUndoPatch(patch: EpubAnnotationUndoPatch): Promise<boolean> {
+		if (!book || patch.bookId !== book.id) {
+			return false;
+		}
+		if (patch.kind === 'delete') {
+			await annotationService.removePortableHighlight(patch.bookId, patch.highlight);
+			removeHighlightFromCurrentView(patch.highlight);
+			return true;
+		}
+		if (patch.kind === 'restore') {
+			await annotationService.savePortableHighlight(patch.bookId, patch.highlight);
+			addHighlightToCurrentView(patch.highlight);
+			return true;
+		}
+		await annotationService.removePortableHighlight(patch.bookId, patch.before);
+		await annotationService.savePortableHighlight(patch.bookId, patch.after);
+		removeHighlightFromCurrentView(patch.before);
+		addHighlightToCurrentView(patch.after);
+		return true;
+	}
+
+	function shouldHandleAnnotationUndoShortcut(event: KeyboardEvent): boolean {
+		if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) {
+			return false;
+		}
+		if (String(event.key || '').toLowerCase() !== 'z') {
+			return false;
+		}
+		if (readerUiMode === 'minimal' || commentEditorInfo || exportNotesPopoverOpen || typographyPopoverOpen) {
+			return false;
+		}
+		if (!isActiveEpubReaderInstance()) {
+			return false;
+		}
+		return !shouldIgnoreEpubReaderShortcut(event);
+	}
+
+	function handleAnnotationUndoKeydown(event: KeyboardEvent): void {
+		if (!shouldHandleAnnotationUndoShortcut(event)) {
+			return;
+		}
+		event.preventDefault();
+		void enqueueAnnotationMutation(async () => {
+			const patch = annotationUndoStack.undo();
+			if (!patch) {
+				new Notice('没有可撤销的标注操作');
+				return;
+			}
+			const applied = await applyAnnotationUndoPatch(patch);
+			if (applied) {
+				new Notice(patch.kind === 'restore' ? '已恢复上一条标注' : '已撤销上一条标注');
+				return;
+			}
+			new Notice('当前书籍没有可撤销的标注操作');
+		});
 	}
 
 	function purgeOrphanHighlightFromReader(info: HighlightClickInfo): void {
@@ -2294,6 +2420,7 @@
 		readerReady = false;
 		highlightReloading = false;
 		pendingLoadedHighlights = null;
+		annotationUndoStack.clear();
 		highlightToolbarInfo = null;
 		commentEditorInfo = null;
 		footnotePreviewInfo = null;
@@ -4132,7 +4259,8 @@
 			return;
 		}
 		if (book) {
-			void annotationService.savePortableHighlight(book.id, {
+			const bookId = book.id;
+			const highlight: ReaderHighlight = {
 				cfiRange,
 				color: color || semantic?.color || 'yellow',
 				...(style ? { style } : {}),
@@ -4148,6 +4276,10 @@
 				chapterTitle: resolveExcerptChapterTitle(),
 				createdTime: Date.now(),
 				presentation: 'highlight',
+			};
+			void enqueueAnnotationMutation(async () => {
+				await annotationService.savePortableHighlight(bookId, highlight);
+				annotationUndoStack.pushCreate(bookId, highlight);
 			});
 		}
 		outputNote(text, cfiRange, color, style, semantic);
@@ -4610,6 +4742,25 @@
 		}
 		const source = await resolveHighlightSource(info);
 		if (!source?.sourceFile) {
+			if (book) {
+				let removedPortableHighlight: ReaderHighlight | null = null;
+				await enqueueAnnotationMutation(async () => {
+					removedPortableHighlight = await annotationService.removePortableHighlight(
+						book.id,
+						buildReaderHighlightFromInfo(info)
+					);
+					if (removedPortableHighlight) {
+						annotationUndoStack.pushDelete(book.id, removedPortableHighlight);
+					}
+				});
+				if (removedPortableHighlight) {
+					removeHighlightFromCurrentView(removedPortableHighlight);
+					if (!quiet) {
+						new Notice(t('epub.reader.highlightDeleted'));
+					}
+					return true;
+				}
+			}
 			if (!quiet) {
 				new Notice(t('epub.reader.highlightSourcePending'));
 			}
@@ -5475,6 +5626,7 @@
 			if (readerReady) {
 				pendingLoadedHighlights = [];
 				trackedHighlightSourceFiles = new Set<string>();
+				annotationUndoStack.clear();
 				highlightToolbarInfo = null;
 				commentEditorInfo = null;
 				getExcerptPipeline().syncCollectedHighlights([]);
@@ -5499,6 +5651,7 @@
 		componentDisposed = false;
 		setupScrolledNavMetricsObserver();
 		window.addEventListener('resize', scheduleScrolledNavLayoutSync);
+		window.addEventListener('keydown', handleAnnotationUndoKeydown, true);
 		const loadReaderPreferences = async (): Promise<void> => {
 			try {
 				const [savedExcerptSettings, savedReaderSettings, savedTocChapterMarkSettings] = await Promise.all([
@@ -5659,6 +5812,8 @@
 			getBookSessionManager(app).releaseIfNoOpenLeaves(app, filePath);
 			clearParagraphModeSelection();
 			window.removeEventListener('resize', scheduleScrolledNavLayoutSync);
+			window.removeEventListener('keydown', handleAnnotationUndoKeydown, true);
+			annotationUndoStack.clear();
 			if (scrolledNavSyncFrame) {
 				cancelAnimationFrame(scrolledNavSyncFrame);
 				scrolledNavSyncFrame = 0;

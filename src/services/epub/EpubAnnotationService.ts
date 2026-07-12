@@ -352,8 +352,50 @@ export class EpubAnnotationService {
 				.filter((item): item is ReaderHighlight => Boolean(item));
 			const merged = mergeReaderHighlightsByIdentity(existing, [normalizedIncoming]);
 			await writeBookEpubPortableAnnotations(app, bookId, merged);
+			this.invalidateCollectedHighlightsCache(bookId);
 		} catch (error) {
 			console.warn("[EpubAnnotationService] Failed to save portable annotation:", error);
+		}
+	}
+
+	async removePortableHighlight(bookId: string, highlight: ReaderHighlight): Promise<ReaderHighlight | null> {
+		const app = this.getApp();
+		if (!app || !String(bookId || "").trim()) {
+			return null;
+		}
+		try {
+			const [profileResult, payload] = await Promise.all([
+				loadEffectiveEpubSemanticProfile(app, bookId, {}),
+				readEffectiveEpubPortableAnnotations(app, bookId),
+			]);
+			const normalizedTarget = this.normalizePortableAnnotation(highlight, profileResult.effectiveProfile);
+			if (!normalizedTarget) {
+				return null;
+			}
+			const targetKey = getReaderHighlightIdentityKey(normalizedTarget);
+			if (!targetKey) {
+				return null;
+			}
+			let removed: ReaderHighlight | null = null;
+			const remaining = payload.annotations
+				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
+				.filter((item): item is ReaderHighlight => Boolean(item))
+				.filter((item) => {
+					if (getReaderHighlightIdentityKey(item) !== targetKey) {
+						return true;
+					}
+					removed = removed || item;
+					return false;
+				});
+			if (!removed) {
+				return null;
+			}
+			await writeBookEpubPortableAnnotations(app, bookId, remaining);
+			this.invalidateCollectedHighlightsCache(bookId);
+			return removed;
+		} catch (error) {
+			console.warn("[EpubAnnotationService] Failed to remove portable annotation:", error);
+			return null;
 		}
 	}
 
