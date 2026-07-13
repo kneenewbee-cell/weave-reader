@@ -8,9 +8,12 @@
                 getEpubBacklinkHighlightService,
                 EPUB_RUNTIME,
                 canUseEpubReadingProgress,
+                findEpubPortableBookIdByPath,
                 getEpubStorageService,
+                resolveEpubPortableBookDataLocation,
                 resolveEpubHost,
                 warmEpubAnnotationIndexForPaths,
+                type EpubPortableBookDataLocation,
         } from '../../services/epub';
         import { PremiumFeatureGuard } from '../../services/premium/PremiumFeatureGuard';
         import { getBookFormatDisplayLabel, isSupportedBookFile, stripSupportedBookExtension } from '../../services/epub/book-format';
@@ -70,6 +73,8 @@
         } from '../../services/epub/bookshelf-data-events';
         import VirtualScroll from '../ui/VirtualScroll.svelte';
         import { isVaultImageFile, resolveVaultImageResourceUrl } from '../../utils/vault-image-cover';
+        import { copyTextToClipboard } from '../../utils/clipboard-copy';
+        import { DirectoryUtils } from '../../utils/directory-utils';
 
         interface EpubFileInfo {
                 path: string;
@@ -116,6 +121,11 @@
                 file: TFile;
                 storedBook: EpubBook | null;
                 metadata: BookMetadata;
+        }
+
+        interface ResolvedPortableBookDataContext {
+                targetPath: string;
+                location: EpubPortableBookDataLocation;
         }
 
         interface BookNoteStats {
@@ -1331,6 +1341,154 @@
                 }
         }
 
+        async function resolvePortableBookDataLocationForBook(
+                storedBook: EpubBook | null | undefined,
+                targetPath: string,
+                requestedPath?: string
+        ): Promise<EpubPortableBookDataLocation | null> {
+                const bookId =
+                        String(storedBook?.id || '').trim()
+                        || await findEpubPortableBookIdByPath(app, targetPath)
+                        || (requestedPath ? await findEpubPortableBookIdByPath(app, requestedPath) : '');
+
+                return bookId ? resolveEpubPortableBookDataLocation(bookId) : null;
+        }
+
+        async function resolvePortableBookDataContext(
+                filePath: string
+        ): Promise<ResolvedPortableBookDataContext | null> {
+                const normalizedOriginalPath = normalizePath(filePath || '');
+                if (!normalizedOriginalPath) {
+                        return null;
+                }
+
+                const resolvedPath = await resolveActiveBookPath(filePath);
+                const targetPath = normalizePath(resolvedPath || normalizedOriginalPath);
+                const storedBook = await storageService.findBookByFilePath(targetPath)
+                        || (targetPath !== normalizedOriginalPath
+                                ? await storageService.findBookByFilePath(normalizedOriginalPath)
+                                : null);
+                const location = await resolvePortableBookDataLocationForBook(
+                        storedBook,
+                        targetPath,
+                        normalizedOriginalPath
+                );
+                if (!location) {
+                        new Notice(t('epub.bookshelf.dataLocationUnavailable'));
+                        return null;
+                }
+
+                return {
+                        targetPath,
+                        location,
+                };
+        }
+
+        function getElectronShell(): {
+                openPath?: (path: string) => Promise<string>;
+                showItemInFolder?: (path: string) => void;
+        } | null {
+                try {
+                        const requireFn = (window as unknown as { require?: (id: string) => unknown }).require;
+                        const electron = typeof requireFn === 'function'
+                                ? requireFn('electron') as {
+                                        shell?: {
+                                                openPath?: (path: string) => Promise<string>;
+                                                showItemInFolder?: (path: string) => void;
+                                        };
+                                }
+                                : null;
+                        return electron?.shell || null;
+                } catch {
+                        return null;
+                }
+        }
+
+        function resolveVaultSystemPath(vaultPath: string): string {
+                const normalizedPath = normalizePath(vaultPath || '');
+                const adapter = app.vault.adapter as typeof app.vault.adapter & {
+                        getFullPath?: (path: string) => string;
+                };
+                if (typeof adapter.getFullPath === 'function') {
+                        try {
+                                return adapter.getFullPath(normalizedPath);
+                        } catch {
+                                return normalizedPath;
+                        }
+                }
+                return normalizedPath;
+        }
+
+        async function openSystemFolderForVaultPath(vaultPath: string): Promise<boolean> {
+                const shell = getElectronShell();
+                if (!shell) {
+                        return false;
+                }
+
+                const systemPath = resolveVaultSystemPath(vaultPath);
+                if (typeof shell.openPath === 'function') {
+                        try {
+                                const errorMessage = await shell.openPath(systemPath);
+                                if (!errorMessage) {
+                                        return true;
+                                }
+                        } catch {
+                                // Fall through to showItemInFolder when available.
+                        }
+                }
+                if (typeof shell.showItemInFolder === 'function') {
+                        try {
+                                shell.showItemInFolder(systemPath);
+                                return true;
+                        } catch {
+                                return false;
+                        }
+                }
+                return false;
+        }
+
+        async function copyPortableBookAnnotationPath(filePath: string): Promise<void> {
+                try {
+                        const resolved = await resolvePortableBookDataContext(filePath);
+                        if (!resolved) {
+                                return;
+                        }
+                        const copied = await copyTextToClipboard(resolved.location.annotationsPath);
+                        new Notice(
+                                copied
+                                        ? t('epub.bookshelf.copyAnnotationPathSuccess')
+                                        : t('epub.bookshelf.copyDataPathFailed')
+                        );
+                } catch (error) {
+                        logger.error('Failed to copy portable EPUB annotation path:', error);
+                        new Notice(t('epub.bookshelf.copyDataPathFailed'));
+                }
+        }
+
+        async function openPortableBookDataFolder(filePath: string): Promise<void> {
+                try {
+                        const resolved = await resolvePortableBookDataContext(filePath);
+                        if (!resolved) {
+                                return;
+                        }
+                        await DirectoryUtils.ensureDirRecursive(app.vault.adapter, resolved.location.bookDir);
+                        if (await openSystemFolderForVaultPath(resolved.location.bookDir)) {
+                                new Notice(t('epub.bookshelf.openDataFolderSuccess'));
+                                return;
+                        }
+
+                        const copied = await copyTextToClipboard(resolved.location.bookDir);
+                        new Notice(
+                                copied
+                                        ? t('epub.bookshelf.openDataFolderFallbackCopied')
+                                        : t('epub.bookshelf.openDataFolderFailed')
+                        );
+                } catch (error) {
+                        logger.error('Failed to open portable EPUB data folder:', error);
+                        new Notice(t('epub.bookshelf.openDataFolderFailed'));
+                }
+        }
+
         async function collectBookNoteStats(filePath: string): Promise<BookNoteStats> {
                         const backlinkService = getEpubBacklinkHighlightService(app);
                 try {
@@ -1433,6 +1591,11 @@
                         }
 
                         const noteStats = await collectBookNoteStats(context.targetPath);
+                        const portableDataLocation = await resolvePortableBookDataLocationForBook(
+                                context.storedBook,
+                                context.targetPath,
+                                context.requestedPath
+                        );
                         const { EpubBookInfoModal } = await import('../modals/EpubBookInfoModal');
                         const modal = new EpubBookInfoModal(app, {
                                 filePath: context.targetPath,
@@ -1444,6 +1607,7 @@
                                         : 0,
                                 readingStats: context.storedBook?.readingStats ?? null,
                                 noteStats,
+                                portableDataLocation,
                         });
                         modal.open();
                 } catch (error) {
@@ -1730,6 +1894,21 @@
                                 .setIcon('library')
                                 .onClick(() => {
                                         openAddToPlaylistMenu(e, filePath);
+                                });
+                });
+                menu.addSeparator();
+                menu.addItem((item) => {
+                        item.setTitle(t('epub.bookshelf.menu.openBookDataFolder'))
+                                .setIcon('folder-open')
+                                .onClick(() => {
+                                        void openPortableBookDataFolder(filePath);
+                                });
+                });
+                menu.addItem((item) => {
+                        item.setTitle(t('epub.bookshelf.menu.copyAnnotationDataPath'))
+                                .setIcon('clipboard-copy')
+                                .onClick(() => {
+                                        void copyPortableBookAnnotationPath(filePath);
                                 });
                 });
                 menu.addSeparator();

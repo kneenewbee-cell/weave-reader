@@ -1617,6 +1617,53 @@ export class FoliateReaderService implements EpubReaderEngine {
 		};
 	}
 
+	getHighlightClickCandidates(anchor: HighlightClickInfo): HighlightClickInfo[] {
+		const anchorRects = anchor.rects?.length ? anchor.rects : [anchor.rect];
+		const candidates: HighlightClickInfo[] = [];
+		const seen = new Set<string>();
+
+		for (const highlight of this.collectCurrentHighlights()) {
+			if (highlight.presentation === "conceal") {
+				continue;
+			}
+			const geometry = this.getCurrentHighlightViewportGeometry(
+				highlight.cfiRange,
+				highlight.text
+			);
+			if (!geometry?.rect) {
+				continue;
+			}
+			let hit = anchor.anchorPoint
+				? (
+					this.isClientPointInHighlightGeometry(anchor.anchorPoint.x, anchor.anchorPoint.y, geometry) ||
+					this.isAnchorPointInsideHighlightRange(anchor.anchorPoint, highlight)
+				)
+				: this.doViewportGeometriesOverlap(anchorRects, geometry.rects?.length ? geometry.rects : [geometry.rect]);
+			if (!hit) {
+				hit = !anchor.anchorPoint && this.doesHighlightRangeOverlapAnchor(anchor, highlight);
+			}
+			if (!hit) {
+				continue;
+			}
+			const info = buildHighlightClickInfo(
+				highlight,
+				{
+					...geometry,
+					anchorPoint: anchor.anchorPoint || createAnchorPointFromRect(geometry.rect),
+				},
+				anchor.interactionTarget || "highlight"
+			);
+			const key = getReaderHighlightIdentityKey(info);
+			if (!key || seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			candidates.push(info);
+		}
+
+		return this.sortHighlightClickCandidates(candidates);
+	}
+
 	async refreshHighlights(): Promise<void> {
 		this.invalidateParagraphPresentation();
 		await this.queueAnnotationSync(true);
@@ -1648,6 +1695,20 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 	addTemporaryHighlight(highlight: ReaderHighlightInput, durationMs = 2000): void {
 		void this.addResolvedHighlight({ ...highlight, temporary: true }, durationMs);
+	}
+
+	previewHighlightFocus(cfiRange: string, color = "cyan", durationMs = 1200): void {
+		this.setSourceLocateFocus(cfiRange, color, durationMs);
+		void this.refreshHighlights();
+	}
+
+	clearHighlightFocus(cfiRange?: string): void {
+		const changed = cfiRange
+			? this.clearSourceLocateFocusForCfi(cfiRange)
+			: this.clearSourceLocateFocus();
+		if (changed) {
+			void this.refreshHighlights();
+		}
 	}
 
 	temporarilyRevealConcealedText(cfiRange: string, durationMs = 3000): void {
@@ -5016,7 +5077,14 @@ export class FoliateReaderService implements EpubReaderEngine {
 		event.stopPropagation();
 		this.clearSelections();
 		this.notifyHighlightClick(
-			buildHighlightClickInfo(highlight, geometry, "highlight")
+			buildHighlightClickInfo(
+				highlight,
+				{
+					...geometry,
+					anchorPoint: { x: event.clientX, y: event.clientY },
+				},
+				"highlight"
+			)
 		);
 	}
 
@@ -5049,12 +5117,132 @@ export class FoliateReaderService implements EpubReaderEngine {
 		return false;
 	}
 
+	private doViewportRectsOverlap(
+		a: HighlightClickInfo["rect"],
+		b: HighlightClickInfo["rect"]
+	): boolean {
+		return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+	}
+
+	private doViewportGeometriesOverlap(
+		leftRects: HighlightClickInfo["rect"][],
+		rightRects: HighlightClickInfo["rect"][]
+	): boolean {
+		return leftRects.some((left) =>
+			rightRects.some((right) => this.doViewportRectsOverlap(left, right))
+		);
+	}
+
+	private getViewportGeometryArea(
+		geometry: Pick<HighlightClickInfo, "rect" | "rects">
+	): number {
+		const rects = geometry.rects?.length ? geometry.rects : [geometry.rect];
+		return rects.reduce(
+			(total, rect) => total + Math.max(0, rect.width) * Math.max(0, rect.height),
+			0
+		);
+	}
+
+	private sortHighlightClickCandidates(candidates: HighlightClickInfo[]): HighlightClickInfo[] {
+		return [...candidates].sort((a, b) => {
+			const areaDiff = this.getViewportGeometryArea(a) - this.getViewportGeometryArea(b);
+			if (Math.abs(areaDiff) > 1) {
+				return areaDiff;
+			}
+			const commentDiff = Number(Boolean(b.hasCommentDivider)) - Number(Boolean(a.hasCommentDivider));
+			if (commentDiff !== 0) {
+				return commentDiff;
+			}
+			return (b.createdTime || 0) - (a.createdTime || 0);
+		});
+	}
+
+	private resolveVisibleHighlightRange(highlight: {
+		cfiRange: string;
+		text?: string;
+		chapterIndex?: number;
+	}): Range | null {
+		const preferredChapter =
+			typeof highlight.chapterIndex === "number" && Number.isFinite(highlight.chapterIndex)
+				? highlight.chapterIndex
+				: this.parser.getSectionIndexForCfi(highlight.cfiRange);
+		for (const frame of orderVisibleHighlightFrames(
+			this.getVisibleFramesWithIndex(),
+			preferredChapter
+		)) {
+			const range = this.parser.resolveRangeInLoadedSection(
+				highlight.cfiRange,
+				frame.frameDocument,
+				frame.index,
+				highlight.text
+			);
+			if (range) {
+				return range;
+			}
+		}
+		return null;
+	}
+
+	private doesHighlightRangeOverlapAnchor(
+		anchor: HighlightClickInfo,
+		highlight: Pick<ReaderHighlight, "cfiRange" | "text" | "chapterIndex">
+	): boolean {
+		const anchorRange = this.resolveVisibleHighlightRange(anchor);
+		const highlightRange = this.resolveVisibleHighlightRange(highlight);
+		if (!anchorRange || !highlightRange) {
+			return false;
+		}
+		if (this.getRangeDocument(anchorRange) !== this.getRangeDocument(highlightRange)) {
+			return false;
+		}
+		return this.rangeContainsBoundary(anchorRange, highlightRange.startContainer, highlightRange.startOffset) ||
+			this.rangeContainsBoundary(anchorRange, highlightRange.endContainer, highlightRange.endOffset) ||
+			this.rangeContainsBoundary(highlightRange, anchorRange.startContainer, anchorRange.startOffset) ||
+			this.rangeContainsBoundary(highlightRange, anchorRange.endContainer, anchorRange.endOffset);
+	}
+
+	private isAnchorPointInsideHighlightRange(
+		anchorPoint: NonNullable<HighlightClickInfo["anchorPoint"]>,
+		highlight: Pick<ReaderHighlight, "cfiRange" | "text" | "chapterIndex">
+	): boolean {
+		for (const frame of this.getVisibleFramesWithIndex()) {
+			const caretRange = this.createCaretRangeFromClientPoint(
+				frame.frameDocument,
+				anchorPoint.x,
+				anchorPoint.y
+			);
+			if (!caretRange) {
+				continue;
+			}
+			const highlightRange = this.parser.resolveRangeInLoadedSection(
+				highlight.cfiRange,
+				frame.frameDocument,
+				frame.index,
+				highlight.text
+			);
+			if (highlightRange && this.pointerIsInsideHighlightRange(caretRange, highlightRange)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private getRangeDocument(range: Range): Document | null {
+		const node = range.startContainer;
+		return node.nodeType === Node.DOCUMENT_NODE ? node as Document : node.ownerDocument;
+	}
+
+	private rangeContainsBoundary(range: Range, container: Node, offset: number): boolean {
+		try {
+			return range.comparePoint(container, offset) === 0;
+		} catch {
+			return false;
+		}
+	}
+
 	private collectHighlightsForSection(sectionIndex: number): ReaderHighlight[] {
 		const results: ReaderHighlight[] = [];
-		for (const highlight of [
-			...this.highlightDataMap.values(),
-			...this.temporaryHighlightDataMap.values(),
-		]) {
+		for (const highlight of this.collectCurrentHighlights()) {
 			const highlightSection =
 				typeof highlight.chapterIndex === "number"
 					? highlight.chapterIndex
@@ -5066,12 +5254,26 @@ export class FoliateReaderService implements EpubReaderEngine {
 		return results;
 	}
 
+	private collectCurrentHighlights(): ReaderHighlight[] {
+		const deduped = new Map<string, ReaderHighlight>();
+		for (const highlight of [
+			...this.highlightDataMap.values(),
+			...this.temporaryHighlightDataMap.values(),
+		]) {
+			const key = getReaderHighlightIdentityKey(highlight);
+			if (key) {
+				deduped.set(key, highlight);
+			}
+		}
+		return Array.from(deduped.values());
+	}
+
 	private findHighlightAtPointer(
 		clientX: number,
 		clientY: number,
 		frame: VisibleFrameWithIndex
 	): ReaderHighlight | null {
-		const sectionHighlights = this.collectHighlightsForSection(frame.index);
+		const sectionHighlights = this.collectCurrentHighlights();
 		for (let index = sectionHighlights.length - 1; index >= 0; index -= 1) {
 			const highlight = sectionHighlights[index];
 			const geometry = this.getCurrentHighlightViewportGeometry(
@@ -5115,6 +5317,11 @@ export class FoliateReaderService implements EpubReaderEngine {
 	}
 
 	private pointerIsInsideHighlightRange(caretRange: Range, highlightRange: Range): boolean {
+		try {
+			return highlightRange.comparePoint(caretRange.startContainer, caretRange.startOffset) === 0;
+		} catch {
+			// Fall through to older range APIs below.
+		}
 		try {
 			return highlightRange.isPointInRange(
 				caretRange.startContainer,
@@ -6742,15 +6949,33 @@ export class FoliateReaderService implements EpubReaderEngine {
 		return this.normalizeLocationKey(cfiRange);
 	}
 
-	private clearSourceLocateFocus(): void {
+	private clearSourceLocateFocus(): boolean {
 		if (this.sourceLocateFocusByCfiKey.size === 0) {
-			return;
+			return false;
 		}
 		this.resetSourceLocateFocusTimers();
 		this.sourceLocateFocusByCfiKey.clear();
+		return true;
 	}
 
-	private setSourceLocateFocus(cfiRange: string, color: string): void {
+	private clearSourceLocateFocusForCfi(cfiRange: string): boolean {
+		const cfiKey = this.normalizeSourceLocateFocusCfiKey(cfiRange);
+		if (!cfiKey) {
+			return false;
+		}
+		const existingTimer = this.sourceLocateFocusTimers.get(cfiKey);
+		if (existingTimer) {
+			window.clearTimeout(existingTimer);
+			this.sourceLocateFocusTimers.delete(cfiKey);
+		}
+		return this.sourceLocateFocusByCfiKey.delete(cfiKey);
+	}
+
+	private setSourceLocateFocus(
+		cfiRange: string,
+		color: string,
+		durationMs = READER_SOURCE_LOCATE_FOCUS_DURATION_MS
+	): void {
 		const cfiKey = this.normalizeSourceLocateFocusCfiKey(cfiRange);
 		if (!cfiKey) {
 			return;
@@ -6767,7 +6992,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			this.sourceLocateFocusTimers.delete(cfiKey);
 			this.sourceLocateFocusByCfiKey.delete(cfiKey);
 			void this.refreshHighlights();
-		}, READER_SOURCE_LOCATE_FOCUS_DURATION_MS);
+		}, Math.max(100, durationMs));
 		this.sourceLocateFocusTimers.set(cfiKey, timer);
 	}
 

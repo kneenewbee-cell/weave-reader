@@ -1,11 +1,11 @@
-import { render, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 
 vi.mock('obsidian', async () => {
   return await vi.importActual<typeof import('../../tests/mocks/obsidian')>('../../tests/mocks/obsidian');
 });
 
 import EpubHighlightToolbar from './EpubHighlightToolbar.svelte';
-import type { EpubReaderEngine, HighlightClickInfo } from '../../services/epub';
+import type { EpubReaderEngine, EpubSemanticSettings, HighlightClickInfo } from '../../services/epub';
 
 function createInfo(): HighlightClickInfo {
   return {
@@ -34,6 +34,34 @@ function createReaderService(frameDocuments: Document[] = []): EpubReaderEngine 
   } as unknown as EpubReaderEngine;
 }
 
+function createSemanticSettings(): EpubSemanticSettings {
+  return {
+    annotationSemanticsEnabled: true,
+    semanticSchemeId: 'test',
+    standardSemanticIds: ['definition'],
+    annotationSemantics: [
+      {
+        id: 'theorem',
+        label: '定理/结论',
+        color: 'yellow',
+        style: 'highlight',
+        group: 'study',
+        description: '定理',
+        active: true,
+      },
+      {
+        id: 'definition',
+        label: '定义',
+        color: 'blue',
+        style: 'highlight',
+        group: 'study',
+        description: '定义',
+        active: true,
+      },
+    ],
+  };
+}
+
 describe('EpubHighlightToolbar', () => {
   afterEach(() => {
     document.body.innerHTML = '';
@@ -48,11 +76,8 @@ describe('EpubHighlightToolbar', () => {
         readerService: createReaderService(),
         onDelete: vi.fn(),
         onTemporarilyReveal: vi.fn(),
-        onChangeColor: vi.fn(),
-        onChangeStyle: vi.fn(),
+        onChangeSemantic: vi.fn(),
         onEditComment: vi.fn(),
-        onBacklink: vi.fn(),
-        onExtractToCard: vi.fn(),
         onCopyText: vi.fn(),
         onDismiss,
       },
@@ -79,11 +104,8 @@ describe('EpubHighlightToolbar', () => {
         readerService: createReaderService([frameDocument]),
         onDelete: vi.fn(),
         onTemporarilyReveal: vi.fn(),
-        onChangeColor: vi.fn(),
-        onChangeStyle: vi.fn(),
+        onChangeSemantic: vi.fn(),
         onEditComment: vi.fn(),
-        onBacklink: vi.fn(),
-        onExtractToCard: vi.fn(),
         onCopyText: vi.fn(),
         onDismiss,
       },
@@ -98,5 +120,43 @@ describe('EpubHighlightToolbar', () => {
     outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the selection semantic row structure when changing an existing annotation semantic', async () => {
+    const onChangeSemantic = vi.fn();
+    const { container } = render(EpubHighlightToolbar, {
+      props: {
+        info: { ...createInfo(), semanticId: 'theorem' },
+        readerService: createReaderService(),
+        readerUiMode: 'expert',
+        semanticSettings: createSemanticSettings(),
+        onDelete: vi.fn(),
+        onTemporarilyReveal: vi.fn(),
+        onChangeSemantic,
+        onEditComment: vi.fn(),
+        onCopyText: vi.fn(),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    await fireEvent.click(container.querySelector('.semantic-action') as HTMLElement);
+
+    const semanticRow = container.querySelector('.highlight-semantic-picker-row');
+    expect(semanticRow).toHaveClass('weave-epub-expert-semantic-row');
+    expect(semanticRow).not.toHaveClass('actions-row');
+    expect(semanticRow?.closest('.highlight-actions-shell')).toBeNull();
+    const definitionButton = container.querySelector('[data-semantic-id="definition"]') as HTMLButtonElement;
+    expect(definitionButton).toHaveClass('weave-epub-semantic-chip');
+    expect(definitionButton).toHaveAttribute(
+      'style',
+      expect.stringContaining('--weave-semantic-color:')
+    );
+
+    await fireEvent.click(definitionButton);
+
+    expect(onChangeSemantic).toHaveBeenCalledWith(
+      expect.objectContaining({ semanticId: 'theorem' }),
+      expect.objectContaining({ id: 'definition' })
+    );
   });
 });

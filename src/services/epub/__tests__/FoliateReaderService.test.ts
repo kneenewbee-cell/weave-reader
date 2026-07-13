@@ -1645,6 +1645,39 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("previews an existing annotation with focus without adding a temporary highlight", async () => {
+		vi.useFakeTimers();
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const persistentHighlight = {
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Saved excerpt quote",
+				semanticId: "important",
+				presentation: "highlight" as const,
+			};
+			const key = getReaderHighlightIdentityKey(persistentHighlight);
+			const refreshSpy = vi.spyOn(service, "refreshHighlights");
+
+			await service.applyHighlights([persistentHighlight]);
+			service.previewHighlightFocus(persistentHighlight.cfiRange, "cyan", 1200);
+
+			expect((service as any).temporaryHighlightDataMap.size).toBe(0);
+			expect((service as any).sourceLocateFocusByCfiKey.size).toBe(1);
+			expect((service as any).highlightDataMap.get(key)?.color).toBe("yellow");
+
+			service.clearHighlightFocus(persistentHighlight.cfiRange);
+
+			expect((service as any).sourceLocateFocusByCfiKey.size).toBe(0);
+			expect((service as any).highlightDataMap.get(key)?.color).toBe("yellow");
+			expect((service as any).savedHighlights).toHaveLength(1);
+			expect(refreshSpy).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			service.destroy();
+		}
+	});
+
 	it("still flashes a temporary highlight when navigating to a location without a saved excerpt", async () => {
 		vi.useFakeTimers();
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
@@ -1781,6 +1814,10 @@ describe("FoliateReaderService", () => {
 					}),
 				},
 			});
+			Object.defineProperty(frameDoc, "caretPositionFromPoint", {
+				configurable: true,
+				value: () => ({ offsetNode: text, offset: 7 }),
+			});
 
 			(service as any).highlightDataMap.set(key, highlight);
 			(service as any).highlightClickCallbacks.add(callback);
@@ -1830,6 +1867,334 @@ describe("FoliateReaderService", () => {
 
 			expect(callback).toHaveBeenCalledTimes(1);
 			expect(callback.mock.calls[0]?.[0]?.cfiRange).toBe(highlight.cfiRange);
+			document.body.removeChild(iframe);
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("keeps all overlapping highlight candidates available after clicking a shared area", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const frameDoc = document.implementation.createHTMLDocument("overlap");
+			const iframe = document.createElement("iframe");
+			document.body.appendChild(iframe);
+			Object.defineProperty(frameDoc, "defaultView", {
+				configurable: true,
+				value: {
+					frameElement: iframe,
+					getSelection: () => ({
+						isCollapsed: true,
+						rangeCount: 0,
+						toString: () => "",
+						removeAllRanges: vi.fn(),
+					}),
+				},
+			});
+
+			const baseCfi = "epubcfi(/6/26!/4/2/1,/1:0,/1:12)";
+			const important = {
+				cfiRange: baseCfi,
+				color: "yellow",
+				text: "overlap important",
+				chapterIndex: 12,
+				semanticId: "important",
+				semanticLabel: "Important",
+				createdTime: 1,
+				presentation: "highlight" as const,
+			};
+			const question = {
+				cfiRange: "epubcfi(/6/26!/4/2/1,/1:4,/1:16)",
+				color: "purple",
+				text: "overlap question",
+				semanticId: "question",
+				semanticLabel: "Question",
+				createdTime: 2,
+				presentation: "highlight" as const,
+			};
+			(service as any).highlightDataMap.set(getReaderHighlightIdentityKey(important), important);
+			(service as any).highlightDataMap.set(getReaderHighlightIdentityKey(question), question);
+			vi.spyOn((service as any).parser, "getSectionIndexForCfi").mockImplementation(
+				((cfiRange: string) => cfiRange === baseCfi ? 12 : -1) as any
+			);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{
+					index: 12,
+					frameDocument: frameDoc,
+					frameElement: iframe,
+					frame: {},
+				},
+			]);
+			vi.spyOn(service as any, "getCurrentHighlightViewportGeometry").mockImplementation(
+				((cfiRange: string, textHint?: string) => {
+					const isQuestion = textHint === question.text || cfiRange === question.cfiRange;
+					return {
+						rect: {
+							top: 110,
+							left: isQuestion ? 120 : 100,
+							bottom: 130,
+							right: isQuestion ? 220 : 200,
+							width: 100,
+							height: 20,
+						},
+					};
+				}) as any
+			);
+
+			const callback = vi.fn();
+			(service as any).highlightClickCallbacks.add(callback);
+			(service as any).handleFrameHighlightClick(
+				{
+					button: 0,
+					clientX: 130,
+					clientY: 120,
+					preventDefault: vi.fn(),
+					stopPropagation: vi.fn(),
+					defaultPrevented: false,
+					target: frameDoc.body,
+				} as unknown as MouseEvent,
+				frameDoc
+			);
+
+			expect(callback).toHaveBeenCalledTimes(1);
+			const clickInfo = callback.mock.calls[0]?.[0];
+			expect(clickInfo?.anchorPoint).toEqual({ x: 130, y: 120 });
+			const candidates = (service as any).getHighlightClickCandidates(clickInfo);
+			expect(candidates.map((candidate: { semanticId?: string }) => candidate.semanticId).sort()).toEqual([
+				"important",
+				"question",
+			]);
+			document.body.removeChild(iframe);
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("uses DOM range overlap when stacked annotation layers report alternating visual targets", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const frameDoc = document.implementation.createHTMLDocument("overlap-range");
+			const paragraph = frameDoc.createElement("p");
+			const text = frameDoc.createTextNode("abcdefghijklmnop");
+			paragraph.appendChild(text);
+			frameDoc.body.appendChild(paragraph);
+			const iframe = document.createElement("iframe");
+			document.body.appendChild(iframe);
+			Object.defineProperty(frameDoc, "defaultView", {
+				configurable: true,
+				value: {
+					frameElement: iframe,
+					getSelection: () => ({
+						isCollapsed: true,
+						rangeCount: 0,
+						toString: () => "",
+						removeAllRanges: vi.fn(),
+					}),
+				},
+			});
+			Object.defineProperty(frameDoc, "caretPositionFromPoint", {
+				configurable: true,
+				value: () => ({ offsetNode: text, offset: 7 }),
+			});
+
+			const important = {
+				cfiRange: "epubcfi(/6/26!/4/2/1,/1:0,/1:10)",
+				color: "yellow",
+				text: "abcdefghij",
+				chapterIndex: 12,
+				semanticId: "important",
+				semanticLabel: "Important",
+				presentation: "highlight" as const,
+			};
+			const question = {
+				cfiRange: "epubcfi(/6/26!/4/2/1,/1:5,/1:16)",
+				color: "purple",
+				text: "fghijklmnop",
+				chapterIndex: 12,
+				semanticId: "question",
+				semanticLabel: "Question",
+				presentation: "highlight" as const,
+			};
+			(service as any).highlightDataMap.set(getReaderHighlightIdentityKey(important), important);
+			(service as any).highlightDataMap.set(getReaderHighlightIdentityKey(question), question);
+			vi.spyOn((service as any).parser, "getSectionIndexForCfi").mockReturnValue(12);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{
+					index: 12,
+					frameDocument: frameDoc,
+					frameElement: iframe,
+					frame: {},
+				},
+			]);
+			vi.spyOn((service as any).parser, "resolveRangeInLoadedSection").mockImplementation(
+				((cfiRange: string) => {
+					const range = frameDoc.createRange();
+					if (cfiRange === important.cfiRange) {
+						range.setStart(text, 0);
+						range.setEnd(text, 10);
+						return range;
+					}
+					if (cfiRange === question.cfiRange) {
+						range.setStart(text, 5);
+						range.setEnd(text, 16);
+						return range;
+					}
+					return null;
+				}) as any
+			);
+			vi.spyOn(service as any, "getCurrentHighlightViewportGeometry").mockImplementation(
+				((cfiRange: string) => {
+					const isQuestion = cfiRange === question.cfiRange;
+					return {
+						rect: {
+							top: 110,
+							left: isQuestion ? 360 : 100,
+							bottom: 130,
+							right: isQuestion ? 460 : 200,
+							width: 100,
+							height: 20,
+						},
+					};
+				}) as any
+			);
+
+			const anchor = {
+				cfiRange: important.cfiRange,
+				color: "yellow",
+				text: important.text,
+				semanticId: important.semanticId,
+				semanticLabel: important.semanticLabel,
+				sourceFile: "",
+				rect: {
+					top: 110,
+					left: 100,
+					bottom: 130,
+					right: 200,
+					width: 100,
+					height: 20,
+				},
+				anchorPoint: { x: 130, y: 120 },
+			};
+			const candidates = (service as any).getHighlightClickCandidates(anchor);
+			expect(candidates.map((candidate: { semanticId?: string }) => candidate.semanticId).sort()).toEqual([
+				"important",
+				"question",
+			]);
+			document.body.removeChild(iframe);
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("does not include overlapping annotations when clicking outside their shared text range", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const frameDoc = document.implementation.createHTMLDocument("overlap-range-outside");
+			const paragraph = frameDoc.createElement("p");
+			const text = frameDoc.createTextNode("abcdefghijklmnop");
+			paragraph.appendChild(text);
+			frameDoc.body.appendChild(paragraph);
+			const iframe = document.createElement("iframe");
+			document.body.appendChild(iframe);
+			Object.defineProperty(frameDoc, "defaultView", {
+				configurable: true,
+				value: {
+					frameElement: iframe,
+					getSelection: () => ({
+						isCollapsed: true,
+						rangeCount: 0,
+						toString: () => "",
+						removeAllRanges: vi.fn(),
+					}),
+				},
+			});
+			Object.defineProperty(frameDoc, "caretPositionFromPoint", {
+				configurable: true,
+				value: () => ({ offsetNode: text, offset: 2 }),
+			});
+
+			const important = {
+				cfiRange: "epubcfi(/6/26!/4/2/1,/1:0,/1:10)",
+				color: "yellow",
+				text: "abcdefghij",
+				chapterIndex: 12,
+				semanticId: "important",
+				semanticLabel: "Important",
+				presentation: "highlight" as const,
+			};
+			const question = {
+				cfiRange: "epubcfi(/6/26!/4/2/1,/1:5,/1:16)",
+				color: "purple",
+				text: "fghijklmnop",
+				chapterIndex: 12,
+				semanticId: "question",
+				semanticLabel: "Question",
+				presentation: "highlight" as const,
+			};
+			(service as any).highlightDataMap.set(getReaderHighlightIdentityKey(important), important);
+			(service as any).highlightDataMap.set(getReaderHighlightIdentityKey(question), question);
+			vi.spyOn((service as any).parser, "getSectionIndexForCfi").mockReturnValue(12);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{
+					index: 12,
+					frameDocument: frameDoc,
+					frameElement: iframe,
+					frame: {},
+				},
+			]);
+			vi.spyOn((service as any).parser, "resolveRangeInLoadedSection").mockImplementation(
+				((cfiRange: string) => {
+					const range = frameDoc.createRange();
+					if (cfiRange === important.cfiRange) {
+						range.setStart(text, 0);
+						range.setEnd(text, 10);
+						return range;
+					}
+					if (cfiRange === question.cfiRange) {
+						range.setStart(text, 5);
+						range.setEnd(text, 16);
+						return range;
+					}
+					return null;
+				}) as any
+			);
+			vi.spyOn(service as any, "getCurrentHighlightViewportGeometry").mockImplementation(
+				((cfiRange: string) => {
+					const isQuestion = cfiRange === question.cfiRange;
+					return {
+						rect: {
+							top: 110,
+							left: isQuestion ? 360 : 100,
+							bottom: 130,
+							right: isQuestion ? 460 : 200,
+							width: 100,
+							height: 20,
+						},
+					};
+				}) as any
+			);
+
+			const anchor = {
+				cfiRange: important.cfiRange,
+				color: "yellow",
+				text: important.text,
+				semanticId: important.semanticId,
+				semanticLabel: important.semanticLabel,
+				sourceFile: "",
+				rect: {
+					top: 110,
+					left: 100,
+					bottom: 130,
+					right: 200,
+					width: 100,
+					height: 20,
+				},
+				anchorPoint: { x: 130, y: 120 },
+			};
+			const candidates = (service as any).getHighlightClickCandidates(anchor);
+			expect(candidates.map((candidate: { semanticId?: string }) => candidate.semanticId)).toEqual([
+				"important",
+			]);
 			document.body.removeChild(iframe);
 		} finally {
 			service.destroy();

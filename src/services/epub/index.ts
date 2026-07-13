@@ -68,6 +68,12 @@ export {
 	shouldUseBookshelfGridPaintOptimization,
 	shouldUseBookshelfListVirtualScroll,
 } from "./bookshelf-display-performance";
+export {
+	findEpubPortableBookIdByPath,
+	findEpubPortableBookIdInIndex,
+	resolveEpubPortableBookDataLocation,
+	type EpubPortableBookDataLocation,
+} from "./epub-portable-data-location";
 export type {
 	EpubBookshelfSettings,
 	EpubBookshelfIndexEntry,

@@ -336,6 +336,7 @@ export interface EpubReaderEngine {
 			anchorPoint?: HighlightClickInfo["anchorPoint"];
 		}
 	): HighlightClickInfo | null;
+	getHighlightClickCandidates?(anchor: HighlightClickInfo): HighlightClickInfo[];
 	getSelectionViewportGeometry?(cfiRange: string): ReaderViewportGeometry | null;
 	onFootnotePreview(callback: (info: ReaderFootnotePreviewInfo | null) => void): () => void;
 	onSelectionChange(callback: (event: ReaderSelectionChange) => void): () => void;
@@ -345,6 +346,8 @@ export interface EpubReaderEngine {
 	refreshHighlights?(): Promise<void>;
 	addHighlight(highlight: ReaderHighlight): void;
 	addTemporaryHighlight(highlight: ReaderHighlightInput, durationMs?: number): void;
+	previewHighlightFocus(cfiRange: string, color?: string, durationMs?: number): void;
+	clearHighlightFocus(cfiRange?: string): void;
 	temporarilyRevealConcealedText?(cfiRange: string, durationMs?: number): void;
 	removeHighlight(cfiRange: string): void;
 	removeHighlightByIdentityKey(identityKey: string): void;

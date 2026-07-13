@@ -1121,7 +1121,7 @@ body.is-mobile .epub-highlight-toolbar:not(.mobile-docked) {
 		0 2px 6px rgba(0, 0, 0, 0.16);
 }
 
-.epub-selection-toolbar .weave-epub-semantic-chip {
+.epub-selection-toolbar .action-item.weave-epub-semantic-chip {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -1129,12 +1129,23 @@ body.is-mobile .epub-highlight-toolbar:not(.mobile-docked) {
 	min-width: 0;
 	white-space: nowrap;
 	vertical-align: middle;
+	background: transparent;
+	color: var(--weave-semantic-color, var(--text-normal));
+	cursor: pointer;
 }
 
 .epub-selection-toolbar .weave-epub-semantic-chip .action-label {
 	display: inline-flex;
 	align-items: center;
 	line-height: 1;
+	color: var(--weave-semantic-color, currentColor);
+}
+
+.epub-selection-toolbar .action-item.weave-epub-semantic-chip:hover,
+.epub-selection-toolbar .action-item.weave-epub-semantic-chip:focus-visible,
+.epub-selection-toolbar .action-item.weave-epub-semantic-chip:active {
+	color: var(--weave-semantic-color, var(--text-normal));
+	background: var(--background-modifier-hover);
 }
 
 .epub-selection-toolbar .weave-epub-semantic-dot {

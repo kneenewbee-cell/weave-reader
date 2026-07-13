@@ -1,9 +1,18 @@
 <script lang="ts">
 	import { setIcon, Platform } from 'obsidian';
 	import { tick, untrack } from 'svelte';
-	import { PREMIUM_FEATURES } from '../../services/premium/PremiumFeatureGuard';
 	import { tr } from '../../utils/i18n';
-	import type { EpubReaderEngine, HighlightClickInfo } from '../../services/epub';
+	import {
+		activeSemanticEntries,
+		SEMANTIC_COLOR_HEX,
+	} from '../../services/epub';
+	import type {
+		EpubAnnotationSemantic,
+		EpubReaderEngine,
+		EpubReaderUiMode,
+		EpubSemanticSettings,
+		HighlightClickInfo,
+	} from '../../services/epub';
 	import {
 		computeToolbarPosition,
 		createEventBinder,
@@ -14,18 +23,13 @@
 	interface Props {
 		info: HighlightClickInfo | null;
 		readerService: EpubReaderEngine;
+		readerUiMode?: EpubReaderUiMode;
+		semanticSettings?: EpubSemanticSettings | null;
 		mobileDockBottomOffset?: number;
-		canUseStyledExcerpts?: boolean;
-		canUseSourceLocation?: boolean;
-		showPremiumFeaturePreviewEnabled?: boolean;
-		onRequestPremiumFeaturePreview?: (featureId: string) => void;
 		onDelete: (info: HighlightClickInfo) => void;
 		onTemporarilyReveal: (info: HighlightClickInfo) => void;
-		onChangeColor: (info: HighlightClickInfo, newColor: string) => void;
-		onChangeStyle: (info: HighlightClickInfo, newStyle?: HighlightClickInfo['style']) => void;
+		onChangeSemantic: (info: HighlightClickInfo, semantic: EpubAnnotationSemantic) => void;
 		onEditComment: (info: HighlightClickInfo) => void;
-		onBacklink: (info: HighlightClickInfo) => void;
-		onExtractToCard: (info: HighlightClickInfo) => void;
 		onCopyText: (info: HighlightClickInfo) => void;
 		onDismiss: () => void;
 	}
@@ -33,18 +37,13 @@
 	let {
 		info,
 		readerService,
+		readerUiMode = 'standard',
+		semanticSettings = null,
 		mobileDockBottomOffset = 0,
-		canUseStyledExcerpts = true,
-		canUseSourceLocation = true,
-		showPremiumFeaturePreviewEnabled = false,
-		onRequestPremiumFeaturePreview,
 		onDelete,
 		onTemporarilyReveal,
-		onChangeColor,
-		onChangeStyle,
+		onChangeSemantic,
 		onEditComment,
-		onBacklink,
-		onExtractToCard,
 		onCopyText,
 		onDismiss
 	}: Props = $props();
@@ -58,15 +57,12 @@
 	let arrowOffset = $state(0);
 	let teardownOutsidePointerTracking: (() => void) | null = null;
 	let teardownViewportTracking: (() => void) | null = null;
-
-	const colors = ['yellow', 'blue', 'red', 'purple', 'green'] as const;
-	let colorLabels = $derived.by<Record<(typeof colors)[number], string>>(() => ({
-		yellow: t('epub.highlightToolbar.yellow'),
-		blue: t('epub.highlightToolbar.blue'),
-		red: t('epub.highlightToolbar.red'),
-		purple: t('epub.highlightToolbar.purple'),
-		green: t('epub.highlightToolbar.green')
-	}));
+	let semanticPickerOpen = $state(false);
+	let activeSemantics = $derived(
+		semanticSettings?.annotationSemanticsEnabled === false
+			? []
+			: (activeSemanticEntries(semanticSettings || {}) as EpubAnnotationSemantic[])
+	);
 	const isMobileToolbar = Platform.isMobile || activeDocument.body.classList.contains('is-mobile');
 
 	function icon(node: HTMLElement, name: string) {
@@ -192,26 +188,20 @@
 		}
 	}
 
-	function handleStyleToggle(targetInfo: HighlightClickInfo, nextStyle: HighlightClickInfo['style']) {
-		if (!canUseStyledExcerpts) {
-			if (showPremiumFeaturePreviewEnabled) {
-				onRequestPremiumFeaturePreview?.(PREMIUM_FEATURES.EPUB_STYLED_EXCERPTS);
-				onDismiss();
-			}
-			return;
-		}
-		onChangeStyle(targetInfo, targetInfo.style === nextStyle ? undefined : nextStyle);
+	function getSemanticColorHex(color?: string): string {
+		const key = String(color || 'yellow').trim().toLowerCase();
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}
 
-	function handleBacklinkAction(targetInfo: HighlightClickInfo) {
-		if (!canUseSourceLocation) {
-			if (showPremiumFeaturePreviewEnabled) {
-				onRequestPremiumFeaturePreview?.(PREMIUM_FEATURES.EPUB_SOURCE_LOCATION);
-				onDismiss();
-			}
-			return;
-		}
-		onBacklink(targetInfo);
+	function handleSemanticClick(targetInfo: HighlightClickInfo, semantic: EpubAnnotationSemantic) {
+		semanticPickerOpen = false;
+		onChangeSemantic(targetInfo, semantic);
+	}
+
+	async function toggleSemanticPicker() {
+		semanticPickerOpen = !semanticPickerOpen;
+		await tick();
+		void positionToolbar();
 	}
 
 	$effect(() => {
@@ -227,12 +217,14 @@
 		});
 
 		if (currentInfo) {
+			semanticPickerOpen = false;
 			void positionToolbar();
 		} else {
 			untrack(() => {
 				stopViewportTracking();
 				toolbarMode = 'floating';
 				arrowOffset = 0;
+				semanticPickerOpen = false;
 			});
 		}
 
@@ -275,60 +267,47 @@
 			</div>
 		{:else}
 			<div class="highlight-main-row">
-				<div class="highlight-top-row">
-					<div class="toolbar-row colors-row highlight-color-row highlight-primary-row">
-						{#each colors as c}
+				{#if semanticPickerOpen}
+					<div
+						class="toolbar-row highlight-semantic-picker-row"
+						class:weave-epub-expert-semantic-row={readerUiMode === 'expert'}
+						class:weave-epub-standard-semantic-row={readerUiMode !== 'expert'}
+					>
+						{#each activeSemantics as semantic (semantic.id)}
 							<button
-								class="color-btn {c}"
-								class:active={c === info.color}
-								onclick={() => onChangeColor(info, c)}
-								title={t('epub.highlightToolbar.switchColor', { color: colorLabels[c] })}
-								aria-label={t('epub.highlightToolbar.switchColorAria', { color: colorLabels[c] })}
+								class="clickable-icon action-item weave-epub-semantic-chip"
+								class:weave-epub-standard-semantic-btn={readerUiMode !== 'expert'}
+								class:accent={semantic.id === info.semanticId}
+								data-semantic-id={semantic.id}
+								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
+								title={semantic.description || semantic.label}
+								aria-label={semantic.label}
+								onclick={() => handleSemanticClick(info, semantic)}
 							>
-								<span class="color-btn-core"></span>
+								<span class="action-icon weave-epub-semantic-dot"></span>
+								<span class="action-label">{semantic.label}</span>
 							</button>
 						{/each}
 					</div>
-
-					<div class="highlight-style-shell">
-						<div class="toolbar-row highlight-style-row">
-							<button class="clickable-icon action-item icon-only style-action-item" class:accent={info.style === 'underline'} onclick={() => handleStyleToggle(info, 'underline')} title={t('epub.highlightToolbar.underline')} aria-label={t('epub.highlightToolbar.underline')}>
-								<span class="action-icon style-icon underline-style-icon" use:icon={'underline'}></span>
-							</button>
-							<button class="clickable-icon action-item icon-only style-action-item" class:accent={info.style === 'strikethrough'} onclick={() => handleStyleToggle(info, 'strikethrough')} title={t('epub.highlightToolbar.strikethrough')} aria-label={t('epub.highlightToolbar.strikethrough')}>
-								<span class="action-icon style-icon strikethrough-style-icon" use:icon={'strikethrough'}></span>
-							</button>
-							<button class="clickable-icon action-item icon-only style-action-item" class:accent={info.style === 'wavy'} onclick={() => handleStyleToggle(info, 'wavy')} title={t('epub.highlightToolbar.wavy')} aria-label={t('epub.highlightToolbar.wavy')}>
-								<span class="action-icon style-icon wavy-style-icon" use:icon={'pen-tool'}></span>
-							</button>
-						</div>
-					</div>
-				</div>
-
+				{/if}
 				<div class="highlight-actions-shell">
 					<div class="toolbar-row actions-row highlight-actions-row">
-						<button class="clickable-icon action-item highlight-type-action" class:accent={!info.style} onclick={() => onChangeStyle(info, undefined)} title={t('epub.highlightToolbar.highlightTitle')} aria-label={t('epub.highlightToolbar.highlightTitle')}>
-							<span class="action-icon highlight-style-icon" use:icon={'highlighter'}></span>
-							<span class="action-label">{t('epub.highlightToolbar.highlight')}</span>
+						<button
+							class="clickable-icon action-item semantic-action"
+							class:accent={semanticPickerOpen}
+							onclick={() => void toggleSemanticPicker()}
+							title={t('epub.highlightToolbar.changeSemanticTitle')}
+							aria-label={t('epub.highlightToolbar.changeSemanticTitle')}
+						>
+							<span class="action-icon" use:icon={'tags'}></span>
+							<span class="action-label">{t('epub.highlightToolbar.changeSemantic')}</span>
 						</button>
-						<button class="clickable-icon action-item comment-action" class:accent={Boolean(info.hasCommentDivider)} onclick={() => onEditComment(info)} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
-							<span class="action-icon" use:icon={'message-square'}></span>
-							<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
-						</button>
-						{#if canUseSourceLocation || showPremiumFeaturePreviewEnabled}
-							<button class="clickable-icon action-item backlink-action" onclick={() => handleBacklinkAction(info)} title={t('epub.highlightToolbar.noteTitle')}>
-								<span class="action-icon" use:icon={'external-link'}></span>
-								<span class="action-label">{t('epub.highlightToolbar.note')}</span>
+						{#if readerUiMode === 'expert'}
+							<button class="clickable-icon action-item comment-action" class:accent={Boolean(info.hasCommentDivider)} onclick={() => onEditComment(info)} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
+								<span class="action-icon" use:icon={'message-square'}></span>
+								<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
 							</button>
 						{/if}
-						<button class="clickable-icon action-item accent extract-action" onclick={() => onExtractToCard(info)} title={t('epub.highlightToolbar.createCardTitle')} aria-label={t('epub.highlightToolbar.createCardTitle')}>
-							<span class="action-icon" use:icon={'scissors'}></span>
-							<span class="action-label">{t('epub.highlightToolbar.createCard')}</span>
-						</button>
-						<button class="clickable-icon action-item copy-action" onclick={() => onCopyText(info)} title={t('epub.highlightToolbar.copyTitle')}>
-							<span class="action-icon" use:icon={'clipboard-copy'}></span>
-							<span class="action-label">{t('epub.highlightToolbar.copy')}</span>
-						</button>
 						<div class="row-divider"></div>
 						<button class="clickable-icon action-item delete delete-action" onclick={() => onDelete(info)} title={t('epub.highlightToolbar.deleteTitle')}>
 							<span class="action-icon" use:icon={'trash-2'}></span>

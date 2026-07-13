@@ -14,11 +14,14 @@
 	import EpubTutorial from './EpubTutorial.svelte';
 	import type { TutorialTabId } from './epub-tutorial-content';
 	import EpubHighlightToolbar from './EpubHighlightToolbar.svelte';
+	import AnnotationDisambiguationMenu, {
+		type AnnotationDisambiguationCandidate,
+	} from './AnnotationDisambiguationMenu.svelte';
 	import EpubCommentEditorPopover from './EpubCommentEditorPopover.svelte';
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, activeSemanticEntries, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
 	import {
@@ -311,6 +314,8 @@
 	let scrolledNavSyncFrame = 0;
 	let scrolledNavResizeObserver: ResizeObserver | null = null;
 	let highlightToolbarInfo = $state<HighlightClickInfo | null>(null);
+	let annotationDisambiguationAnchor = $state<HighlightClickInfo | null>(null);
+	let annotationDisambiguationCandidates = $state<AnnotationDisambiguationCandidate[]>([]);
 	let commentEditorInfo = $state<HighlightClickInfo | null>(null);
 	let footnotePreviewInfo = $state<ReaderFootnotePreviewInfo | null>(null);
 	let referencePopoverInfo = $state<HighlightClickInfo | null>(null);
@@ -331,6 +336,7 @@
 	let pendingLoadedHighlights: ReaderHighlight[] | null = null;
 	const annotationUndoStack = new EpubAnnotationUndoStack();
 	let annotationMutationQueue: Promise<void> = Promise.resolve();
+	let activeAnnotationPreviewCfiRange: string | null = null;
 	let highlightReloadToken = 0;
 	let highlightReloading = $state(false);
 	let annotationRevision = $state(0);
@@ -1249,7 +1255,7 @@
 		referencePopoverInfo = null;
 		referencePopoverStats = null;
 		closeCommentEditor();
-		highlightToolbarInfo = readerService.getHighlightClickInfo(info.cfiRange, 'highlight', {
+		const clickInfo = readerService.getHighlightClickInfo(info.cfiRange, 'highlight', {
 			rect: {
 				top: info.rect.top,
 				left: info.rect.left,
@@ -1271,6 +1277,17 @@
 				y: info.rect.top + info.rect.height / 2,
 			},
 		});
+		if (!clickInfo) {
+			return;
+		}
+		const candidates = collectAnnotationCandidatesAtHighlight(clickInfo);
+		if (candidates.length > 1) {
+			highlightToolbarInfo = null;
+			annotationDisambiguationAnchor = clickInfo;
+			annotationDisambiguationCandidates = candidates;
+			return;
+		}
+		openAnnotationActions(clickInfo);
 	}
 
 	function applyReaderSettingsState(nextSettings: EpubReaderSettings, persist: boolean) {
@@ -1953,6 +1970,195 @@
 		};
 	}
 
+	function buildHighlightClickInfoFromReaderHighlight(
+		highlight: ReaderHighlight,
+		geometry: {
+			rect: HighlightClickInfo['rect'];
+			rects?: HighlightClickInfo['rects'];
+			anchorPoint?: HighlightClickInfo['anchorPoint'];
+		},
+		interactionTarget: HighlightClickInfo['interactionTarget'] = 'highlight'
+	): HighlightClickInfo {
+		return {
+			cfiRange: highlight.cfiRange,
+			color: highlight.color || 'yellow',
+			style: highlight.style,
+			semanticId: highlight.semanticId,
+			semanticLabel: highlight.semanticLabel,
+			semanticGroup: highlight.semanticGroup,
+			semanticDescription: highlight.semanticDescription,
+			semanticSource: highlight.semanticSource,
+			text: highlight.text || '',
+			commentText: highlight.commentText,
+			hasCommentDivider: highlight.hasCommentDivider,
+			sourceFile: highlight.sourceFile || '',
+			sourceRef: highlight.sourceRef,
+			excerptId: highlight.excerptId,
+			sourceLocators: highlight.sourceLocators,
+			createdTime: highlight.createdTime,
+			presentation: highlight.presentation || 'highlight',
+			interactionTarget,
+			rect: geometry.rect,
+			rects: geometry.rects,
+			anchorPoint: geometry.anchorPoint,
+		};
+	}
+
+	function closeAnnotationDisambiguation(): void {
+		clearAnnotationPreview();
+		annotationDisambiguationAnchor = null;
+		annotationDisambiguationCandidates = [];
+	}
+
+	function getSemanticColorHex(color?: string): string {
+		const key = String(color || 'yellow').trim().toLowerCase();
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
+	}
+
+	function resolveAnnotationCandidateLabel(info: HighlightClickInfo): string {
+		if (info.semanticLabel) {
+			return info.semanticLabel;
+		}
+		if (info.semanticId) {
+			return info.semanticId;
+		}
+		if (info.style === 'underline') {
+			return t('epub.highlightToolbar.underline');
+		}
+		if (info.style === 'wavy') {
+			return t('epub.highlightToolbar.wavy');
+		}
+		if (info.style === 'strikethrough') {
+			return t('epub.highlightToolbar.strikethrough');
+		}
+		return t('epub.highlightToolbar.highlight');
+	}
+
+	function getHighlightInfoIdentity(info: HighlightClickInfo): string {
+		return getReaderHighlightIdentityKey(buildHighlightIdentityFields(info));
+	}
+
+	function rectArea(rect: HighlightClickInfo['rect']): number {
+		return Math.max(0, rect.width) * Math.max(0, rect.height);
+	}
+
+	function rectsIntersect(a: HighlightClickInfo['rect'], b: HighlightClickInfo['rect']): boolean {
+		return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+	}
+
+	function pointInRect(point: HighlightClickInfo['anchorPoint'], rect: HighlightClickInfo['rect']): boolean {
+		return Boolean(point && point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom);
+	}
+
+	function highlightInfosVisuallyOverlap(a: HighlightClickInfo, b: HighlightClickInfo): boolean {
+		const aRects = a.rects?.length ? a.rects : [a.rect];
+		const bRects = b.rects?.length ? b.rects : [b.rect];
+		if (a.anchorPoint) {
+			return bRects.some((rect) => pointInRect(a.anchorPoint, rect));
+		}
+		if (b.anchorPoint) {
+			return aRects.some((rect) => pointInRect(b.anchorPoint, rect));
+		}
+		return aRects.some((left) => bRects.some((right) => rectsIntersect(left, right)));
+	}
+
+	function buildAnnotationDisambiguationCandidate(info: HighlightClickInfo): AnnotationDisambiguationCandidate | null {
+		const id = getHighlightInfoIdentity(info);
+		if (!id) {
+			return null;
+		}
+		return {
+			id,
+			label: resolveAnnotationCandidateLabel(info),
+			description: info.semanticDescription || info.text,
+			color: getSemanticColorHex(info.color),
+			info,
+		};
+	}
+
+	function collectAnnotationCandidatesAtHighlight(anchorInfo: HighlightClickInfo): AnnotationDisambiguationCandidate[] {
+		const byId = new Map<string, AnnotationDisambiguationCandidate>();
+		const anchorCandidate = buildAnnotationDisambiguationCandidate(anchorInfo);
+		if (anchorCandidate) {
+			byId.set(anchorCandidate.id, anchorCandidate);
+		}
+		const serviceCandidates = readerService.getHighlightClickCandidates?.(anchorInfo) || [];
+		for (const info of serviceCandidates) {
+			if (info.presentation === 'conceal') {
+				continue;
+			}
+			const candidate = buildAnnotationDisambiguationCandidate(info);
+			if (candidate) {
+				byId.set(candidate.id, candidate);
+			}
+		}
+		if (serviceCandidates.length > 0) {
+			return Array.from(byId.values());
+		}
+		if (!readerService.getSelectionViewportGeometry) {
+			return Array.from(byId.values());
+		}
+		for (const highlight of pendingLoadedHighlights || []) {
+			if (highlight.presentation === 'conceal') {
+				continue;
+			}
+			const geometry = readerService.getSelectionViewportGeometry(highlight.cfiRange);
+			if (!geometry?.rect) {
+				continue;
+			}
+			const info = buildHighlightClickInfoFromReaderHighlight(highlight, geometry, 'highlight');
+			if (!highlightInfosVisuallyOverlap(anchorInfo, info)) {
+				continue;
+			}
+			const candidate = buildAnnotationDisambiguationCandidate(info);
+			if (candidate) {
+				byId.set(candidate.id, candidate);
+			}
+		}
+		return Array.from(byId.values()).sort((a, b) => {
+			const areaDiff = rectArea(a.info.rect) - rectArea(b.info.rect);
+			if (Math.abs(areaDiff) > 1) {
+				return areaDiff;
+			}
+			const commentDiff = Number(Boolean(b.info.hasCommentDivider)) - Number(Boolean(a.info.hasCommentDivider));
+			if (commentDiff !== 0) {
+				return commentDiff;
+			}
+			return (b.info.createdTime || 0) - (a.info.createdTime || 0);
+		});
+	}
+
+	function openAnnotationActions(info: HighlightClickInfo): void {
+		closeAnnotationDisambiguation();
+		footnotePreviewInfo = null;
+		referencePopoverInfo = null;
+		referencePopoverStats = null;
+		closeCommentEditor();
+		highlightToolbarInfo = info;
+	}
+
+	function handleAnnotationCandidatePreview(candidate: AnnotationDisambiguationCandidate | null): void {
+		clearAnnotationPreview();
+		if (!candidate) {
+			return;
+		}
+		activeAnnotationPreviewCfiRange = candidate.info.cfiRange;
+		readerService.previewHighlightFocus(candidate.info.cfiRange, 'cyan', 1200);
+	}
+
+	function clearAnnotationPreview(): void {
+		if (!activeAnnotationPreviewCfiRange) {
+			return;
+		}
+		readerService.clearHighlightFocus(activeAnnotationPreviewCfiRange);
+		activeAnnotationPreviewCfiRange = null;
+	}
+
+	function handleAnnotationCandidateSelect(candidate: AnnotationDisambiguationCandidate): void {
+		clearAnnotationPreview();
+		openAnnotationActions(candidate.info);
+	}
+
 	function enqueueAnnotationMutation(operation: () => Promise<void>): Promise<void> {
 		const run = annotationMutationQueue.then(operation, operation);
 		annotationMutationQueue = run.catch((error) => {
@@ -2422,6 +2628,7 @@
 		pendingLoadedHighlights = null;
 		annotationUndoStack.clear();
 		highlightToolbarInfo = null;
+		closeAnnotationDisambiguation();
 		commentEditorInfo = null;
 		footnotePreviewInfo = null;
 		commentEditorDraft = '';
@@ -4278,8 +4485,16 @@
 				presentation: 'highlight',
 			};
 			void enqueueAnnotationMutation(async () => {
-				await annotationService.savePortableHighlight(bookId, highlight);
-				annotationUndoStack.pushCreate(bookId, highlight);
+				const result = await annotationService.savePortableHighlightWithPolicy(bookId, highlight);
+				if (result.kind === 'create') {
+					annotationUndoStack.pushCreate(bookId, result.current);
+					return;
+				}
+				if (result.kind === 'replace') {
+					removeHighlightFromCurrentView(result.previous);
+					addHighlightToCurrentView(result.current);
+					annotationUndoStack.pushUpdate(bookId, result.previous, result.current);
+				}
 			});
 		}
 		outputNote(text, cfiRange, color, style, semantic);
@@ -4443,6 +4658,7 @@
 		readerService.onHighlightClick((info: HighlightClickInfo) => {
 			footnotePreviewInfo = null;
 			if (info.interactionTarget === 'comment-marker') {
+				closeAnnotationDisambiguation();
 				referencePopoverInfo = null;
 				referencePopoverStats = null;
 				openCommentEditor(info);
@@ -4451,10 +4667,22 @@
 			if (info.interactionTarget === 'reference-badge') {
 				return;
 			}
+			if (readerUiMode === 'minimal') {
+				closeAnnotationDisambiguation();
+				highlightToolbarInfo = null;
+				return;
+			}
 			referencePopoverInfo = null;
 			referencePopoverStats = null;
 			closeCommentEditor();
-			highlightToolbarInfo = info;
+			const candidates = collectAnnotationCandidatesAtHighlight(info);
+			if (candidates.length > 1) {
+				highlightToolbarInfo = null;
+				annotationDisambiguationAnchor = info;
+				annotationDisambiguationCandidates = candidates;
+				return;
+			}
+			openAnnotationActions(info);
 		});
 	}
 
@@ -5000,6 +5228,25 @@
 		if (newColor === info.color) return;
 		const source = await resolveHighlightSource(info);
 		if (!source?.sourceFile) {
+			if (book) {
+				const previous = buildReaderHighlightFromInfo(info);
+				const next: ReaderHighlight = {
+					...previous,
+					color: newColor,
+				};
+				await enqueueAnnotationMutation(async () => {
+					const result = await annotationService.replacePortableHighlight(book.id, previous, next);
+					if (!result?.current) {
+						new Notice(t('epub.reader.changeColorFailed'));
+						return;
+					}
+					removeHighlightFromCurrentView(result.previous || previous);
+					addHighlightToCurrentView(result.current);
+					annotationUndoStack.pushUpdate(book.id, result.previous || previous, result.current);
+					highlightToolbarInfo = null;
+				});
+				return;
+			}
 			new Notice(t('epub.reader.highlightSourcePending'));
 			void reloadHighlights();
 			return;
@@ -5019,6 +5266,39 @@
 		} else {
 			new Notice(t('epub.reader.changeColorFailed'));
 		}
+	}
+
+	async function handleHighlightChangeSemantic(
+		info: HighlightClickInfo,
+		semantic: EpubAnnotationSemantic
+	) {
+		if (!hasExcerptNotesCapability() || !book) {
+			return;
+		}
+		const previous = buildReaderHighlightFromInfo(info);
+		const nextStyle = toReaderHighlightStyle(semantic.style);
+		const next: ReaderHighlight = {
+			...previous,
+			color: semantic.color || previous.color || 'yellow',
+			...(nextStyle ? { style: nextStyle } : { style: undefined }),
+			semanticId: semantic.id,
+			semanticLabel: semantic.label,
+			semanticGroup: semantic.group || 'study',
+			semanticDescription: semantic.description,
+			semanticSource: semantic.source || 'preset',
+		};
+		await enqueueAnnotationMutation(async () => {
+			const result = await annotationService.replacePortableHighlight(book.id, previous, next);
+			if (!result?.current) {
+				new Notice(t('epub.reader.changeSemanticFailed'));
+				return;
+			}
+			removeHighlightFromCurrentView(result.previous || previous);
+			addHighlightToCurrentView(result.current);
+			annotationUndoStack.pushUpdate(book.id, result.previous || previous, result.current);
+			highlightToolbarInfo = null;
+			new Notice(t('epub.reader.semanticChanged'));
+		});
 	}
 
 	async function handleHighlightChangeStyle(
@@ -5173,6 +5453,32 @@
 		}
 		const source = await resolveHighlightSource(info);
 		if (!source?.sourceFile) {
+			if (book) {
+				const previous = buildReaderHighlightFromInfo(info);
+				const next: ReaderHighlight = {
+					...previous,
+					commentText: commentEditorDraft,
+					hasCommentDivider: commentEditorDraft.trim().length > 0,
+				};
+				commentEditorSaving = true;
+				await enqueueAnnotationMutation(async () => {
+					try {
+						const result = await annotationService.replacePortableHighlight(book.id, previous, next);
+						if (!result?.current) {
+							new Notice(t('epub.reader.commentSaveFailed'));
+							return;
+						}
+						removeHighlightFromCurrentView(result.previous || previous);
+						addHighlightToCurrentView(result.current);
+						annotationUndoStack.pushUpdate(book.id, result.previous || previous, result.current);
+						new Notice(t('epub.reader.commentSaved'));
+						closeCommentEditor();
+					} finally {
+						commentEditorSaving = false;
+					}
+				});
+				return;
+			}
 			new Notice(t('epub.reader.highlightSourcePending'));
 			void reloadHighlights();
 			return;
@@ -5608,6 +5914,7 @@
 			readerUiMode = readEpubReaderUiModeChange(event) || getHostReaderUiMode();
 			if (readerUiMode === 'minimal') {
 				highlightToolbarInfo = null;
+				closeAnnotationDisambiguation();
 				commentEditorInfo = null;
 				referencePopoverInfo = null;
 				clearParagraphModeSelection();
@@ -5628,6 +5935,7 @@
 				trackedHighlightSourceFiles = new Set<string>();
 				annotationUndoStack.clear();
 				highlightToolbarInfo = null;
+				closeAnnotationDisambiguation();
 				commentEditorInfo = null;
 				getExcerptPipeline().syncCollectedHighlights([]);
 				void readerService.applyHighlights([]);
@@ -5809,6 +6117,7 @@
 			window.removeEventListener(EPUB_READER_UI_MODE_CHANGED_EVENT, handleReaderUiModeChanged);
 			window.removeEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
 			componentDisposed = true;
+			closeAnnotationDisambiguation();
 			getBookSessionManager(app).releaseIfNoOpenLeaves(app, filePath);
 			clearParagraphModeSelection();
 			window.removeEventListener('resize', scheduleScrolledNavLayoutSync);
@@ -6170,20 +6479,24 @@
 			/>
 
 			{#if readerUiMode !== 'minimal'}
+				<AnnotationDisambiguationMenu
+					{readerService}
+					anchor={annotationDisambiguationAnchor}
+					candidates={annotationDisambiguationCandidates}
+					mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
+					onPreview={handleAnnotationCandidatePreview}
+					onSelect={handleAnnotationCandidateSelect}
+					onDismiss={closeAnnotationDisambiguation}
+				/>
 				<EpubHighlightToolbar
 					readerService={readerService}
 					mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
+					readerUiMode={readerUiMode}
+					semanticSettings={semanticSettings}
 					info={hasExcerptNotesCapability() ? highlightToolbarInfo : null}
-					canUseStyledExcerpts={hasStyledExcerptCapability()}
-					canUseSourceLocation={hasSourceLocationCapability()}
-					showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled()}
-					onRequestPremiumFeaturePreview={openPremiumFeaturePreview}
 					onDelete={handleHighlightDelete}
 					onTemporarilyReveal={handleTemporarilyRevealConcealed}
-					onChangeColor={handleHighlightChangeColor}
-					onChangeStyle={handleHighlightChangeStyle}
-					onBacklink={handleHighlightBacklink}
-					onExtractToCard={handleHighlightExtractToCard}
+					onChangeSemantic={handleHighlightChangeSemantic}
 					onCopyText={handleHighlightCopyText}
 					onEditComment={handleHighlightEditComment}
 					onDismiss={() => highlightToolbarInfo = null}

@@ -61,4 +61,23 @@ describe("EpubAnnotationUndoStack", () => {
 		});
 		expect(stack.undo()).toBeNull();
 	});
+
+	it("turns an updated annotation into a replace undo patch", () => {
+		const stack = new EpubAnnotationUndoStack();
+		const updated: ReaderHighlight = {
+			...baseHighlight,
+			color: "purple",
+			semanticId: "question",
+			semanticLabel: "疑问",
+		};
+
+		stack.pushUpdate("book-1", baseHighlight, updated);
+
+		expect(stack.undo()).toEqual({
+			kind: "replace",
+			bookId: "book-1",
+			before: updated,
+			after: baseHighlight,
+		});
+	});
 });

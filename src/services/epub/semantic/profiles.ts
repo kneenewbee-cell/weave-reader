@@ -24,7 +24,7 @@ const SEMANTIC_COLOR_HEX = {
 const ANNOTATION_STYLE_LABELS = {
   highlight: "\u9ad8\u4eae",
   underline: "\u4e0b\u5212\u7ebf",
-  strikethrough: "\u5220\u9664\u7ebf",
+  strikethrough: "\u9a6c\u8d5b\u514b",
   wavy: "\u6ce2\u6d6a\u7ebf"
 };
 

@@ -6,6 +6,10 @@ import {
 	getReaderHighlightIdentityKey,
 	mergeReaderHighlightsByIdentity,
 } from "./highlight/highlight-identity";
+import {
+	findSameAnnotationRange,
+	getAnnotationSemanticKey,
+} from "./annotation-range-policy";
 import type { EpubStorageService } from "./EpubStorageService";
 import type { HighlightSourceLocator, ReaderHighlight } from "./reader-engine-types";
 import { resolveDisplayProgress } from "./book-progress";
@@ -20,6 +24,24 @@ import {
 	toReaderAnnotationStyle,
 } from "./semantic/profiles";
 import type { ConcealedText, HighlightColor } from "./types";
+
+export type EpubPortableHighlightSaveResult =
+	| {
+			kind: "create";
+			current: ReaderHighlight;
+	  }
+	| {
+			kind: "replace";
+			previous: ReaderHighlight;
+			current: ReaderHighlight;
+	  }
+	| {
+			kind: "duplicate";
+			current: ReaderHighlight;
+	  }
+	| {
+			kind: "noop";
+	  };
 
 export class EpubAnnotationService {
 	private storageService: EpubStorageService;
@@ -334,9 +356,16 @@ export class EpubAnnotationService {
 	}
 
 	async savePortableHighlight(bookId: string, highlight: ReaderHighlight): Promise<void> {
+		await this.savePortableHighlightWithPolicy(bookId, highlight);
+	}
+
+	async savePortableHighlightWithPolicy(
+		bookId: string,
+		highlight: ReaderHighlight
+	): Promise<EpubPortableHighlightSaveResult> {
 		const app = this.getApp();
 		if (!app || !String(bookId || "").trim()) {
-			return;
+			return { kind: "noop" };
 		}
 		try {
 			const [profileResult, payload] = await Promise.all([
@@ -345,16 +374,42 @@ export class EpubAnnotationService {
 			]);
 			const normalizedIncoming = this.normalizePortableAnnotation(highlight, profileResult.effectiveProfile);
 			if (!normalizedIncoming) {
-				return;
+				return { kind: "noop" };
 			}
 			const existing = payload.annotations
 				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
 				.filter((item): item is ReaderHighlight => Boolean(item));
+			const sameRange = findSameAnnotationRange(existing, normalizedIncoming);
+			if (sameRange) {
+				if (getAnnotationSemanticKey(sameRange) === getAnnotationSemanticKey(normalizedIncoming)) {
+					return {
+						kind: "duplicate",
+						current: sameRange,
+					};
+				}
+				const sameRangeKey = getReaderHighlightIdentityKey(sameRange);
+				const remaining = existing.filter(
+					(item) => getReaderHighlightIdentityKey(item) !== sameRangeKey
+				);
+				const merged = mergeReaderHighlightsByIdentity(remaining, [normalizedIncoming]);
+				await writeBookEpubPortableAnnotations(app, bookId, merged);
+				this.invalidateCollectedHighlightsCache(bookId);
+				return {
+					kind: "replace",
+					previous: sameRange,
+					current: normalizedIncoming,
+				};
+			}
 			const merged = mergeReaderHighlightsByIdentity(existing, [normalizedIncoming]);
 			await writeBookEpubPortableAnnotations(app, bookId, merged);
 			this.invalidateCollectedHighlightsCache(bookId);
+			return {
+				kind: "create",
+				current: normalizedIncoming,
+			};
 		} catch (error) {
 			console.warn("[EpubAnnotationService] Failed to save portable annotation:", error);
+			return { kind: "noop" };
 		}
 	}
 
@@ -395,6 +450,50 @@ export class EpubAnnotationService {
 			return removed;
 		} catch (error) {
 			console.warn("[EpubAnnotationService] Failed to remove portable annotation:", error);
+			return null;
+		}
+	}
+
+	async replacePortableHighlight(
+		bookId: string,
+		before: ReaderHighlight,
+		after: ReaderHighlight
+	): Promise<{ previous: ReaderHighlight | null; current: ReaderHighlight } | null> {
+		const app = this.getApp();
+		if (!app || !String(bookId || "").trim()) {
+			return null;
+		}
+		try {
+			const [profileResult, payload] = await Promise.all([
+				loadEffectiveEpubSemanticProfile(app, bookId, {}),
+				readEffectiveEpubPortableAnnotations(app, bookId),
+			]);
+			const normalizedBefore = this.normalizePortableAnnotation(before, profileResult.effectiveProfile);
+			const normalizedAfter = this.normalizePortableAnnotation(after, profileResult.effectiveProfile);
+			if (!normalizedAfter) {
+				return null;
+			}
+			const beforeKey = normalizedBefore ? getReaderHighlightIdentityKey(normalizedBefore) : "";
+			let previous: ReaderHighlight | null = null;
+			const remaining = payload.annotations
+				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
+				.filter((item): item is ReaderHighlight => Boolean(item))
+				.filter((item) => {
+					if (beforeKey && getReaderHighlightIdentityKey(item) === beforeKey) {
+						previous = previous || item;
+						return false;
+					}
+					return true;
+				});
+			const merged = mergeReaderHighlightsByIdentity(remaining, [normalizedAfter]);
+			await writeBookEpubPortableAnnotations(app, bookId, merged);
+			this.invalidateCollectedHighlightsCache(bookId);
+			return {
+				previous,
+				current: normalizedAfter,
+			};
+		} catch (error) {
+			console.warn("[EpubAnnotationService] Failed to replace portable annotation:", error);
 			return null;
 		}
 	}

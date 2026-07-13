@@ -948,11 +948,12 @@
 							<button
 								class="clickable-icon action-item weave-epub-semantic-chip"
 								data-semantic-id={semantic.id}
+								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
 								onclick={() => handleSemanticHighlight(semantic)}
 								title={semantic.description || semantic.label}
 								aria-label={semantic.label}
 							>
-								<span class="action-icon weave-epub-semantic-dot" style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}></span>
+								<span class="action-icon weave-epub-semantic-dot"></span>
 								<span class="action-label">{semantic.label}</span>
 							</button>
 						{/each}
@@ -993,11 +994,12 @@
 						<button
 							class="clickable-icon action-item weave-epub-standard-semantic-btn weave-epub-semantic-chip"
 							data-semantic-id={semantic.id}
+							style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
 							onclick={() => handleSemanticHighlight(semantic)}
 							title={semantic.description || semantic.label}
 							aria-label={semantic.label}
 						>
-							<span class="action-icon weave-epub-semantic-dot" style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}></span>
+							<span class="action-icon weave-epub-semantic-dot"></span>
 							<span class="action-label">{semantic.label}</span>
 						</button>
 					{/each}

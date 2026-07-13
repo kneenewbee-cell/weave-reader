@@ -54,6 +54,227 @@ function createPortableMockApp(files: Record<string, unknown>, folders: string[]
 }
 
 describe('EpubAnnotationService', () => {
+	it('replaces an existing portable annotation when the same range receives a different semantic', async () => {
+		const bookId = 'epub-book-replace';
+		const app = createPortableMockApp({
+			'weave/epub-data/semantic-profiles/default.json': {
+				format: PROFILE_FORMAT,
+				version: PROFILE_VERSION,
+				scope: 'global',
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: 'custom',
+				semantics: [
+					{
+						id: 'important',
+						label: '重点',
+						color: 'yellow',
+						style: 'highlight',
+						group: 'study',
+						source: 'custom',
+						active: true,
+					},
+					{
+						id: 'question',
+						label: '疑问',
+						color: 'purple',
+						style: 'wavy',
+						group: 'study',
+						source: 'custom',
+						active: true,
+					},
+				],
+			},
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2)',
+						semanticId: 'important',
+						text: 'Marked text',
+						chapterIndex: 1,
+						chapterTitle: 'Chapter one',
+						createdTime: 100,
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.savePortableHighlightWithPolicy(bookId, {
+			cfiRange: 'epubcfi(/6/2!/4/2)',
+			color: 'purple',
+			style: 'wavy',
+			text: 'Marked text',
+			semanticId: 'question',
+			semanticLabel: '疑问',
+			chapterIndex: 1,
+			chapterTitle: 'Chapter one',
+			createdTime: 200,
+			presentation: 'highlight',
+		});
+
+		expect(result.kind).toBe('replace');
+		expect(result.previous?.semanticId).toBe('important');
+		expect(result.current.semanticId).toBe('question');
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			semanticId: 'question',
+			text: 'Marked text',
+		});
+	});
+
+	it('does not duplicate an existing portable annotation with the same range and semantic', async () => {
+		const bookId = 'epub-book-duplicate';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2)',
+						semanticId: 'important',
+						color: 'yellow',
+						text: 'Marked text',
+						createdTime: 100,
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.savePortableHighlightWithPolicy(bookId, {
+			cfiRange: 'epubcfi(/6/2!/4/2)',
+			color: 'yellow',
+			text: 'Marked text',
+			semanticId: 'important',
+			createdTime: 200,
+			presentation: 'highlight',
+		});
+
+		expect(result.kind).toBe('duplicate');
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			semanticId: 'important',
+			createdTime: 100,
+		});
+	});
+
+	it('keeps partially overlapping portable annotations as separate records', async () => {
+		const bookId = 'epub-book-overlap';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2,/6/2!/4/10)',
+						semanticId: 'important',
+						color: 'yellow',
+						text: 'Text from one to ten',
+						createdTime: 100,
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.savePortableHighlightWithPolicy(bookId, {
+			cfiRange: 'epubcfi(/6/2!/4/5,/6/2!/4/15)',
+			color: 'purple',
+			text: 'Text from five to fifteen',
+			semanticId: 'question',
+			createdTime: 101,
+			presentation: 'highlight',
+		});
+
+		expect(result.kind).toBe('create');
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(2);
+		expect(payload.annotations.map((annotation: any) => annotation.semanticId)).toEqual([
+			'important',
+			'question',
+		]);
+	});
+
+	it('replaces one portable annotation by identity so comments can be updated', async () => {
+		const bookId = 'epub-book-comment';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2)',
+						semanticId: 'important',
+						color: 'yellow',
+						text: 'Marked text',
+						createdTime: 100,
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.replacePortableHighlight(
+			bookId,
+			{
+				cfiRange: 'epubcfi(/6/2!/4/2)',
+				color: 'yellow',
+				text: 'Marked text',
+				semanticId: 'important',
+				createdTime: 100,
+				presentation: 'highlight',
+			},
+			{
+				cfiRange: 'epubcfi(/6/2!/4/2)',
+				color: 'yellow',
+				text: 'Marked text',
+				semanticId: 'important',
+				commentText: 'New comment',
+				hasCommentDivider: true,
+				createdTime: 100,
+				presentation: 'highlight',
+			}
+		);
+
+		expect(result.previous?.commentText).toBeUndefined();
+		expect(result.current.commentText).toBe('New comment');
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			semanticId: 'important',
+			commentText: 'New comment',
+			hasCommentDivider: true,
+		});
+	});
+
 	it('removes one portable annotation by reader highlight identity', async () => {
 		const bookId = 'epub-book-undo';
 		const app = createPortableMockApp({

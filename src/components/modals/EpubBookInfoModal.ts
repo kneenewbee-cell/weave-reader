@@ -1,5 +1,9 @@
 import { Modal, type App, setIcon } from "obsidian";
-import type { BookMetadata, ReadingStats } from "../../services/epub";
+import type {
+	BookMetadata,
+	EpubPortableBookDataLocation,
+	ReadingStats,
+} from "../../services/epub";
 import { i18n } from "../../utils/i18n";
 
 type EpubBookInfoNoteStats = {
@@ -17,6 +21,7 @@ type EpubBookInfoModalOptions = {
 	progress: number;
 	readingStats?: ReadingStats | null;
 	noteStats?: EpubBookInfoNoteStats | null;
+	portableDataLocation?: EpubPortableBookDataLocation | null;
 };
 
 type BookInfoField = {
@@ -287,6 +292,7 @@ export class EpubBookInfoModal extends Modal {
 	}
 
 	private buildFileFields(): BookInfoListField[] {
+		const portableDataLocation = this.options.portableDataLocation;
 		return [
 			{
 				label: i18n.t("epub.bookshelf.bookInfoModal.fileSize"),
@@ -295,6 +301,23 @@ export class EpubBookInfoModal extends Modal {
 			{
 				label: i18n.t("epub.bookshelf.bookInfoModal.filePath"),
 				value: this.options.filePath,
+				multiline: true,
+				mono: true,
+			},
+			{
+				label: i18n.t("epub.bookshelf.bookInfoModal.bookId"),
+				value: normalizeText(portableDataLocation?.bookId),
+				mono: true,
+			},
+			{
+				label: i18n.t("epub.bookshelf.bookInfoModal.dataFolder"),
+				value: normalizeText(portableDataLocation?.bookDir),
+				multiline: true,
+				mono: true,
+			},
+			{
+				label: i18n.t("epub.bookshelf.bookInfoModal.annotationsPath"),
+				value: normalizeText(portableDataLocation?.annotationsPath),
 				multiline: true,
 				mono: true,
 			},
