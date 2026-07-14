@@ -303,8 +303,18 @@ export class EpubAnnotationService {
 		).trim();
 		const semanticSource = String((presentedAnnotation as { semanticSource?: unknown }).semanticSource || "").trim();
 		const chapterTitle = String((presentedAnnotation as { chapterTitle?: unknown }).chapterTitle || "").trim();
+		const chapterRootTitle = String(
+			(presentedAnnotation as { chapterRootTitle?: unknown }).chapterRootTitle || ""
+		).trim();
+		const chapterPath = Array.isArray((presentedAnnotation as { chapterPath?: unknown }).chapterPath)
+			? ((presentedAnnotation as { chapterPath?: unknown[] }).chapterPath || [])
+					.map((entry) => String(entry || "").trim())
+					.filter(Boolean)
+			: [];
+		const chapterHref = String((presentedAnnotation as { chapterHref?: unknown }).chapterHref || "").trim();
 		const commentText = String((presentedAnnotation as { commentText?: unknown }).commentText || "").trim();
 		const chapterIndex = (presentedAnnotation as { chapterIndex?: unknown }).chapterIndex;
+		const spineIndex = (presentedAnnotation as { spineIndex?: unknown }).spineIndex;
 		const createdTime = (presentedAnnotation as { createdTime?: unknown }).createdTime;
 		const updatedAt = (presentedAnnotation as { updatedAt?: unknown }).updatedAt;
 
@@ -324,6 +334,10 @@ export class EpubAnnotationService {
 				: {}),
 			...(typeof chapterIndex === "number" && Number.isFinite(chapterIndex) ? { chapterIndex } : {}),
 			...(chapterTitle ? { chapterTitle } : {}),
+			...(chapterRootTitle ? { chapterRootTitle } : {}),
+			...(chapterPath.length > 0 ? { chapterPath } : {}),
+			...(chapterHref ? { chapterHref } : {}),
+			...(typeof spineIndex === "number" && Number.isFinite(spineIndex) ? { spineIndex } : {}),
 			...(typeof createdTime === "number" && Number.isFinite(createdTime) ? { createdTime } : {}),
 			...(typeof updatedAt === "number" && Number.isFinite(updatedAt) ? { updatedAt } : {}),
 			presentation: "highlight",
@@ -668,6 +682,18 @@ export class EpubAnnotationService {
 					if (!existing.chapterTitle && bh.chapterTitle) {
 						existing.chapterTitle = bh.chapterTitle;
 					}
+					if (!existing.chapterRootTitle && bh.chapterRootTitle) {
+						existing.chapterRootTitle = bh.chapterRootTitle;
+					}
+					if ((!existing.chapterPath || existing.chapterPath.length === 0) && bh.chapterPath?.length) {
+						existing.chapterPath = bh.chapterPath;
+					}
+					if (!existing.chapterHref && bh.chapterHref) {
+						existing.chapterHref = bh.chapterHref;
+					}
+					if (existing.spineIndex === undefined && bh.spineIndex !== undefined) {
+						existing.spineIndex = bh.spineIndex;
+					}
 					if (existing.style === undefined && bh.style !== undefined) {
 						existing.style = bh.style;
 					}
@@ -709,6 +735,10 @@ export class EpubAnnotationService {
 						hasCommentDivider: bh.hasCommentDivider,
 						chapterIndex: bh.chapterIndex,
 						chapterTitle: bh.chapterTitle,
+						chapterRootTitle: bh.chapterRootTitle,
+						chapterPath: bh.chapterPath,
+						chapterHref: bh.chapterHref,
+						spineIndex: bh.spineIndex,
 						sourceFile: primaryLocator?.sourceFile || bh.sourceFile,
 						sourceRef: primaryLocator?.sourceRef || bh.sourceRef,
 						excerptId: primaryLocator?.excerptId || bh.excerptId,

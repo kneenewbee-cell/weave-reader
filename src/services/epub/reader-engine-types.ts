@@ -79,6 +79,12 @@ export interface HighlightClickInfo {
 	text: string;
 	commentText?: string;
 	hasCommentDivider?: boolean;
+	chapterIndex?: number;
+	chapterTitle?: string;
+	chapterRootTitle?: string;
+	chapterPath?: string[];
+	chapterHref?: string;
+	spineIndex?: number;
 	sourceFile: string;
 	sourceRef?: string;
 	excerptId?: string;
@@ -106,6 +112,10 @@ export interface ReaderHighlightInput {
 	hasCommentDivider?: boolean;
 	chapterIndex?: number;
 	chapterTitle?: string;
+	chapterRootTitle?: string;
+	chapterPath?: string[];
+	chapterHref?: string;
+	spineIndex?: number;
 	sourceFile?: string;
 	sourceRef?: string;
 	excerptId?: string;

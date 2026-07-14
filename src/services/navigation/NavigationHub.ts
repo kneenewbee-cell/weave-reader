@@ -48,6 +48,7 @@ function locateToPendingState(locate?: NavigationIntent["locate"]): PendingLocat
 		href: href || undefined,
 		text,
 		flashStyle: locate.flashStyle,
+		flashColor: locate.flashColor,
 		showLocateOverlay: locate.showLocateOverlay,
 	};
 }

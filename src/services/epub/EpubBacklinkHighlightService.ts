@@ -17,6 +17,7 @@ import {
 	type EpubHighlightPersistenceSourceCandidate,
 } from "./epub-highlight-source-path";
 import { isEpubBookmarkManagedVaultPath } from "./epub-bookmark-vault-path";
+import { getEpubPortableDataRoot } from "./semantic/semantic-store";
 import { isSupportedBookPath } from "./book-format";
 import {
 	epubVaultPathsReferToSameBook,
@@ -643,7 +644,11 @@ export class EpubBacklinkHighlightService {
 		): Promise<HighlightSourceFileStamp[] | null> => {
 			const refreshed: HighlightSourceFileStamp[] = [];
 			for (const stamp of stamps) {
-				const current = await this.buildFileStamp(stamp.path);
+				const normalizedPath = normalizePath(String(stamp.path || "").trim());
+				if (!normalizedPath || !this.isPotentialSourceIndexPath(normalizedPath)) {
+					return null;
+				}
+				const current = await this.buildFileStamp(normalizedPath);
 				if (!current || current.mtime !== stamp.mtime || current.size !== stamp.size) {
 					return null;
 				}
@@ -1232,6 +1237,9 @@ export class EpubBacklinkHighlightService {
 		if (!normalizedPath) {
 			return false;
 		}
+		if (this.isGeneratedAnnotationNotePath(normalizedPath)) {
+			return false;
+		}
 		if (isEphemeralEditorHighlightSourcePath(this.app, normalizedPath)) {
 			return false;
 		}
@@ -1252,19 +1260,28 @@ export class EpubBacklinkHighlightService {
 		return normalizedPath.startsWith(`${v2Paths.memory.cards}/`);
 	}
 
+	private isGeneratedAnnotationNotePath(path: string): boolean {
+		const normalizedPath = normalizePath(String(path || "").trim());
+		if (!normalizedPath) {
+			return false;
+		}
+		const root = normalizePath(`${getEpubPortableDataRoot()}/books`);
+		return normalizedPath.startsWith(`${root}/`) && normalizedPath.endsWith("/annotations.md");
+	}
+
 	private getSourceIndexCandidateFiles(): Array<{
 		file: TFile;
 		kind: EpubBacklinkSourceIndexFileKind;
 	}> {
 		const candidates = new Map<string, { file: TFile; kind: EpubBacklinkSourceIndexFileKind }>();
 		for (const file of this.app.vault.getMarkdownFiles()) {
-			if (this.isPluginInternalPath(file.path)) {
+			if (!this.isPotentialSourceIndexPath(file.path)) {
 				continue;
 			}
 			candidates.set(file.path, { file, kind: "markdown" });
 		}
 		for (const file of this.app.vault.getFiles()) {
-			if (this.isPluginInternalPath(file.path)) {
+			if (!this.isPotentialSourceIndexPath(file.path)) {
 				continue;
 			}
 			if (file.extension === "canvas") {
@@ -1287,7 +1304,7 @@ export class EpubBacklinkHighlightService {
 		}
 		const pluginRoots = Array.from(
 			new Set(
-				[this.localPluginId, CURRENT_PLUGIN_ID]
+				[this.localPluginId, CURRENT_PLUGIN_ID, "weave-epub-reader", "my-weave-reader"]
 					.map((pluginId) =>
 						normalizePath(String(getPluginPathsById(this.app as unknown, pluginId).root || "").trim())
 					)

@@ -90,6 +90,22 @@ function createSemanticAnnotationAdapter(options) {
     const chapterTitle = String(
       presentedAnnotation.chapterTitle || ""
     ).trim();
+    const chapterRootTitle = String(
+      presentedAnnotation.chapterRootTitle || ""
+    ).trim();
+    const chapterPath = Array.isArray(presentedAnnotation.chapterPath)
+      ? presentedAnnotation.chapterPath
+          .map((entry) => String(entry || "").trim())
+          .filter(Boolean)
+      : [];
+    const chapterHref = String(
+      presentedAnnotation.chapterHref || ""
+    ).trim();
+    const spineIndex =
+      typeof presentedAnnotation.spineIndex == "number" &&
+      Number.isFinite(presentedAnnotation.spineIndex)
+        ? presentedAnnotation.spineIndex
+        : void 0;
     const commentText = String(
       presentedAnnotation.commentText || ""
     ).trim();
@@ -115,6 +131,10 @@ function createSemanticAnnotationAdapter(options) {
         : {}),
       ...(chapterIndex !== void 0 ? { chapterIndex } : {}),
       ...(chapterTitle ? { chapterTitle } : {}),
+      ...(chapterRootTitle ? { chapterRootTitle } : {}),
+      ...(chapterPath.length > 0 ? { chapterPath } : {}),
+      ...(chapterHref ? { chapterHref } : {}),
+      ...(spineIndex !== void 0 ? { spineIndex } : {}),
       createdTime,
       ...(typeof presentedAnnotation.updatedAt == "number" &&
       Number.isFinite(presentedAnnotation.updatedAt)

@@ -686,6 +686,8 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 				chapterLocateFailed: "未能定位当前章节，请稍后重试",
 				chapterExtractFailed: "未能提取当前章节正文，请稍后重试",
 				exportMarkdownFailed: "导出 Markdown 失败，请重试",
+				annotationNoteUnavailable: "标注笔记功能暂不可用",
+				annotationNoteOpenFailed: "打开标注笔记失败，请重试",
 				markdownExported: "已导出 Markdown：{fileName}",
 				sourceOpenedWithoutLocate: "已打开源文档，但未精确定位到溯源内容",
 				excerptNotesFeatureNotice: "摘录与想法是高级功能，请激活许可证后使用",
@@ -1938,6 +1940,8 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 				chapterLocateFailed: "Unable to locate the current chapter. Please try again",
 				chapterExtractFailed: "Unable to extract the current chapter body. Please try again",
 				exportMarkdownFailed: "Markdown export failed. Please try again",
+				annotationNoteUnavailable: "Annotation note is currently unavailable",
+				annotationNoteOpenFailed: "Failed to open annotation note. Please try again",
 				markdownExported: "Exported Markdown: {fileName}",
 				sourceOpenedWithoutLocate:
 					"Opened the source note, but could not locate the linked excerpt precisely",

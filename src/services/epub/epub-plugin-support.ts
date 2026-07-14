@@ -110,11 +110,22 @@ export function registerEpubProtocolHandler(plugin: Plugin, app: App, logPrefix:
 			return;
 		}
 
+		if (!parsed.cfi) {
+			await linkService.navigateToEpubBook(parsed.filePath, parsed.sourceId);
+			return;
+		}
+
 		await linkService.navigateToEpubLocation(
 			parsed.filePath,
 			parsed.cfi,
 			parsed.text,
-			parsed.sourceId
+			parsed.sourceId,
+			undefined,
+			{
+				flashStyle: parsed.flashStyle,
+				flashColor: parsed.flashColor,
+				showLocateOverlay: parsed.showLocateOverlay,
+			}
 		);
 	});
 }

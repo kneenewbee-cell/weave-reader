@@ -24,6 +24,7 @@ export {
 	loadEffectiveEpubSemanticProfile,
 	normalizeEpubSemanticSettings,
 	notifyEpubSemanticProfileChanged,
+	readAndMaterializeEffectiveEpubPortableAnnotations,
 	readBookEpubPortableAnnotations,
 	readBookEpubSemanticProfile,
 	readEffectiveEpubPortableAnnotations,
@@ -74,6 +75,19 @@ export {
 	resolveEpubPortableBookDataLocation,
 	type EpubPortableBookDataLocation,
 } from "./epub-portable-data-location";
+export {
+	renderEpubAnnotationNoteMarkdown,
+	type EpubAnnotationNoteAnnotationInput,
+	type EpubAnnotationNoteBookInput,
+	type RenderEpubAnnotationNoteMarkdownInput,
+} from "./annotation-note-markdown";
+export {
+	applyAnnotationChapterMetadata,
+	hasAnnotationChapterMetadataChanged,
+	resolveAnnotationChapterMetadata,
+	type EpubAnnotationChapterMetadata,
+	type ResolveAnnotationChapterMetadataInput,
+} from "./annotation-chapter-metadata";
 export type {
 	EpubBookshelfSettings,
 	EpubBookshelfIndexEntry,
@@ -97,6 +111,7 @@ export type {
 	EpubHostCreateCardInput,
 	EpubHostExportBookNotesInput,
 	EpubHostExportChapterInput,
+	EpubHostOpenAnnotationNoteInput,
 	EpubHostIncrementalReadingTopicOption,
 	EpubHostMarkdownAsset,
 	EpubHostReadingPointInput,

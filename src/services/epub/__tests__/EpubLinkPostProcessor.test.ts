@@ -216,6 +216,147 @@ describe('EpubLinkPostProcessor', () => {
 		);
 	});
 
+	it('preserves annotation note styled snippet links for native protocol handling', async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement('div');
+		container.innerHTML = [
+			'<div class="weave-annotation-note-line">',
+			'  <a href="obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi(/6/2)&chapter=3&sid=epubsrc-demo">',
+			'    <mark style="background: rgba(255, 224, 102, 0.62);">Styled text</mark>',
+			'  </a>',
+			'</div>',
+		].join('');
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, {} as any);
+
+		const link = container.querySelector('a');
+		expect(link).not.toBeNull();
+		expect(link!.getAttribute('href')).toContain('obsidian://weave-epub');
+		expect(link!.classList.contains('weave-epub-link')).toBe(false);
+		expect(container.querySelector('mark')?.textContent).toBe('Styled text');
+		expect(navigateSpy).not.toHaveBeenCalled();
+	});
+
+	it('adds chapter and semantic filters to annotation notes', () => {
+		const container = document.createElement('div');
+		container.className = 'markdown-rendered';
+		container.innerHTML = [
+			'<div class="weave-annotation-note-root" data-book-id="book-1"></div>',
+			'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-0">第一章</h2>',
+			'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
+			'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="mistake" data-semantic-label="易错" data-annotation-text="beta mistake">beta</div>',
+			'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-1">第二章</h2>',
+			'<div class="weave-annotation-note-line" data-chapter-key="chapter-1" data-chapter-title="第二章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="gamma theorem">gamma</div>',
+		].join('');
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+
+		const toolbar = container.querySelector<HTMLElement>('.weave-annotation-note-filter');
+		expect(toolbar).not.toBeNull();
+		expect(toolbar?.querySelector('.weave-annotation-note-filter-style')).toBeNull();
+
+		const chapterSelect = toolbar!.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-chapter');
+		const semanticSelect = toolbar!.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-semantic');
+		const searchInput = toolbar!.querySelector<HTMLInputElement>('.weave-annotation-note-filter-search');
+		const count = toolbar!.querySelector<HTMLElement>('.weave-annotation-note-filter-count');
+		expect(chapterSelect?.options.length).toBe(3);
+		expect(semanticSelect?.options.length).toBe(3);
+		expect(count?.textContent).toBe('3 / 3');
+
+		semanticSelect!.value = 'mistake';
+		semanticSelect!.dispatchEvent(new Event('change'));
+		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(1);
+		expect(count?.textContent).toBe('1 / 3');
+
+		semanticSelect!.value = '';
+		chapterSelect!.value = 'chapter-1';
+		chapterSelect!.dispatchEvent(new Event('change'));
+		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(1);
+		expect(container.querySelector<HTMLElement>('.weave-annotation-note-chapter[data-chapter-key="chapter-0"]')?.classList.contains('is-hidden')).toBe(true);
+
+		searchInput!.value = 'alpha';
+		searchInput!.dispatchEvent(new Event('input'));
+		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(0);
+		expect(count?.textContent).toBe('0 / 3');
+	});
+
+	it('mounts annotation note filters after Obsidian renders note chunks separately', async () => {
+		vi.useFakeTimers();
+		try {
+			const page = document.createElement('div');
+			page.className = 'markdown-rendered';
+			document.body.appendChild(page);
+
+			const markerChunk = document.createElement('div');
+			markerChunk.innerHTML = '<div class="weave-annotation-note-root" data-book-id="book-1"></div>';
+			page.appendChild(markerChunk);
+
+			const processor = createEpubLinkPostProcessor({} as any);
+			processor(markerChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			expect(page.querySelector('.weave-annotation-note-filter')).toBeNull();
+
+			const linesChunk = document.createElement('div');
+			linesChunk.innerHTML = [
+				'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-0">第一章</h2>',
+				'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
+			].join('');
+			page.appendChild(linesChunk);
+
+			await vi.advanceTimersByTimeAsync(400);
+			expect(page.querySelector('.weave-annotation-note-filter')).not.toBeNull();
+		} finally {
+			document.body.innerHTML = '';
+			vi.useRealTimers();
+		}
+	});
+
+	it('refreshes annotation note filter options when later rendered chunks add chapters', async () => {
+		const page = document.createElement('div');
+		page.className = 'markdown-rendered';
+		document.body.appendChild(page);
+		try {
+			const firstChunk = document.createElement('div');
+			firstChunk.innerHTML = [
+				'<div class="weave-annotation-note-root" data-book-id="book-1"></div>',
+				'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-0">第一章</h2>',
+				'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha">alpha</div>',
+			].join('');
+			page.appendChild(firstChunk);
+
+			const processor = createEpubLinkPostProcessor({} as any);
+			processor(firstChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+
+			const chapterSelect = page.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-chapter');
+			expect(Array.from(chapterSelect?.options || []).map((option) => option.textContent)).toEqual([
+				'全部章节',
+				'第一章',
+			]);
+
+			const secondChunk = document.createElement('div');
+			secondChunk.innerHTML = [
+				'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-1">第二章</h2>',
+				'<div class="weave-annotation-note-line" data-chapter-key="chapter-1" data-chapter-title="第二章" data-semantic-id="mistake" data-semantic-label="易错" data-annotation-text="beta">beta</div>',
+			].join('');
+			page.appendChild(secondChunk);
+			processor(secondChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			await Promise.resolve();
+
+			expect(Array.from(chapterSelect?.options || []).map((option) => option.textContent)).toEqual([
+				'全部章节',
+				'第一章',
+				'第二章',
+			]);
+			expect(page.querySelector('.weave-annotation-note-filter-count')?.textContent).toBe('2 / 2');
+		} finally {
+			document.body.innerHTML = '';
+		}
+	});
+
 	it('supports legacy tuanki-cfi equals links even when the anchor is not marked as an internal link', async () => {
 		const navigateSpy = vi
 			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')

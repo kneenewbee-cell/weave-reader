@@ -12,6 +12,7 @@ export interface EpubPortableBookDataLocation {
 	bookDir: string;
 	bookMetadataPath: string;
 	annotationsPath: string;
+	annotationsMarkdownPath: string;
 	semanticProfilePath: string;
 	bookmarksPath: string;
 	readingStatePath: string;
@@ -42,6 +43,7 @@ export function resolveEpubPortableBookDataLocation(
 		bookDir,
 		bookMetadataPath: getEpubPortableBookPath(safeBookId, "book.json"),
 		annotationsPath: getEpubPortableBookPath(safeBookId, "annotations.json"),
+		annotationsMarkdownPath: getEpubPortableBookPath(safeBookId, "annotations.md"),
 		semanticProfilePath: getEpubPortableBookPath(safeBookId, "semantic-profile.json"),
 		bookmarksPath: getEpubPortableBookPath(safeBookId, "bookmarks.json"),
 		readingStatePath: getEpubPortableBookPath(safeBookId, "reading-state.json"),

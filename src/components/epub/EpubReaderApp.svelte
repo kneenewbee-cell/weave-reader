@@ -21,7 +21,7 @@
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
 	import {
@@ -172,6 +172,7 @@
 			exportCurrentChapterMarkedToMarkdown?: () => Promise<void>;
 			exportCurrentChapterHighlightsToMarkdown?: () => Promise<void>;
 			exportBookHighlightsToMarkdown?: (event?: MouseEvent) => Promise<void>;
+			openAnnotationNote?: () => Promise<void>;
 			getExcerptSettings: () => EpubExcerptSettings;
 			updateExcerptSettings: (patch: Partial<EpubExcerptSettings>) => Promise<void>;
 			prevPage: () => void | Promise<void>;
@@ -234,6 +235,7 @@
 	}
 
 	let readerService: EpubReaderEngine = untrack(() => createEpubReaderEngine(app));
+	let annotationTocItemsPromise: Promise<TocItem[]> | null = null;
 	let storageService = untrack(() => getEpubStorageService(app));
 	let bookmarkService = untrack(() => new EpubBookmarkService(app));
 	let annotationService = untrack(() => new EpubAnnotationService(storageService));
@@ -1961,6 +1963,12 @@
 			text: info.text,
 			...(info.commentText ? { commentText: info.commentText } : {}),
 			...(info.hasCommentDivider ? { hasCommentDivider: true } : {}),
+			...(typeof info.chapterIndex === 'number' ? { chapterIndex: info.chapterIndex } : {}),
+			...(info.chapterTitle ? { chapterTitle: info.chapterTitle } : {}),
+			...(info.chapterRootTitle ? { chapterRootTitle: info.chapterRootTitle } : {}),
+			...(info.chapterPath?.length ? { chapterPath: info.chapterPath } : {}),
+			...(info.chapterHref ? { chapterHref: info.chapterHref } : {}),
+			...(typeof info.spineIndex === 'number' ? { spineIndex: info.spineIndex } : {}),
 			...(info.sourceFile ? { sourceFile: info.sourceFile } : {}),
 			...(info.sourceRef ? { sourceRef: info.sourceRef } : {}),
 			...(info.excerptId ? { excerptId: info.excerptId } : {}),
@@ -1991,6 +1999,12 @@
 			text: highlight.text || '',
 			commentText: highlight.commentText,
 			hasCommentDivider: highlight.hasCommentDivider,
+			chapterIndex: highlight.chapterIndex,
+			chapterTitle: highlight.chapterTitle,
+			chapterRootTitle: highlight.chapterRootTitle,
+			chapterPath: highlight.chapterPath,
+			chapterHref: highlight.chapterHref,
+			spineIndex: highlight.spineIndex,
 			sourceFile: highlight.sourceFile || '',
 			sourceRef: highlight.sourceRef,
 			excerptId: highlight.excerptId,
@@ -2523,6 +2537,33 @@
 			return null;
 		}
 		return host;
+	}
+
+	async function openAnnotationNote() {
+		if (!book?.id) {
+			new Notice(t('epub.reader.bookNotReady'));
+			return;
+		}
+		try {
+			const plugin = getMarkdownExportHost();
+			if (!plugin?.openEpubAnnotationNote) {
+				new Notice(t('epub.reader.annotationNoteUnavailable'));
+				return;
+			}
+			const currentPosition = readerReady ? readerService.getCurrentPosition() : book.currentPosition;
+			await plugin.openEpubAnnotationNote({
+				bookId: book.id,
+				filePath,
+				currentCfi: String(currentPosition?.cfi || '').trim(),
+				currentChapterIndex:
+					typeof currentPosition?.chapterIndex === 'number' && Number.isFinite(currentPosition.chapterIndex)
+						? currentPosition.chapterIndex
+						: undefined,
+			});
+		} catch (error) {
+			logger.error('[EpubReaderApp] Failed to open annotation note:', error);
+			new Notice(t('epub.reader.annotationNoteOpenFailed'));
+		}
 	}
 
 	function hasCreateReadingPointCapability(): boolean {
@@ -3201,6 +3242,35 @@
 			return readerService.getChapterLocationLabel(format);
 		}
 		return readerService.getCurrentChapterTitle();
+	}
+
+	async function getAnnotationTocItems(): Promise<TocItem[]> {
+		if (!annotationTocItemsPromise) {
+			annotationTocItemsPromise = readerService.getTableOfContents().catch((error) => {
+				annotationTocItemsPromise = null;
+				logger.warn('[EpubReaderApp] Failed to load TOC for annotation metadata:', error);
+				return [];
+			});
+		}
+		return annotationTocItemsPromise;
+	}
+
+	async function resolveSelectionChapterMetadata(cfiRange: string) {
+		const tocItems = await getAnnotationTocItems();
+		const sectionHref =
+			readerService.getSectionHrefForCfi?.(cfiRange) ||
+			readerService.getCurrentChapterHref?.() ||
+			'';
+		const sectionIndex =
+			readerService.getSectionIndexForCfi?.(cfiRange) ??
+			readerService.getCurrentChapterIndex();
+		return resolveAnnotationChapterMetadata({
+			tocItems,
+			cfiRange,
+			sectionHref,
+			spineIndex: sectionIndex,
+			fallbackChapterTitle: resolveExcerptChapterTitle(),
+		});
 	}
 
 	function resolveExcerptChapterLabelMaxLength(): number {
@@ -4295,6 +4365,12 @@
 			text: highlight.text,
 			commentText: highlight.commentText,
 			hasCommentDivider: highlight.hasCommentDivider,
+			chapterIndex: highlight.chapterIndex,
+			chapterTitle: highlight.chapterTitle,
+			chapterRootTitle: highlight.chapterRootTitle,
+			chapterPath: highlight.chapterPath,
+			chapterHref: highlight.chapterHref,
+			spineIndex: highlight.spineIndex,
 			sourceFile: highlight.sourceFile || '',
 			sourceRef: highlight.sourceRef,
 			excerptId: highlight.excerptId,
@@ -4467,7 +4543,7 @@
 		}
 		if (book) {
 			const bookId = book.id;
-			const highlight: ReaderHighlight = {
+			const baseHighlight: ReaderHighlight = {
 				cfiRange,
 				color: color || semantic?.color || 'yellow',
 				...(style ? { style } : {}),
@@ -4485,6 +4561,8 @@
 				presentation: 'highlight',
 			};
 			void enqueueAnnotationMutation(async () => {
+				const chapterMetadata = await resolveSelectionChapterMetadata(cfiRange);
+				const highlight = applyAnnotationChapterMetadata(baseHighlight, chapterMetadata);
 				const result = await annotationService.savePortableHighlightWithPolicy(bookId, highlight);
 				if (result.kind === 'create') {
 					annotationUndoStack.pushCreate(bookId, result.current);
@@ -6091,6 +6169,7 @@
 				? exportCurrentChapterHighlightsToMarkdown
 				: undefined,
 			exportBookHighlightsToMarkdown: hasExcerptNotesCapability() ? exportBookHighlightsToMarkdown : undefined,
+			openAnnotationNote,
 			getExcerptSettings: () => excerptSettings,
 			updateExcerptSettings: applyAndPersistExcerptSettings,
 			prevPage: handlePrevPage,

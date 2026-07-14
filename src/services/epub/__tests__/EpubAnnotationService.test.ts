@@ -20,6 +20,7 @@ import { EpubAnnotationService } from '../EpubAnnotationService';
 import { PROFILE_FORMAT, PROFILE_VERSION } from '../semantic/profiles';
 import {
 	clearBookEpubPortableSemanticAnnotations,
+	readAndMaterializeEffectiveEpubPortableAnnotations,
 	readEffectiveEpubPortableAnnotations,
 } from '../semantic/semantic-store';
 
@@ -509,6 +510,56 @@ describe('EpubAnnotationService', () => {
 				presentation: 'highlight',
 			}),
 		]);
+	});
+
+	it('materializes legacy fallback annotations into the current book folder', async () => {
+		const currentBookId = 'epub-book-rv441q';
+		const legacyBookId = 'epub-book-i6zqes';
+		const app = createPortableMockApp(
+			{
+				'weave/epub-data/index.json': {
+					books: {
+						[currentBookId]: { bookId: currentBookId },
+					},
+				},
+				[`weave/epub-data/books/${legacyBookId}/annotations.json`]: {
+					format: 'weave-reader-annotations/v1',
+					version: 1,
+					bookId: legacyBookId,
+					updatedAt: 2,
+					annotations: [
+						{
+							cfiRange: 'epubcfi(/6/4)',
+							semanticId: 'important',
+							text: 'Portable highlight',
+							createdTime: 3,
+						},
+					],
+				},
+			},
+			[
+				'weave/epub-data/books',
+				`weave/epub-data/books/${currentBookId}`,
+				`weave/epub-data/books/${legacyBookId}`,
+			]
+		) as any;
+
+		await expect(
+			readAndMaterializeEffectiveEpubPortableAnnotations(app, currentBookId)
+		).resolves.toMatchObject({
+			bookId: currentBookId,
+			authoritative: true,
+			annotations: [expect.objectContaining({ semanticId: 'important' })],
+		});
+
+		const writtenPayload = JSON.parse(
+			await app.vault.adapter.read(`weave/epub-data/books/${currentBookId}/annotations.json`)
+		);
+		expect(writtenPayload).toMatchObject({
+			bookId: currentBookId,
+			authoritative: true,
+			annotations: [expect.objectContaining({ text: 'Portable highlight' })],
+		});
 	});
 
 	it('clears effective portable annotations and prevents old book id fallback', async () => {

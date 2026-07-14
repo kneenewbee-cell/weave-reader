@@ -36,6 +36,10 @@ export interface EpubDisplayHighlight {
 	createdTime: number;
 	chapterIndex?: number;
 	chapterTitle?: string;
+	chapterRootTitle?: string;
+	chapterPath?: string[];
+	chapterHref?: string;
+	spineIndex?: number;
 	pageLabel?: string;
 	sourceFile?: string;
 	sourceRef?: string;
@@ -587,6 +591,13 @@ export class EpubHighlightViewSnapshotService {
 					? highlight.chapterIndex
 					: undefined,
 			chapterTitle: String(highlight.chapterTitle || "").trim() || undefined,
+			chapterRootTitle: String(highlight.chapterRootTitle || "").trim() || undefined,
+			chapterPath: highlight.chapterPath?.length ? highlight.chapterPath : undefined,
+			chapterHref: String(highlight.chapterHref || "").trim() || undefined,
+			spineIndex:
+				typeof highlight.spineIndex === "number" && Number.isFinite(highlight.spineIndex)
+					? highlight.spineIndex
+					: undefined,
 			pageLabel: pageLabel || "",
 			sourceFile: highlight.sourceFile,
 			sourceRef: highlight.sourceRef,

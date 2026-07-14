@@ -66,6 +66,13 @@ export interface EpubHostExportBookNotesInput {
 	appendTargetPath?: string | null;
 }
 
+export interface EpubHostOpenAnnotationNoteInput {
+	bookId: string;
+	filePath: string;
+	currentCfi?: string;
+	currentChapterIndex?: number;
+}
+
 export interface EpubHostSelectedTextAISplitMenuOptions {
 	event: MouseEvent | KeyboardEvent;
 	selectedText: string;
@@ -120,6 +127,7 @@ export interface EpubHostCapabilities {
 	scheduleEpubChapterForIncrementalReading?: (input: EpubHostScheduleChapterInput) => Promise<void>;
 	exportEpubChapterToMarkdown?: (input: EpubHostExportChapterInput) => Promise<void>;
 	exportEpubBookNotesToMarkdown?: (input: EpubHostExportBookNotesInput) => Promise<void>;
+	openEpubAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
 	markEpubResumePointFromReader?: (input: EpubHostResumePointInput) => Promise<void>;
 	openSelectedTextAISplitMenu?: (options: EpubHostSelectedTextAISplitMenuOptions) => void;
 	openAISplitConfigModal?: (input?: EpubHostAISplitConfigModalInput) => unknown;
@@ -186,6 +194,7 @@ const EPUB_HOST_CAPABILITY_KEYS: Array<keyof EpubHostCapabilities> = [
 	"scheduleEpubChapterForIncrementalReading",
 	"exportEpubChapterToMarkdown",
 	"exportEpubBookNotesToMarkdown",
+	"openEpubAnnotationNote",
 	"markEpubResumePointFromReader",
 	"openSelectedTextAISplitMenu",
 	"openAISplitConfigModal",

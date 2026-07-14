@@ -5,6 +5,7 @@ import { domInstanceOf } from "./utils/dom-instance-of";
 
 import { EpubDataManagementModalObsidian } from "./components/epub/EpubDataManagementModalObsidian";
 import { DEFAULT_EPUB_BOOKMARK_FOLDER } from "./config/epub-user-vault-folders";
+import { DirectoryUtils } from "./utils/directory-utils";
 import { isSupportedBookFile, isSupportedBookPath } from "./services/epub/book-format";
 import {
 	dispatchEpubBookshelfDataChanged,
@@ -26,7 +27,19 @@ import {
 	DEFAULT_EPUB_ANNOTATION_SEMANTICS,
 	DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
 	DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
+	mergeProfiles,
+	readAndMaterializeEffectiveEpubPortableAnnotations,
+	readBookEpubSemanticProfile,
+	readGlobalEpubSemanticProfile,
+	renderEpubAnnotationNoteMarkdown,
+	resolveEpubPortableBookDataLocation,
+	resolveAnnotationChapterMetadata,
+	applyAnnotationChapterMetadata,
+	hasAnnotationChapterMetadataChanged,
+	writeBookEpubPortableAnnotations,
+	type EpubAnnotationNoteAnnotationInput,
 	type EpubAnnotationSemantic,
+	type EpubHostOpenAnnotationNoteInput,
 	type TocItem,
 	type EpubReaderUiMode,
 } from "./services/epub";
@@ -97,6 +110,7 @@ import {
 	type InterfaceLanguagePreference,
 } from "./utils/i18n";
 import { vaultStorage } from "./utils/vault-local-storage";
+import { openAnnotationNoteFileWithExistingLeaf } from "./services/epub/open-annotation-note-file";
 import type { AIConfig } from "./types/plugin-settings";
 import {
 	DEFAULT_BOOKSHELF_DISPLAY_MODE,
@@ -848,5 +862,87 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		});
 		this.settings.epubMarkdownExportLastFolder = this.extractParentFolder(exportedFile.path);
 		await this.persistPreferenceSettings();
+	}
+
+	async openEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
+		const location = resolveEpubPortableBookDataLocation(input.bookId);
+		const storage = this.getEpubStorageService();
+		const book = await storage.getBook(location.bookId);
+		const sourcePath = normalizePath(String(input.filePath || book?.filePath || "").trim());
+		const sourceFile = sourcePath
+			? this.app.vault.getAbstractFileByPath(sourcePath)
+			: null;
+		const fallbackTitle =
+			sourceFile instanceof TFile
+				? sourceFile.basename
+				: String(location.bookId || "EPUB");
+		const payload = await readAndMaterializeEffectiveEpubPortableAnnotations(this.app, location.bookId);
+		const [globalProfile, bookProfile] = await Promise.all([
+			readGlobalEpubSemanticProfile(this.app, this.settings),
+			readBookEpubSemanticProfile(this.app, location.bookId),
+		]);
+		const effectiveProfile = mergeProfiles(globalProfile, bookProfile);
+		let tocItems: TocItem[] = [];
+		if (sourcePath) {
+			try {
+				tocItems = await loadPublicationTocItems(this.app, sourcePath);
+			} catch (error) {
+				logger.warn("[WeaveReader] Failed to load EPUB TOC for annotation note:", error);
+			}
+		}
+		const rawAnnotations = (payload?.annotations || []) as EpubAnnotationNoteAnnotationInput[];
+		let metadataChanged = false;
+		const enrichedAnnotations = rawAnnotations.map((annotation) => {
+			const metadata = resolveAnnotationChapterMetadata({
+				tocItems,
+				cfiRange: annotation.cfiRange,
+				spineIndex:
+					typeof annotation.spineIndex === "number" && Number.isFinite(annotation.spineIndex)
+						? annotation.spineIndex
+						: undefined,
+				fallbackChapterTitle: annotation.chapterTitle,
+			});
+			const enriched = applyAnnotationChapterMetadata(annotation as Record<string, unknown>, metadata) as EpubAnnotationNoteAnnotationInput;
+			if (hasAnnotationChapterMetadataChanged(annotation as Record<string, unknown>, enriched as Record<string, unknown>)) {
+				metadataChanged = true;
+			}
+			return enriched;
+		});
+		if (metadataChanged) {
+			await writeBookEpubPortableAnnotations(this.app, location.bookId, enrichedAnnotations);
+		}
+		const markdown = renderEpubAnnotationNoteMarkdown({
+			bookId: location.bookId,
+			book: {
+				title: book?.metadata?.title || fallbackTitle,
+				author: book?.metadata?.author || "",
+				filePath: sourcePath || book?.filePath || input.filePath,
+				sourceId: book?.sourceId,
+				currentCfi:
+					String(input.currentCfi || book?.currentPosition?.cfi || "").trim() || undefined,
+				currentChapterIndex:
+					typeof input.currentChapterIndex === "number" &&
+					Number.isFinite(input.currentChapterIndex)
+						? input.currentChapterIndex
+						: typeof book?.currentPosition?.chapterIndex === "number"
+							? book.currentPosition.chapterIndex
+							: undefined,
+			},
+			annotations: enrichedAnnotations,
+			semanticProfile: effectiveProfile,
+		});
+
+		await DirectoryUtils.ensureDirForFile(this.app.vault.adapter, location.annotationsMarkdownPath);
+		const existing = this.app.vault.getAbstractFileByPath(location.annotationsMarkdownPath);
+		let noteFile: TFile;
+		const normalizedMarkdown = markdown.endsWith("\n") ? markdown : `${markdown}\n`;
+		if (existing instanceof TFile) {
+			await this.app.vault.modify(existing, normalizedMarkdown);
+			noteFile = existing;
+		} else {
+			noteFile = await this.app.vault.create(location.annotationsMarkdownPath, normalizedMarkdown);
+		}
+
+		await openAnnotationNoteFileWithExistingLeaf(this.app, noteFile);
 	}
 }

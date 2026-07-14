@@ -279,6 +279,24 @@ export async function readEffectiveEpubPortableAnnotations(
 			: emptyPayload;
 }
 
+export async function readAndMaterializeEffectiveEpubPortableAnnotations(
+	app: App,
+	bookId: unknown
+): Promise<EpubPortableAnnotationsPayload> {
+	const safeBookId = safeEpubSemanticBookId(bookId);
+	const current = await readBookEpubPortableAnnotations(app, safeBookId);
+	if (current && (current.annotations.length > 0 || current.authoritative === true)) {
+		return { ...current, bookId: safeBookId };
+	}
+
+	const effective = await readEffectiveEpubPortableAnnotations(app, safeBookId);
+	if (effective.annotations.length === 0) {
+		return effective;
+	}
+
+	return writeBookEpubPortableAnnotations(app, safeBookId, effective.annotations);
+}
+
 export async function writeBookEpubPortableAnnotations(
 	app: App,
 	bookId: unknown,

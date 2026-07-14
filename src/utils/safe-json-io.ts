@@ -8,12 +8,24 @@
  * 备份存储位置：.obsidian/plugins/<current-plugin-id>/backups/
  */
 
-import { getPluginPaths } from "../config/paths";
+import { getPluginPaths, getPluginPathsById } from "../config/paths";
 import { DirectoryUtils } from "./directory-utils";
 import { logger } from "./logger";
 
 function getBackupDir(app?: { vault: { configDir: string } }): string {
 	return `${getPluginPaths(app).backups}/json-recovery`;
+}
+
+function getBackupDirs(app?: { vault: { configDir: string } }): string[] {
+	const legacyPluginIds = ["weave-epub-reader", "my-weave-reader", "weave"];
+	return Array.from(
+		new Set([
+			getBackupDir(app),
+			...legacyPluginIds.map(
+				(pluginId) => `${getPluginPathsById(app, pluginId).backups}/json-recovery`
+			),
+		])
+	);
 }
 
 /**
@@ -25,6 +37,11 @@ function toBackupPath(vaultPath: string, app?: { vault: { configDir: string } })
 	return `${getBackupDir(app)}/${safeName}`;
 }
 
+function toBackupPathInDir(vaultPath: string, backupDir: string): string {
+	const safeName = vaultPath.replace(/[/\\]/g, "__");
+	return `${backupDir}/${safeName}`;
+}
+
 export async function readJsonBackup<T = unknown>(
 	adapter: {
 		read: (path: string) => Promise<string>;
@@ -33,16 +50,20 @@ export async function readJsonBackup<T = unknown>(
 	filePath: string,
 	app?: { vault: { configDir: string } }
 ): Promise<{ data: T; raw: string } | null> {
-	const backupPath = toBackupPath(filePath, app);
-	if (!(await adapter.exists(backupPath))) {
-		return null;
+	for (const backupDir of getBackupDirs(app)) {
+		const backupPath = toBackupPathInDir(filePath, backupDir);
+		if (!(await adapter.exists(backupPath))) {
+			continue;
+		}
+
+		const backup = await adapter.read(backupPath);
+		return {
+			data: JSON.parse(backup) as T,
+			raw: backup,
+		};
 	}
 
-	const backup = await adapter.read(backupPath);
-	return {
-		data: JSON.parse(backup) as T,
-		raw: backup,
-	};
+	return null;
 }
 
 export async function hasValidJsonBackup(

@@ -185,6 +185,23 @@ function createMockApp(
 }
 
 describe('EpubBacklinkHighlightService', () => {
+	it('does not treat generated annotation notes as editable backlink sources', async () => {
+		const { app } = createMockApp({
+			'weave/epub-data/books/epub-book-1/annotations.md': [
+				'<div class="weave-annotation-note-root" data-book-id="epub-book-1"></div>',
+				'<div class="weave-annotation-note-line">',
+				'<a href="obsidian://weave-reader/open?file=Books%2Fdemo.epub&cfi=readium%3Aold&text=Old">Old</a>',
+				'</div>',
+			].join('\n'),
+		});
+		const service = new EpubBacklinkHighlightService(app);
+
+		expect(
+			service.isPotentialHighlightSourcePath('weave/epub-data/books/epub-book-1/annotations.md')
+		).toBe(false);
+		await expect(service.collectHighlights('Books/demo.epub')).resolves.toEqual([]);
+	});
+
 	it('collects current and legacy epub callouts while ignoring same-name books in other folders', async () => {
 		const noteContent = [
 			'> [!EPUB|green] [[Books/demo.epub#weave-cfi=readium%3Aalpha|Demo]] 2026-03-28 12:00',

@@ -81,6 +81,8 @@ export class EpubView extends ItemView {
 	private inlineSidebarBtn: HTMLButtonElement | null = null;
 	private autoInsertBtn: HTMLElement | null = null;
 	private inlineAutoInsertBtn: HTMLButtonElement | null = null;
+	private annotationNoteBtn: HTMLElement | null = null;
+	private inlineAnnotationNoteBtn: HTMLButtonElement | null = null;
 	private screenshotBtn: HTMLElement | null = null;
 	private inlineScreenshotBtn: HTMLButtonElement | null = null;
 	private saveAsImageBtn: HTMLElement | null = null;
@@ -139,6 +141,7 @@ export class EpubView extends ItemView {
 		exportCurrentChapterMarkedToMarkdown?: () => Promise<void>;
 		exportCurrentChapterHighlightsToMarkdown?: () => Promise<void>;
 		exportBookHighlightsToMarkdown?: (event?: MouseEvent) => Promise<void>;
+		openAnnotationNote?: () => Promise<void>;
 		getExcerptSettings?: () => EpubExcerptSettings;
 		updateExcerptSettings?: (patch: Partial<EpubExcerptSettings>) => Promise<void>;
 		prevPage?: () => void | Promise<void>;
@@ -335,7 +338,11 @@ export class EpubView extends ItemView {
 	}
 
 	private areHeaderActionsMounted(): boolean {
-		return Boolean(this.autoInsertBtn?.isConnected);
+		return Boolean(
+			this.annotationNoteBtn?.isConnected ||
+			this.screenshotBtn?.isConnected ||
+			this.sidebarBtn?.isConnected
+		);
 	}
 
 	private clearHeaderActionRefs(): void {
@@ -343,6 +350,7 @@ export class EpubView extends ItemView {
 		this.saveAsImageBtn = null;
 		this.screenshotBtn = null;
 		this.autoInsertBtn = null;
+		this.annotationNoteBtn = null;
 		this.bookmarkBtn = null;
 		this.readingReferenceBtn = null;
 		this.flowBtn = null;
@@ -367,14 +375,8 @@ export class EpubView extends ItemView {
 		}
 
 		const registerExcerptHeaderActions = () => {
-			this.autoInsertBtn = this.addAction("zap", this.t("views.epubView.label.autoModeToolbar"), () => {
-				if (!this.canUseExcerptNotes()) {
-					this.showPremiumFeaturePreview(PREMIUM_FEATURES.EPUB_EXCERPT_NOTES);
-					return;
-				}
-				this.autoInsertEnabled = !this.autoInsertEnabled;
-				this.updateAutoInsertBtn();
-				this.actionHandlers.setAutoInsert?.(this.autoInsertEnabled);
+			this.annotationNoteBtn = this.addAction("notebook-pen", this.t("views.epubView.label.annotationNote"), () => {
+				void this.actionHandlers.openAnnotationNote?.();
 			});
 			this.screenshotBtn = this.addAction(
 				"camera",
@@ -1247,17 +1249,11 @@ export class EpubView extends ItemView {
 				this.actionHandlers.setScreenshotMode?.(this.screenshotModeActive);
 			}
 		);
-		this.inlineAutoInsertBtn = this.appendInlineActionButton(
-			"zap",
-			this.t("views.epubView.label.autoModeOff"),
+		this.inlineAnnotationNoteBtn = this.appendInlineActionButton(
+			"notebook-pen",
+			this.t("views.epubView.label.annotationNote"),
 			() => {
-				if (!this.canUseExcerptNotes()) {
-					this.showPremiumFeaturePreview(PREMIUM_FEATURES.EPUB_EXCERPT_NOTES);
-					return;
-				}
-				this.autoInsertEnabled = !this.autoInsertEnabled;
-				this.updateAutoInsertBtn();
-				this.actionHandlers.setAutoInsert?.(this.autoInsertEnabled);
+				void this.actionHandlers.openAnnotationNote?.();
 			}
 		);
 		this.inlineFlowBtn = this.appendInlineActionButton(
@@ -1374,6 +1370,7 @@ export class EpubView extends ItemView {
 		this.updateSaveAsImageBtn();
 		this.updateScreenshotBtn();
 		this.updateAutoInsertBtn();
+		this.updateAnnotationNoteBtn();
 		this.updateReadingReferencePointBtn();
 		this.updateFlowBtn();
 		this.updateLayoutBtn();
@@ -1695,6 +1692,7 @@ export class EpubView extends ItemView {
 		this.inlineSaveAsImageBtn = null;
 		this.inlineScreenshotBtn = null;
 		this.inlineAutoInsertBtn = null;
+		this.inlineAnnotationNoteBtn = null;
 		this.inlineFlowBtn = null;
 		this.inlineLayoutBtn = null;
 		this.inlineCanvasDirBtn = null;
@@ -2047,6 +2045,21 @@ export class EpubView extends ItemView {
 		this.applyActionButtonState(this.inlineAutoInsertBtn, {
 			label,
 			active: this.canUseExcerptNotes() ? this.autoInsertEnabled : false,
+			visible,
+		});
+	}
+
+	private updateAnnotationNoteBtn(): void {
+		const label = this.t("views.epubView.label.annotationNote");
+		const visible = Boolean(this.filePath && this.actionHandlers.openAnnotationNote);
+		this.applyActionButtonState(this.annotationNoteBtn, {
+			label,
+			active: false,
+			visible,
+		});
+		this.applyActionButtonState(this.inlineAnnotationNoteBtn, {
+			label,
+			active: false,
 			visible,
 		});
 	}

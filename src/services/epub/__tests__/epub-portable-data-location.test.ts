@@ -13,6 +13,7 @@ describe("epub portable data location", () => {
 			bookDir: "weave/epub-data/books/epub-book-rv441q",
 			bookMetadataPath: "weave/epub-data/books/epub-book-rv441q/book.json",
 			annotationsPath: "weave/epub-data/books/epub-book-rv441q/annotations.json",
+			annotationsMarkdownPath: "weave/epub-data/books/epub-book-rv441q/annotations.md",
 			semanticProfilePath: "weave/epub-data/books/epub-book-rv441q/semantic-profile.json",
 			bookmarksPath: "weave/epub-data/books/epub-book-rv441q/bookmarks.json",
 			readingStatePath: "weave/epub-data/books/epub-book-rv441q/reading-state.json",

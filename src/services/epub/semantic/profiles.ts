@@ -598,6 +598,10 @@ function toStoredAnnotation(annotation) {
     "hasCommentDivider",
     "chapterIndex",
     "chapterTitle",
+    "chapterRootTitle",
+    "chapterPath",
+    "chapterHref",
+    "spineIndex",
     "createdTime",
     "updatedAt"
   ];
