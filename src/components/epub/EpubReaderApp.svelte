@@ -21,7 +21,7 @@
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubStorageService, isBookCompleted, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubHost, resolveEpubWeaveOfficialAPI, warmEpubAnnotationIndexForPaths } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
 	import {
@@ -58,6 +58,10 @@
 		canReuseExistingBook,
 		resolveBookLoadRestoredPosition,
 	} from '../../services/epub/epub-reader-book-load-helpers';
+	import {
+		findEpubPortableBookIdByIdentity,
+		resolveEpubPortableBookDataLocation,
+	} from '../../services/epub/epub-portable-data-location';
 	import {
 		EpubAnnotationUndoStack,
 		type EpubAnnotationUndoPatch,
@@ -173,6 +177,7 @@
 			exportCurrentChapterHighlightsToMarkdown?: () => Promise<void>;
 			exportBookHighlightsToMarkdown?: (event?: MouseEvent) => Promise<void>;
 			openAnnotationNote?: () => Promise<void>;
+			openAnnotationVersions?: () => Promise<void>;
 			getExcerptSettings: () => EpubExcerptSettings;
 			updateExcerptSettings: (patch: Partial<EpubExcerptSettings>) => Promise<void>;
 			prevPage: () => void | Promise<void>;
@@ -251,6 +256,7 @@
 	let semanticSettingsLoadToken = 0;
 
 	let book = $state<EpubBook | null>(null);
+	let portableBookId = $state('');
 	let loading = $state(true);
 	let bookLoadSlowWarning = $state(false);
 	let errorMsg = $state('');
@@ -1520,7 +1526,7 @@
 			return;
 		}
 		void getEpubAnnotationIndexService(app).prefetchBook({
-			bookId: loadedBook.id,
+			bookId: portableBookId || loadedBook.id,
 			filePath: targetFilePath,
 			showStrikethroughHighlights: excerptSettings.showStrikethroughInSidebar,
 			annotationService,
@@ -1537,7 +1543,7 @@
 		}
 		const nextRevision = annotationRevision + 1;
 		highlightViewSnapshotService.publishFromHighlights({
-			bookId: book.id,
+			bookId: getCurrentAnnotationBookId(),
 			filePath,
 			showStrikethroughHighlights: excerptSettings.showStrikethroughInSidebar,
 			revision: nextRevision,
@@ -1570,12 +1576,46 @@
 		return host?.settings || {};
 	}
 
+	async function resolvePortableBookIdForBook(
+		targetBook: EpubBook | null | undefined,
+		targetFilePath = filePath
+	): Promise<string> {
+		const runtimeBookId = String(targetBook?.id || '').trim();
+		if (!runtimeBookId) {
+			return '';
+		}
+		return (
+			await findEpubPortableBookIdByIdentity(app, {
+				bookId: runtimeBookId,
+				sourceId: targetBook?.sourceId,
+				sourceFingerprint: targetBook?.sourceFingerprint,
+				filePath: targetFilePath || targetBook?.filePath,
+				knownPaths: targetBook?.filePath && targetBook.filePath !== targetFilePath
+					? [targetBook.filePath]
+					: [],
+			})
+		) || runtimeBookId;
+	}
+
+	async function syncPortableBookIdForCurrentBook(): Promise<string> {
+		const nextBookId = await resolvePortableBookIdForBook(book, filePath);
+		if (nextBookId) {
+			portableBookId = nextBookId;
+		}
+		return nextBookId;
+	}
+
+	function getCurrentAnnotationBookId(): string {
+		return portableBookId || String(book?.id || '').trim();
+	}
+
 	async function refreshSemanticSettings(options?: { reloadHighlights?: boolean }): Promise<void> {
 		const token = ++semanticSettingsLoadToken;
 		try {
 			const fallbackSettings = getHostSemanticSettings();
-			const nextSettings = book?.id
-				? (await loadEffectiveEpubSemanticProfile(app, book.id, fallbackSettings)).settings
+			const semanticBookId = book?.id ? await syncPortableBookIdForCurrentBook() : '';
+			const nextSettings = semanticBookId
+				? (await loadEffectiveEpubSemanticProfile(app, semanticBookId, fallbackSettings)).settings
 				: normalizeEpubSemanticSettings(fallbackSettings);
 			if (componentDisposed || token !== semanticSettingsLoadToken) {
 				return;
@@ -2213,21 +2253,25 @@
 	}
 
 	async function applyAnnotationUndoPatch(patch: EpubAnnotationUndoPatch): Promise<boolean> {
-		if (!book || patch.bookId !== book.id) {
+		if (!book) {
+			return false;
+		}
+		const currentAnnotationBookId = getCurrentAnnotationBookId();
+		if (patch.bookId !== book.id && patch.bookId !== currentAnnotationBookId) {
 			return false;
 		}
 		if (patch.kind === 'delete') {
-			await annotationService.removePortableHighlight(patch.bookId, patch.highlight);
+			await annotationService.removePortableHighlight(currentAnnotationBookId, patch.highlight);
 			removeHighlightFromCurrentView(patch.highlight);
 			return true;
 		}
 		if (patch.kind === 'restore') {
-			await annotationService.savePortableHighlight(patch.bookId, patch.highlight);
+			await annotationService.savePortableHighlight(currentAnnotationBookId, patch.highlight);
 			addHighlightToCurrentView(patch.highlight);
 			return true;
 		}
-		await annotationService.removePortableHighlight(patch.bookId, patch.before);
-		await annotationService.savePortableHighlight(patch.bookId, patch.after);
+		await annotationService.removePortableHighlight(currentAnnotationBookId, patch.before);
+		await annotationService.savePortableHighlight(currentAnnotationBookId, patch.after);
 		removeHighlightFromCurrentView(patch.before);
 		addHighlightToCurrentView(patch.after);
 		return true;
@@ -2550,9 +2594,10 @@
 				new Notice(t('epub.reader.annotationNoteUnavailable'));
 				return;
 			}
+			const annotationBookId = await syncPortableBookIdForCurrentBook();
 			const currentPosition = readerReady ? readerService.getCurrentPosition() : book.currentPosition;
 			await plugin.openEpubAnnotationNote({
-				bookId: book.id,
+				bookId: annotationBookId || book.id,
 				filePath,
 				currentCfi: String(currentPosition?.cfi || '').trim(),
 				currentChapterIndex:
@@ -2564,6 +2609,39 @@
 			logger.error('[EpubReaderApp] Failed to open annotation note:', error);
 			new Notice(t('epub.reader.annotationNoteOpenFailed'));
 		}
+	}
+
+	async function openAnnotationVersions() {
+		if (!book?.id) {
+			new Notice(t('epub.reader.bookNotReady'));
+			return;
+		}
+		const annotationBookId = await syncPortableBookIdForCurrentBook();
+		const location = resolveEpubPortableBookDataLocation(annotationBookId || book.id);
+		const { EpubAnnotationVersionManagerModal } = await import('./EpubAnnotationVersionManagerModal');
+		new EpubAnnotationVersionManagerModal(app, {
+			bookTitle: book.metadata?.title?.trim() || filePath,
+			bookId: location.bookId,
+			filePath,
+			bookDataDir: location.bookDir,
+			annotationsPath: location.annotationsPath,
+		}).open();
+	}
+
+	async function refreshAfterAnnotationVersionChanged() {
+		if (!book?.id || !readerReady) {
+			return;
+		}
+		pendingLoadedHighlights = [];
+		trackedHighlightSourceFiles = new Set<string>();
+		annotationUndoStack.clear();
+		highlightToolbarInfo = null;
+		closeAnnotationDisambiguation();
+		commentEditorInfo = null;
+		getExcerptPipeline().syncCollectedHighlights([]);
+		await readerService.applyHighlights([]);
+		publishSidebarHighlights([]);
+		await reloadHighlights({ invalidateCache: true });
 	}
 
 	function hasCreateReadingPointCapability(): boolean {
@@ -2661,6 +2739,7 @@
 		if (previousBook?.id) {
 			void persistCurrentReadingProgress(previousBook);
 		}
+		portableBookId = '';
 		loading = true;
 		bookLoadSlowWarning = false;
 		errorMsg = '';
@@ -2759,6 +2838,7 @@
 				loadedBook.sourceId = reusableBook.sourceId;
 				loadedBook.sourceFingerprint = reusableBook.sourceFingerprint;
 			}
+			portableBookId = await resolvePortableBookIdForBook(loadedBook, targetFilePath);
 
 			const restoredPosition = await resolveBookLoadRestoredPosition({
 				hasProgressCapability: hasReadingProgressCapability(),
@@ -4026,7 +4106,7 @@
 
 		const chapterIndex = draft.chapterIndex;
 		let chapterHighlights = applySemanticPresentationToHighlights(
-			await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+			await annotationService.collectAllHighlights(getCurrentAnnotationBookId(), filePath, backlinkService)
 		)
 			.filter((highlight) =>
 				highlightBelongsToChapterExport(highlight, chapterIndex, draft.chapterHref, {
@@ -4398,7 +4478,7 @@
 
 			const keySet = new Set(selectionKeys);
 			const highlights = applySemanticPresentationToHighlights(
-				await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+				await annotationService.collectAllHighlights(getCurrentAnnotationBookId(), filePath, backlinkService)
 			)
 				.filter((highlight) => keySet.has(buildReaderHighlightSelectionKey(highlight)))
 				.filter(isHighlightSelectedForBookNotesExport);
@@ -4432,7 +4512,7 @@
 			const chapterIndex = readerService.getCurrentChapterIndex();
 			const chapterTitle = readerService.getCurrentChapterTitle() || t('epub.reader.epubChapterDefaultTitle');
 			const highlights = applySemanticPresentationToHighlights(
-				await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+				await annotationService.collectAllHighlights(getCurrentAnnotationBookId(), filePath, backlinkService)
 			)
 				.filter((highlight) => getHighlightChapterIndex(highlight) === chapterIndex)
 				.filter(isHighlightSelectedForBookNotesExport);
@@ -4477,7 +4557,7 @@
 			}
 
 			const highlights = applySemanticPresentationToHighlights(
-				await annotationService.collectAllHighlights(book.id, filePath, backlinkService)
+				await annotationService.collectAllHighlights(getCurrentAnnotationBookId(), filePath, backlinkService)
 			)
 				.filter(isHighlightSelectedForBookNotesExport);
 			if (highlights.length === 0) {
@@ -4542,7 +4622,7 @@
 			return;
 		}
 		if (book) {
-			const bookId = book.id;
+			const bookId = getCurrentAnnotationBookId();
 			const baseHighlight: ReaderHighlight = {
 				cfiRange,
 				color: color || semantic?.color || 'yellow',
@@ -5049,14 +5129,15 @@
 		const source = await resolveHighlightSource(info);
 		if (!source?.sourceFile) {
 			if (book) {
+				const annotationBookId = getCurrentAnnotationBookId();
 				let removedPortableHighlight: ReaderHighlight | null = null;
 				await enqueueAnnotationMutation(async () => {
 					removedPortableHighlight = await annotationService.removePortableHighlight(
-						book.id,
+						annotationBookId,
 						buildReaderHighlightFromInfo(info)
 					);
 					if (removedPortableHighlight) {
-						annotationUndoStack.pushDelete(book.id, removedPortableHighlight);
+						annotationUndoStack.pushDelete(annotationBookId, removedPortableHighlight);
 					}
 				});
 				if (removedPortableHighlight) {
@@ -5307,20 +5388,21 @@
 		const source = await resolveHighlightSource(info);
 		if (!source?.sourceFile) {
 			if (book) {
+				const annotationBookId = getCurrentAnnotationBookId();
 				const previous = buildReaderHighlightFromInfo(info);
 				const next: ReaderHighlight = {
 					...previous,
 					color: newColor,
 				};
 				await enqueueAnnotationMutation(async () => {
-					const result = await annotationService.replacePortableHighlight(book.id, previous, next);
+					const result = await annotationService.replacePortableHighlight(annotationBookId, previous, next);
 					if (!result?.current) {
 						new Notice(t('epub.reader.changeColorFailed'));
 						return;
 					}
 					removeHighlightFromCurrentView(result.previous || previous);
 					addHighlightToCurrentView(result.current);
-					annotationUndoStack.pushUpdate(book.id, result.previous || previous, result.current);
+					annotationUndoStack.pushUpdate(annotationBookId, result.previous || previous, result.current);
 					highlightToolbarInfo = null;
 				});
 				return;
@@ -5365,15 +5447,16 @@
 			semanticDescription: semantic.description,
 			semanticSource: semantic.source || 'preset',
 		};
+		const annotationBookId = getCurrentAnnotationBookId();
 		await enqueueAnnotationMutation(async () => {
-			const result = await annotationService.replacePortableHighlight(book.id, previous, next);
+			const result = await annotationService.replacePortableHighlight(annotationBookId, previous, next);
 			if (!result?.current) {
 				new Notice(t('epub.reader.changeSemanticFailed'));
 				return;
 			}
 			removeHighlightFromCurrentView(result.previous || previous);
 			addHighlightToCurrentView(result.current);
-			annotationUndoStack.pushUpdate(book.id, result.previous || previous, result.current);
+			annotationUndoStack.pushUpdate(annotationBookId, result.previous || previous, result.current);
 			highlightToolbarInfo = null;
 			new Notice(t('epub.reader.semanticChanged'));
 		});
@@ -5532,6 +5615,7 @@
 		const source = await resolveHighlightSource(info);
 		if (!source?.sourceFile) {
 			if (book) {
+				const annotationBookId = getCurrentAnnotationBookId();
 				const previous = buildReaderHighlightFromInfo(info);
 				const next: ReaderHighlight = {
 					...previous,
@@ -5541,14 +5625,14 @@
 				commentEditorSaving = true;
 				await enqueueAnnotationMutation(async () => {
 					try {
-						const result = await annotationService.replacePortableHighlight(book.id, previous, next);
+						const result = await annotationService.replacePortableHighlight(annotationBookId, previous, next);
 						if (!result?.current) {
 							new Notice(t('epub.reader.commentSaveFailed'));
 							return;
 						}
 						removeHighlightFromCurrentView(result.previous || previous);
 						addHighlightToCurrentView(result.current);
-						annotationUndoStack.pushUpdate(book.id, result.previous || previous, result.current);
+						annotationUndoStack.pushUpdate(annotationBookId, result.previous || previous, result.current);
 						new Notice(t('epub.reader.commentSaved'));
 						closeCommentEditor();
 					} finally {
@@ -5711,20 +5795,21 @@
 		const reloadToken = ++highlightReloadToken;
 		highlightReloading = true;
 		const previousHighlights = pendingLoadedHighlights || [];
+		const annotationBookId = getCurrentAnnotationBookId();
 		try {
 			if (invalidateCache) {
-				annotationService.invalidateCollectedHighlightsCache(book.id, filePath);
+				annotationService.invalidateCollectedHighlightsCache(annotationBookId, filePath);
 				if (!incremental) {
-					highlightViewSnapshotService.invalidate(book.id, filePath);
+					highlightViewSnapshotService.invalidate(annotationBookId, filePath);
 					referenceStatsService.clearCache(filePath);
 				}
 				await backlinkService.invalidateHighlightsCacheForEpub(filePath, getBoundCanvasPath());
 			} else if (incremental) {
-				annotationService.invalidateCollectedHighlightsCache(book.id, filePath);
+				annotationService.invalidateCollectedHighlightsCache(annotationBookId, filePath);
 			}
 			const additionalSourcePaths = Array.from(trackedHighlightSourceFiles);
 			const collectedHighlights = await annotationService.collectAllHighlights(
-				book.id,
+				annotationBookId,
 				filePath,
 				backlinkService,
 				additionalSourcePaths.length > 0
@@ -5794,7 +5879,7 @@
 			if (!incremental) {
 				const nextRevision = annotationRevision + 1;
 				highlightViewSnapshotService.publishFromHighlights({
-					bookId: book.id,
+					bookId: annotationBookId,
 					filePath,
 					showStrikethroughHighlights: excerptSettings.showStrikethroughInSidebar,
 					revision: nextRevision,
@@ -6022,6 +6107,21 @@
 			void refreshSemanticSettings({ reloadHighlights: true });
 		};
 		window.addEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
+		const handleAnnotationVersionChanged = (event: Event) => {
+			const detail = (event as CustomEvent<{ bookId?: unknown; filePath?: unknown }>).detail || {};
+			const eventBookId = String(detail.bookId || '').trim();
+			const eventFilePath = normalizePath(String(detail.filePath || '').trim());
+			const currentBookId = getCurrentAnnotationBookId();
+			const currentFilePath = normalizePath(String(filePath || '').trim());
+			if (
+				(eventBookId && currentBookId && eventBookId !== currentBookId) &&
+				(!eventFilePath || !currentFilePath || eventFilePath !== currentFilePath)
+			) {
+				return;
+			}
+			void refreshAfterAnnotationVersionChanged();
+		};
+		window.addEventListener(EPUB_ANNOTATION_VERSION_CHANGED_EVENT, handleAnnotationVersionChanged);
 		const canvasDirectionRef = app.workspace.on(
 			WEAVE_EPUB_CANVAS_LAYOUT_DIRECTION_EVENT,
 			(payload: WeaveEpubCanvasLayoutDirectionPayload) => {
@@ -6170,6 +6270,7 @@
 				: undefined,
 			exportBookHighlightsToMarkdown: hasExcerptNotesCapability() ? exportBookHighlightsToMarkdown : undefined,
 			openAnnotationNote,
+			openAnnotationVersions,
 			getExcerptSettings: () => excerptSettings,
 			updateExcerptSettings: applyAndPersistExcerptSettings,
 			prevPage: handlePrevPage,
@@ -6195,6 +6296,7 @@
 			);
 			window.removeEventListener(EPUB_READER_UI_MODE_CHANGED_EVENT, handleReaderUiModeChanged);
 			window.removeEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
+			window.removeEventListener(EPUB_ANNOTATION_VERSION_CHANGED_EVENT, handleAnnotationVersionChanged);
 			componentDisposed = true;
 			closeAnnotationDisambiguation();
 			getBookSessionManager(app).releaseIfNoOpenLeaves(app, filePath);

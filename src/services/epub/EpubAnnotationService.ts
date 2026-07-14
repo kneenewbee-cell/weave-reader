@@ -277,9 +277,6 @@ export class EpubAnnotationService {
 		if (!annotation || typeof annotation !== "object") {
 			return null;
 		}
-		if (!this.isActiveSemanticAnnotation(annotation, profile)) {
-			return null;
-		}
 		const presentedAnnotation = profile
 			? resolveAnnotationPresentation(annotation, profile)
 			: annotation as Record<string, unknown>;

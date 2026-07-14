@@ -40,6 +40,31 @@ describe("openAnnotationNoteFileWithExistingLeaf", () => {
 		expect(app.workspace.revealLeaf).toHaveBeenCalledWith(existingLeaf);
 	});
 
+	it("reuses an open annotations leaf when Obsidian exposes a file-like view object", async () => {
+		const noteFile = createFile("weave/epub-data/books/book-1/annotations.md");
+		const existingLeaf = {
+			view: { file: { path: noteFile.path } },
+			openFile: vi.fn(),
+		};
+		const app = {
+			workspace: {
+				iterateAllLeaves: vi.fn((callback: (leaf: unknown) => void) => callback(existingLeaf)),
+				getLeaf: vi.fn(),
+				setActiveLeaf: vi.fn(),
+				revealLeaf: vi.fn(),
+			},
+			vault: {
+				getAbstractFileByPath: vi.fn(() => noteFile),
+			},
+		} as any;
+
+		const result = await openAnnotationNoteFileWithExistingLeaf(app, noteFile);
+
+		expect(result).toBe(existingLeaf);
+		expect(existingLeaf.openFile).not.toHaveBeenCalled();
+		expect(app.workspace.getLeaf).not.toHaveBeenCalled();
+	});
+
 	it("opens the annotations note in preview when no existing leaf is open", async () => {
 		const noteFile = createFile("weave/epub-data/books/book-1/annotations.md");
 		const newLeaf = { openFile: vi.fn(async () => undefined) };

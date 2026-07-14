@@ -70,11 +70,42 @@ export {
 	shouldUseBookshelfListVirtualScroll,
 } from "./bookshelf-display-performance";
 export {
+	findEpubPortableBookIdByIdentity,
 	findEpubPortableBookIdByPath,
+	findEpubPortableBookIdInIndexByIdentity,
 	findEpubPortableBookIdInIndex,
 	resolveEpubPortableBookDataLocation,
+	type EpubPortableBookIdentityHints,
 	type EpubPortableBookDataLocation,
 } from "./epub-portable-data-location";
+export {
+	createEpubAnnotationVersion,
+	deleteEpubAnnotationVersion,
+	ensureActiveEpubAnnotationVersion,
+	EPUB_ANNOTATION_VERSION_CHANGED_EVENT,
+	listEpubAnnotationVersions,
+	notifyEpubAnnotationVersionChanged,
+	readActiveEpubAnnotationVersionAnnotations,
+	renameEpubAnnotationVersion,
+	switchEpubAnnotationVersion,
+	writeActiveEpubAnnotationVersionAnnotations,
+	type EpubAnnotationVersionSummary,
+} from "./epub-annotation-version-store";
+export {
+	createEpubAnnotatedBookPackage,
+	downloadEpubAnnotatedBookPackage,
+	importEpubAnnotatedBookPackage,
+	type EpubAnnotatedBookPackageResult,
+	type ImportEpubAnnotatedBookPackageResult,
+} from "./epub-portable-book-package";
+export {
+	hasEpubPortableBookmarksData,
+	hasEpubPortableReadingStateData,
+	readEpubPortableBookmarks,
+	readEpubPortableReadingState,
+	writeEpubPortableBookmarks,
+	writeEpubPortableReadingState,
+} from "./epub-portable-book-data";
 export {
 	renderEpubAnnotationNoteMarkdown,
 	type EpubAnnotationNoteAnnotationInput,

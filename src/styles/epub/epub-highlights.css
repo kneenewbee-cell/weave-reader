@@ -2616,3 +2616,143 @@ body.is-mobile .epub-selected-text-ai-panel-slot :global(.weave-ai-card-panel .c
 	color: var(--text-normal);
 	background-color: var(--background-modifier-hover);
 }
+
+.weave-annotation-version-modal {
+	width: min(680px, 92vw);
+	max-width: 680px;
+}
+
+.weave-annotation-version {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.weave-annotation-version__intro {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.6;
+}
+
+.weave-annotation-version-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.weave-annotation-version-card h3 {
+	margin: 0 0 2px;
+	font-size: var(--font-ui-medium);
+	line-height: 1.4;
+}
+
+.weave-annotation-version-row {
+	display: grid;
+	grid-template-columns: 92px minmax(0, 1fr);
+	gap: 10px;
+	align-items: start;
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+}
+
+.weave-annotation-version-row__label {
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.weave-annotation-version-row__value {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	color: var(--text-normal);
+}
+
+.weave-annotation-version-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: flex-end;
+}
+
+.weave-annotation-version-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 32px;
+	padding: 0 10px;
+	border-radius: 6px;
+}
+
+.weave-annotation-version-action__icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+}
+
+.weave-annotation-version-action__icon .svg-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.weave-annotation-version-action.is-danger {
+	color: var(--text-error);
+}
+
+.weave-annotation-version-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.weave-annotation-version-list h3 {
+	margin: 0 0 2px;
+	font-size: var(--font-ui-medium);
+	line-height: 1.4;
+}
+
+.weave-annotation-version-item {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 10px;
+	align-items: center;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+}
+
+.weave-annotation-version-item.is-active {
+	border-color: var(--interactive-accent);
+	background: var(--background-secondary);
+}
+
+.weave-annotation-version-item__main {
+	min-width: 0;
+}
+
+.weave-annotation-version-item__title {
+	font-weight: 600;
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.weave-annotation-version-item__meta {
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.weave-annotation-version-item__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: flex-end;
+}

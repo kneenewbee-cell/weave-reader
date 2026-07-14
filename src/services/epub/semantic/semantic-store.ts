@@ -1,6 +1,10 @@
 import type { App, DataAdapter } from "obsidian";
 import { normalizePath } from "obsidian";
 import { DirectoryUtils } from "../../../utils/directory-utils";
+import {
+	readActiveEpubAnnotationVersionAnnotations,
+	writeActiveEpubAnnotationVersionAnnotations,
+} from "../epub-annotation-version-store";
 import * as semanticProfiles from "./profiles";
 import { createSemanticProfileStore } from "./profile-store";
 
@@ -225,10 +229,7 @@ export async function readBookEpubPortableAnnotations(
 	bookId: unknown
 ): Promise<EpubPortableAnnotationsPayload | null> {
 	const safeBookId = safeEpubSemanticBookId(bookId);
-	const payload = await readEpubSemanticJson(
-		app,
-		getEpubPortableBookPath(safeBookId, "annotations.json")
-	);
+	const payload = await readActiveEpubAnnotationVersionAnnotations(app, safeBookId);
 	return normalizePortableAnnotationsPayload(payload, safeBookId);
 }
 
@@ -315,7 +316,7 @@ export async function writeBookEpubPortableAnnotations(
 					.filter(Boolean)
 			: [],
 	};
-	await writeEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "annotations.json"), payload);
+	await writeActiveEpubAnnotationVersionAnnotations(app, safeBookId, payload);
 	return payload;
 }
 

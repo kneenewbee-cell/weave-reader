@@ -32,6 +32,7 @@ import {
 	readBookEpubSemanticProfile,
 	readGlobalEpubSemanticProfile,
 	renderEpubAnnotationNoteMarkdown,
+	findEpubPortableBookIdByIdentity,
 	resolveEpubPortableBookDataLocation,
 	resolveAnnotationChapterMetadata,
 	applyAnnotationChapterMetadata,
@@ -865,12 +866,21 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 	}
 
 	async openEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
-		const location = resolveEpubPortableBookDataLocation(input.bookId);
 		const storage = this.getEpubStorageService();
-		const book = await storage.getBook(location.bookId);
-		const sourcePath = normalizePath(String(input.filePath || book?.filePath || "").trim());
-		const sourceFile = sourcePath
-			? this.app.vault.getAbstractFileByPath(sourcePath)
+		const sourcePath = normalizePath(String(input.filePath || "").trim());
+		const hintedBook = sourcePath ? await storage.findBookByFilePath(sourcePath) : null;
+		const canonicalBookId =
+			(await findEpubPortableBookIdByIdentity(this.app, {
+				bookId: input.bookId,
+				sourceId: hintedBook?.sourceId,
+				sourceFingerprint: hintedBook?.sourceFingerprint,
+				filePath: sourcePath || hintedBook?.filePath,
+			})) || input.bookId;
+		const location = resolveEpubPortableBookDataLocation(canonicalBookId);
+		const book = (await storage.getBook(location.bookId)) || hintedBook;
+		const resolvedSourcePath = normalizePath(String(sourcePath || book?.filePath || "").trim());
+		const sourceFile = resolvedSourcePath
+			? this.app.vault.getAbstractFileByPath(resolvedSourcePath)
 			: null;
 		const fallbackTitle =
 			sourceFile instanceof TFile
@@ -883,9 +893,9 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		]);
 		const effectiveProfile = mergeProfiles(globalProfile, bookProfile);
 		let tocItems: TocItem[] = [];
-		if (sourcePath) {
+		if (resolvedSourcePath) {
 			try {
-				tocItems = await loadPublicationTocItems(this.app, sourcePath);
+				tocItems = await loadPublicationTocItems(this.app, resolvedSourcePath);
 			} catch (error) {
 				logger.warn("[WeaveReader] Failed to load EPUB TOC for annotation note:", error);
 			}
@@ -916,7 +926,7 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 			book: {
 				title: book?.metadata?.title || fallbackTitle,
 				author: book?.metadata?.author || "",
-				filePath: sourcePath || book?.filePath || input.filePath,
+				filePath: resolvedSourcePath || book?.filePath || input.filePath,
 				sourceId: book?.sourceId,
 				currentCfi:
 					String(input.currentCfi || book?.currentPosition?.cfi || "").trim() || undefined,

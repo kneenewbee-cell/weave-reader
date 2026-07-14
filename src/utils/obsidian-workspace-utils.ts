@@ -1,7 +1,7 @@
 import { TFile, type App, type WorkspaceLeaf } from "obsidian";
 
 type LeafViewWithFile = {
-	file?: TFile;
+	file?: TFile | { path?: unknown };
 };
 
 type WorkspaceWithIterate = App["workspace"] & {
@@ -20,7 +20,10 @@ const FALLBACK_LEAF_VIEW_TYPES = [
 
 export function getLeafViewFile(leaf: WorkspaceLeaf): TFile | null {
 	const file = (leaf.view as LeafViewWithFile | undefined)?.file;
-	return file instanceof TFile ? file : null;
+	if (file instanceof TFile) {
+		return file;
+	}
+	return file && typeof file.path === "string" ? (file as TFile) : null;
 }
 
 export function iterateAllWorkspaceLeaves(

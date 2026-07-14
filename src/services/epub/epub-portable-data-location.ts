@@ -19,8 +19,20 @@ export interface EpubPortableBookDataLocation {
 	indexPath: string;
 }
 
+export interface EpubPortableBookIdentityHints {
+	bookId?: unknown;
+	sourceId?: unknown;
+	sourceFingerprint?: unknown;
+	filePath?: unknown;
+	knownPaths?: unknown[];
+}
+
+function cleanString(value: unknown): string {
+	return String(value || "").trim();
+}
+
 function normalizeVaultPath(value: unknown): string {
-	return normalizePath(String(value || "").trim());
+	return normalizePath(cleanString(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -31,6 +43,54 @@ function pathsReferToSameVaultFile(left: unknown, right: unknown): boolean {
 	const normalizedLeft = normalizeVaultPath(left);
 	const normalizedRight = normalizeVaultPath(right);
 	return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function collectCandidatePaths(value: Record<string, unknown>): unknown[] {
+	return [
+		value.filePath,
+		...(Array.isArray(value.knownPaths) ? value.knownPaths : []),
+	];
+}
+
+function scorePortableBookIdentityMatch(
+	fallbackBookId: string,
+	value: Record<string, unknown>,
+	hints: EpubPortableBookIdentityHints
+): number {
+	let score = 0;
+	const candidateBookId = safeEpubSemanticBookId(value.bookId || fallbackBookId);
+	const candidateIds = [
+		candidateBookId,
+		...(Array.isArray(value.legacyBookIds) ? value.legacyBookIds : []),
+	].map((item) => safeEpubSemanticBookId(item));
+	const hintBookId = cleanString(hints.bookId) ? safeEpubSemanticBookId(hints.bookId) : "";
+	const hintSourceId = cleanString(hints.sourceId);
+	const candidateSourceId = cleanString(value.sourceId);
+	const hintFingerprint = cleanString(hints.sourceFingerprint).toLowerCase();
+	const candidateFingerprint = cleanString(value.sourceFingerprint).toLowerCase();
+	const hintPaths = [
+		hints.filePath,
+		...(Array.isArray(hints.knownPaths) ? hints.knownPaths : []),
+	].filter((item) => cleanString(item));
+	const candidatePaths = collectCandidatePaths(value);
+
+	if (hintFingerprint && candidateFingerprint === hintFingerprint) {
+		score += 300;
+	}
+	if (hintSourceId && candidateSourceId === hintSourceId) {
+		score += 200;
+	}
+	if (
+		hintPaths.some((hintPath) =>
+			candidatePaths.some((candidatePath) => pathsReferToSameVaultFile(candidatePath, hintPath))
+		)
+	) {
+		score += 100;
+	}
+	if (hintBookId && candidateIds.includes(hintBookId)) {
+		score += 50;
+	}
+	return score;
 }
 
 export function resolveEpubPortableBookDataLocation(
@@ -52,29 +112,35 @@ export function resolveEpubPortableBookDataLocation(
 }
 
 export function findEpubPortableBookIdInIndex(index: unknown, filePath: unknown): string {
-	const normalizedFilePath = normalizeVaultPath(filePath);
-	if (!normalizedFilePath || !isRecord(index) || !isRecord(index.books)) {
-		return "";
+	return findEpubPortableBookIdInIndexByIdentity(index, { filePath });
+}
+
+export function findEpubPortableBookIdInIndexByIdentity(
+	index: unknown,
+	hints: EpubPortableBookIdentityHints
+): string {
+	const fallbackBookId = cleanString(hints.bookId)
+		? safeEpubSemanticBookId(hints.bookId)
+		: "";
+	if (!isRecord(index) || !isRecord(index.books)) {
+		return fallbackBookId;
 	}
 
-	for (const [fallbackBookId, value] of Object.entries(index.books)) {
+	let bestBookId = "";
+	let bestScore = 0;
+	for (const [rawFallbackBookId, value] of Object.entries(index.books)) {
 		if (!isRecord(value)) {
 			continue;
 		}
-		const rawBookId = String(value.bookId || fallbackBookId || "").trim();
-		if (!rawBookId) {
-			continue;
-		}
-		const candidatePaths = [
-			value.filePath,
-			...(Array.isArray(value.knownPaths) ? value.knownPaths : []),
-		];
-		if (candidatePaths.some((candidatePath) => pathsReferToSameVaultFile(candidatePath, normalizedFilePath))) {
-			return safeEpubSemanticBookId(rawBookId);
+		const candidateBookId = safeEpubSemanticBookId(value.bookId || rawFallbackBookId);
+		const score = scorePortableBookIdentityMatch(candidateBookId, value, hints);
+		if (score > bestScore) {
+			bestBookId = candidateBookId;
+			bestScore = score;
 		}
 	}
 
-	return "";
+	return bestBookId || fallbackBookId;
 }
 
 export async function findEpubPortableBookIdByPath(app: App, filePath: unknown): Promise<string> {
@@ -83,4 +149,15 @@ export async function findEpubPortableBookIdByPath(app: App, filePath: unknown):
 		normalizePath(`${getEpubPortableDataRoot()}/index.json`)
 	);
 	return findEpubPortableBookIdInIndex(index, filePath);
+}
+
+export async function findEpubPortableBookIdByIdentity(
+	app: App,
+	hints: EpubPortableBookIdentityHints
+): Promise<string> {
+	const index = await readEpubSemanticJson(
+		app,
+		normalizePath(`${getEpubPortableDataRoot()}/index.json`)
+	);
+	return findEpubPortableBookIdInIndexByIdentity(index, hints);
 }

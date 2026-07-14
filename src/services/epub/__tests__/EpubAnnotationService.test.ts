@@ -617,7 +617,7 @@ describe('EpubAnnotationService', () => {
 		});
 	});
 
-	it('does not render portable semantic annotations outside the active scheme', async () => {
+	it('keeps portable semantic annotations visible when their semantic mapping is missing or inactive', async () => {
 		const bookId = 'epub-book-current';
 		const app = createPortableMockApp(
 			{
@@ -707,6 +707,19 @@ describe('EpubAnnotationService', () => {
 				semanticId: 'important',
 				color: 'blue',
 				style: 'underline',
+			}),
+			expect.objectContaining({
+				cfiRange: 'epubcfi(/6/6)',
+				text: 'Old scheme highlight',
+				semanticId: 'theorem',
+				color: 'red',
+				style: 'wavy',
+			}),
+			expect.objectContaining({
+				cfiRange: 'epubcfi(/6/8)',
+				text: 'Unknown scheme highlight',
+				semanticId: 'drug-dose',
+				color: 'yellow',
 			}),
 		]);
 	});

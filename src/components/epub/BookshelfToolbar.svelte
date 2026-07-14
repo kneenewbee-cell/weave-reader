@@ -5,7 +5,7 @@
 		searching: boolean;
 		backButtonLabel: string;
 		t: (key: string) => string;
-		onImport: () => void | Promise<void>;
+		onImport: (event: MouseEvent) => void | Promise<void>;
 		onToggleSearch: () => void;
 		onBack: () => void | Promise<void>;
 		onSettings: (event: MouseEvent) => void;
@@ -30,7 +30,7 @@
 			class="epub-toolbar-btn clickable-icon nav-action-button"
 			title={t('epub.bookshelf.toolbar.import')}
 			aria-label={t('epub.bookshelf.toolbar.import')}
-			onclick={() => void onImport()}
+			onclick={(event) => void onImport(event)}
 		>
 			<span use:obsidianIcon={'scan-search'}></span>
 		</button>

@@ -83,6 +83,8 @@ export class EpubView extends ItemView {
 	private inlineAutoInsertBtn: HTMLButtonElement | null = null;
 	private annotationNoteBtn: HTMLElement | null = null;
 	private inlineAnnotationNoteBtn: HTMLButtonElement | null = null;
+	private annotationVersionsBtn: HTMLElement | null = null;
+	private inlineAnnotationVersionsBtn: HTMLButtonElement | null = null;
 	private screenshotBtn: HTMLElement | null = null;
 	private inlineScreenshotBtn: HTMLButtonElement | null = null;
 	private saveAsImageBtn: HTMLElement | null = null;
@@ -120,6 +122,7 @@ export class EpubView extends ItemView {
 		setScreenshotSaveMode?: (saveAsImage: boolean) => void;
 		navigateToCfi?: (cfi: string, linkTextHint?: string) => void;
 		toggleTutorial?: () => void;
+		openAnnotationVersions?: () => Promise<void>;
 		addBookmark?: () => Promise<void>;
 		canUseReadingProgress?: () => boolean;
 		canUseReadingReference?: () => boolean;
@@ -351,6 +354,7 @@ export class EpubView extends ItemView {
 		this.screenshotBtn = null;
 		this.autoInsertBtn = null;
 		this.annotationNoteBtn = null;
+		this.annotationVersionsBtn = null;
 		this.bookmarkBtn = null;
 		this.readingReferenceBtn = null;
 		this.flowBtn = null;
@@ -377,6 +381,9 @@ export class EpubView extends ItemView {
 		const registerExcerptHeaderActions = () => {
 			this.annotationNoteBtn = this.addAction("notebook-pen", this.t("views.epubView.label.annotationNote"), () => {
 				void this.actionHandlers.openAnnotationNote?.();
+			});
+			this.annotationVersionsBtn = this.addAction("layers-3", "标注版本", () => {
+				void this.actionHandlers.openAnnotationVersions?.();
 			});
 			this.screenshotBtn = this.addAction(
 				"camera",
@@ -441,29 +448,6 @@ export class EpubView extends ItemView {
 				this.t("views.epubView.label.paragraphModeOff"),
 				() => {
 					this.toggleParagraphMode();
-				}
-			);
-			this.canvasDirBtn = this.addAction(
-				"arrow-down",
-				this.t("views.epubView.label.canvasDirection", {
-					direction: this.getCanvasDirectionLabel("down"),
-				}),
-				(evt) => {
-					this.showDirectionMenu(evt);
-				}
-			);
-			this.canvasBtn = this.addAction(
-				"layout-dashboard",
-				this.t("views.epubView.label.canvasOff"),
-				(evt) => {
-					this.showCanvasMenu(evt);
-				}
-			);
-			this.tutorialBtn = this.addAction(
-				"circle-help",
-				this.t("views.epubView.menu.tutorial"),
-				() => {
-					this.actionHandlers.toggleTutorial?.();
 				}
 			);
 			this.positionFlowBtn();
@@ -1256,6 +1240,13 @@ export class EpubView extends ItemView {
 				void this.actionHandlers.openAnnotationNote?.();
 			}
 		);
+		this.inlineAnnotationVersionsBtn = this.appendInlineActionButton(
+			"layers-3",
+			"标注版本",
+			() => {
+				void this.actionHandlers.openAnnotationVersions?.();
+			}
+		);
 		this.inlineFlowBtn = this.appendInlineActionButton(
 			"arrow-up-down",
 			this.t("views.epubView.label.readingModePaginated"),
@@ -1277,22 +1268,6 @@ export class EpubView extends ItemView {
 				this.toggleParagraphMode();
 			}
 		);
-		this.inlineCanvasDirBtn = this.appendInlineActionButton(
-			"arrow-down",
-			this.t("views.epubView.label.canvasDirection", {
-				direction: this.getCanvasDirectionLabel("down"),
-			}),
-			(evt) => {
-				this.showDirectionMenu(evt);
-			}
-		);
-		this.inlineCanvasBtn = this.appendInlineActionButton(
-			"layout-dashboard",
-			this.t("views.epubView.label.canvasOff"),
-			(evt) => {
-				this.showCanvasMenu(evt);
-			}
-		);
 		this.inlineReadingReferenceBtn = this.appendInlineActionButton(
 			"flag",
 			this.t("views.epubView.label.readingPosition"),
@@ -1300,14 +1275,6 @@ export class EpubView extends ItemView {
 				this.openReadingPositionMenu(evt);
 			}
 		);
-		this.inlineTutorialBtn = this.appendInlineActionButton(
-			"circle-help",
-			this.t("views.epubView.menu.tutorial"),
-			() => {
-				this.actionHandlers.toggleTutorial?.();
-			}
-		);
-
 		this.updateInlineToolbarExpandedState();
 		this.refreshAllActionButtons();
 		this.refreshInlineToolbarVisibility();
@@ -1371,6 +1338,7 @@ export class EpubView extends ItemView {
 		this.updateScreenshotBtn();
 		this.updateAutoInsertBtn();
 		this.updateAnnotationNoteBtn();
+		this.updateAnnotationVersionsBtn();
 		this.updateReadingReferencePointBtn();
 		this.updateFlowBtn();
 		this.updateLayoutBtn();
@@ -1693,6 +1661,7 @@ export class EpubView extends ItemView {
 		this.inlineScreenshotBtn = null;
 		this.inlineAutoInsertBtn = null;
 		this.inlineAnnotationNoteBtn = null;
+		this.inlineAnnotationVersionsBtn = null;
 		this.inlineFlowBtn = null;
 		this.inlineLayoutBtn = null;
 		this.inlineCanvasDirBtn = null;
@@ -2058,6 +2027,21 @@ export class EpubView extends ItemView {
 			visible,
 		});
 		this.applyActionButtonState(this.inlineAnnotationNoteBtn, {
+			label,
+			active: false,
+			visible,
+		});
+	}
+
+	private updateAnnotationVersionsBtn(): void {
+		const label = "标注版本";
+		const visible = Boolean(this.filePath && this.actionHandlers.openAnnotationVersions);
+		this.applyActionButtonState(this.annotationVersionsBtn, {
+			label,
+			active: false,
+			visible,
+		});
+		this.applyActionButtonState(this.inlineAnnotationVersionsBtn, {
 			label,
 			active: false,
 			visible,
