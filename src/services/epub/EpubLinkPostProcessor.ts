@@ -5,6 +5,8 @@ import { maybeMigrateEpubLinksInMarkdownFile } from "./epub-link-content-migrati
 import { EpubLinkService } from "./EpubLinkService";
 import { resolveEpubSourceNavigationTextHint } from "./epub-source-navigation-text-hint";
 import { isSupportedEpubProtocolName } from "./epub-runtime";
+import { dispatchEpubDualWindowAnnotationEvent } from "./epub-dual-window";
+import { resolveEpubHost } from "./epub-host";
 
 type BoundEpubLinkElement = HTMLAnchorElement & {
 	__weaveEpubClickHandler?: (event: MouseEvent) => void;
@@ -14,6 +16,7 @@ type BoundEpubLinkElement = HTMLAnchorElement & {
 type AnnotationNoteFilterMarker = HTMLElement & {
 	__weaveApplyAnnotationNoteFilters?: () => void;
 	__weaveFilterRefreshPending?: boolean;
+	__weaveDualWindowControlsBound?: boolean;
 };
 
 function extractEpubProtocolName(href: string): string {
@@ -222,6 +225,117 @@ function findMountedAnnotationNoteMarker(root: HTMLElement): AnnotationNoteFilte
 	return resolveAnnotationNoteContainer(root).querySelector<AnnotationNoteFilterMarker>(
 		".weave-annotation-note-root"
 	);
+}
+
+function findAnnotationNoteDualWindowButton(target: EventTarget | null, scope: HTMLElement): HTMLButtonElement | null {
+	if (!(target instanceof HTMLElement)) {
+		return null;
+	}
+	const button = target.closest<HTMLButtonElement>('[data-weave-dual-window-action="open"]');
+	return button && scope.contains(button) ? button : null;
+}
+
+function findAnnotationNoteLineFromEvent(target: EventTarget | null, scope: HTMLElement): HTMLElement | null {
+	if (!(target instanceof HTMLElement)) {
+		return null;
+	}
+	const line = target.closest<HTMLElement>(".weave-annotation-note-line");
+	return line && scope.contains(line) ? line : null;
+}
+
+function didLeaveAnnotationNoteLine(event: MouseEvent, line: HTMLElement): boolean {
+	const relatedTarget = event.relatedTarget;
+	return !(relatedTarget instanceof Node && line.contains(relatedTarget));
+}
+
+function hasAnnotationNoteDualWindowTargets(root: HTMLElement): boolean {
+	return Boolean(
+		root.matches('[data-weave-dual-window-action="open"], .weave-annotation-note-line') ||
+			root.querySelector('[data-weave-dual-window-action="open"], .weave-annotation-note-line')
+	);
+}
+
+function readAnnotationNoteIdentity(
+	target: HTMLElement,
+	marker: AnnotationNoteFilterMarker | null
+): { bookId: string; filePath: string } {
+	return {
+		bookId: String(target.dataset.bookId || marker?.dataset.bookId || "").trim(),
+		filePath: String(target.dataset.sourceFile || marker?.dataset.sourceFile || "").trim(),
+	};
+}
+
+function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void {
+	const marker = findMountedAnnotationNoteMarker(root);
+	if (!marker && !hasAnnotationNoteDualWindowTargets(root)) {
+		return;
+	}
+	const scope = marker ? resolveAnnotationNoteScope(marker, root) : resolveAnnotationNoteContainer(root);
+	const dualWindowMode = marker?.dataset.dualWindowMode === "true";
+
+	const emitAnnotationEvent = (
+		line: HTMLElement,
+		phase: "enter" | "leave" | "click"
+	): void => {
+		const { bookId, filePath } = readAnnotationNoteIdentity(line, marker);
+		dispatchEpubDualWindowAnnotationEvent(scope.ownerDocument.defaultView || window, {
+			mode: "book-annotation-note",
+			phase,
+			bookId,
+			filePath,
+			cfiRange: line.dataset.cfiRange,
+			annotationId: line.dataset.annotationId,
+			semanticId: line.dataset.semanticId,
+			text: line.dataset.annotationText,
+		});
+	};
+
+	const boundTarget = (marker || scope) as AnnotationNoteFilterMarker;
+	if (boundTarget.__weaveDualWindowControlsBound) {
+		return;
+	}
+	boundTarget.__weaveDualWindowControlsBound = true;
+
+	const handleDualWindowClick = (event: MouseEvent) => {
+		const button = dualWindowMode ? null : findAnnotationNoteDualWindowButton(event.target, scope);
+		if (button) {
+			event.preventDefault();
+			event.stopPropagation();
+			const { bookId, filePath } = readAnnotationNoteIdentity(button, marker);
+			if (!bookId || !filePath) {
+				return;
+			}
+			void resolveEpubHost(app)?.openEpubAnnotationNote?.({
+				bookId,
+				filePath,
+				dualWindowMode: true,
+				openMode: "right-split",
+				focus: false,
+			});
+			return;
+		}
+
+		const line = findAnnotationNoteLineFromEvent(event.target, scope);
+		if (line) {
+			emitAnnotationEvent(line, "click");
+		}
+	};
+
+	scope.addEventListener("click", handleDualWindowClick, true);
+
+	scope.addEventListener("mouseover", (event) => {
+		const line = findAnnotationNoteLineFromEvent(event.target, scope);
+		if (line) {
+			emitAnnotationEvent(line, "enter");
+		}
+	});
+
+	scope.addEventListener("mouseout", (event) => {
+		const line = findAnnotationNoteLineFromEvent(event.target, scope);
+		if (line && didLeaveAnnotationNoteLine(event, line)) {
+			emitAnnotationEvent(line, "leave");
+		}
+	});
 }
 
 function requestAnnotationNoteFilterRefresh(root: HTMLElement): void {
@@ -491,6 +605,7 @@ export function createEpubLinkPostProcessor(app: App) {
 		applyEpubCalloutAppearanceAttributes(el);
 		mountAnnotationNoteFilter(el);
 		requestAnnotationNoteFilterRefresh(el);
+		bindAnnotationNoteDualWindowControls(app, el);
 
 		const sourcePath = String(ctx?.sourcePath || "").trim();
 		if (sourcePath && !scheduledMigrationPaths.has(sourcePath)) {

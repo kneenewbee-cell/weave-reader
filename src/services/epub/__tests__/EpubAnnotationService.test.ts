@@ -361,6 +361,81 @@ describe('EpubAnnotationService', () => {
 		});
 	});
 
+	it('removes a portable semantic annotation when clicked text differs from stored text', async () => {
+		const bookId = 'epub-book-remove-text-drift';
+		const cfiRange = 'epubcfi(/6/2!/4/2,/1:0,/1:12)';
+		const storedAnnotation = {
+			cfiRange,
+			semanticId: 'important',
+			text: 'Stored annotation text from annotations.json',
+			chapterIndex: 1,
+			chapterTitle: 'Chapter one',
+			createdTime: 100,
+		};
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: 'weave-reader-active-annotation-version/v1',
+				version: 1,
+				bookId,
+				activeVersionId: 'default',
+				updatedAt: 100,
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/version.json`]: {
+				format: 'weave-reader-annotation-version/v1',
+				version: 1,
+				bookId,
+				versionId: 'default',
+				name: 'Default',
+				createdAt: 100,
+				updatedAt: 100,
+			},
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				updatedAt: 100,
+				authoritative: true,
+				annotations: [storedAnnotation],
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				updatedAt: 100,
+				authoritative: true,
+				annotations: [storedAnnotation],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const removed = await service.removePortableHighlight(bookId, {
+			cfiRange,
+			color: 'yellow',
+			text: 'Clicked overlay text',
+			semanticId: 'important',
+			presentation: 'highlight',
+		});
+
+		expect(removed).toMatchObject(storedAnnotation);
+		await expect(readEffectiveEpubPortableAnnotations(app as any, bookId)).resolves.toMatchObject({
+			annotations: [],
+			authoritative: true,
+		});
+		const rootPayload = JSON.parse(
+			await (app as any).vault.adapter.read(`weave/epub-data/books/${bookId}/annotations.json`)
+		);
+		const versionPayload = JSON.parse(
+			await (app as any).vault.adapter.read(`weave/epub-data/books/${bookId}/versions/default/annotations.json`)
+		);
+		expect(rootPayload.annotations).toHaveLength(0);
+		expect(versionPayload.annotations).toHaveLength(0);
+	});
+
 	it('clears legacy stored highlights at most once per book and keeps backlink highlights as the live source', async () => {
 		let concealedTexts: any[] = [];
 
@@ -804,6 +879,54 @@ describe('EpubAnnotationService', () => {
 				semanticId: 'important',
 			}),
 		]);
+	});
+
+	it('ignores generated annotation-note markdown when collecting rendered highlights', async () => {
+		const bookId = 'epub-book-rv441q';
+		const app = createPortableMockApp(
+			{
+				[`weave/epub-data/books/${bookId}/annotations.json`]: {
+					format: 'weave-reader-annotations/v1',
+					version: 1,
+					bookId,
+					updatedAt: 2,
+					authoritative: true,
+					annotations: [],
+				},
+			},
+			['weave/epub-data/books', `weave/epub-data/books/${bookId}`]
+		);
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			loadConcealedTexts: vi.fn(async () => []),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const backlinkService = {
+			collectHighlights: vi.fn(async () => [
+				{
+					cfiRange: 'epubcfi(/6/4)',
+					color: 'yellow',
+					style: 'highlight',
+					semanticId: 'important',
+					text: 'Deleted annotation still present in generated markdown',
+					sourceFile: `weave/epub-data/books/${bookId}/annotations.md`,
+					createdTime: 3,
+				},
+				{
+					cfiRange: 'epubcfi(/6/6)',
+					color: 'blue',
+					style: 'underline',
+					semanticId: 'important',
+					text: 'Deleted annotation from another generated markdown folder',
+					sourceFile: 'weave/epub-data/books/epub-book-old/annotations.md',
+					createdTime: 4,
+				},
+			]),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		await expect(service.collectAllHighlights(bookId, 'Books/demo.epub', backlinkService)).resolves.toEqual([]);
 	});
 
 	it('keeps separate highlights for the same coarse cfi when excerpt ids differ', async () => {

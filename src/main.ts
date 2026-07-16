@@ -32,6 +32,8 @@ import {
 	readBookEpubSemanticProfile,
 	readGlobalEpubSemanticProfile,
 	renderEpubAnnotationNoteMarkdown,
+	markEpubDualWindowNoteLeaf,
+	registerEpubDualWindowSession,
 	findEpubPortableBookIdByIdentity,
 	resolveEpubPortableBookDataLocation,
 	resolveAnnotationChapterMetadata,
@@ -111,7 +113,10 @@ import {
 	type InterfaceLanguagePreference,
 } from "./utils/i18n";
 import { vaultStorage } from "./utils/vault-local-storage";
-import { openAnnotationNoteFileWithExistingLeaf } from "./services/epub/open-annotation-note-file";
+import {
+	openAnnotationNoteFileInDualWindow,
+	openAnnotationNoteFileWithExistingLeaf,
+} from "./services/epub/open-annotation-note-file";
 import type { AIConfig } from "./types/plugin-settings";
 import {
 	DEFAULT_BOOKSHELF_DISPLAY_MODE,
@@ -865,7 +870,11 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		await this.persistPreferenceSettings();
 	}
 
-	async openEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
+	private async writeEpubAnnotationNoteMarkdown(input: EpubHostOpenAnnotationNoteInput): Promise<{
+		location: ReturnType<typeof resolveEpubPortableBookDataLocation>;
+		noteFile: TFile;
+		resolvedSourcePath: string;
+	}> {
 		const storage = this.getEpubStorageService();
 		const sourcePath = normalizePath(String(input.filePath || "").trim());
 		const hintedBook = sourcePath ? await storage.findBookByFilePath(sourcePath) : null;
@@ -940,6 +949,7 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 			},
 			annotations: enrichedAnnotations,
 			semanticProfile: effectiveProfile,
+			dualWindowMode: input.dualWindowMode === true,
 		});
 
 		await DirectoryUtils.ensureDirForFile(this.app.vault.adapter, location.annotationsMarkdownPath);
@@ -953,6 +963,49 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 			noteFile = await this.app.vault.create(location.annotationsMarkdownPath, normalizedMarkdown);
 		}
 
-		await openAnnotationNoteFileWithExistingLeaf(this.app, noteFile);
+		return {
+			location,
+			noteFile,
+			resolvedSourcePath,
+		};
+	}
+
+	async refreshEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
+		await this.writeEpubAnnotationNoteMarkdown(input);
+	}
+
+	async openEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
+		const { location, noteFile, resolvedSourcePath } =
+			await this.writeEpubAnnotationNoteMarkdown(input);
+
+		const shouldOpenDualWindow =
+			input.dualWindowMode === true &&
+			(input.openMode || "existing") === "right-split" &&
+			Boolean(resolvedSourcePath);
+		const noteLeaf = shouldOpenDualWindow
+			? (
+					await openAnnotationNoteFileInDualWindow(
+						this.app,
+						noteFile,
+						{
+							type: EPUB_RUNTIME.viewTypes.reader,
+							state: { filePath: resolvedSourcePath },
+						},
+						{ focusNote: input.focus !== false }
+					)
+				).noteLeaf
+			: await openAnnotationNoteFileWithExistingLeaf(this.app, noteFile, {
+					openMode: input.openMode || "existing",
+					focus: input.focus !== false,
+				});
+		markEpubDualWindowNoteLeaf(noteLeaf, input.dualWindowMode === true);
+		if (input.dualWindowMode === true && noteLeaf && resolvedSourcePath) {
+			registerEpubDualWindowSession(this.app, {
+				mode: "book-annotation-note",
+				bookId: location.bookId,
+				filePath: resolvedSourcePath,
+				notePath: noteFile.path,
+			});
+		}
 	}
 }

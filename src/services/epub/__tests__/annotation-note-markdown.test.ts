@@ -69,12 +69,18 @@ describe("annotation-note-markdown", () => {
 		expect(markdown).toContain("showLocateOverlay=true");
 		expect(markdown).toContain("class=\"weave-annotation-note-root\"");
 		expect(markdown).toContain("class=\"weave-annotation-note-line\"");
+		expect(markdown).toContain("class=\"weave-annotation-note-dual-window\"");
+		expect(markdown).toContain('data-cfi-range="epubcfi(/6/2!/4/2,/1:0,/1:3)"');
 		expect(markdown).toContain('data-chapter-key="chapter-0"');
 		expect(markdown).toContain('data-chapter-title="Chapter 1"');
 		expect(markdown).not.toContain('data-chapter-title="Chapter 1 / Leaf"');
 		expect(markdown).toContain('data-semantic-id="theorem"');
 		expect(markdown).toContain('data-semantic-label="Theorem"');
 		expect(markdown).toContain('data-annotation-text="theorem text"');
+		expect(markdown).toContain("text=theorem%20text");
+		expect(markdown).toContain("flashStyle=highlight");
+		expect(markdown).toContain("flashColor=yellow");
+		expect(markdown).toContain("showLocateOverlay=true");
 		expect(markdown.indexOf("Chapter 1")).toBeLessThan(markdown.indexOf("Chapter 2"));
 		expect(markdown.indexOf("theorem text")).toBeLessThan(markdown.indexOf("masked text"));
 		expect(markdown).toContain("<mark");
@@ -83,6 +89,56 @@ describe("annotation-note-markdown", () => {
 		expect(markdown).toContain("repeating-linear-gradient(135deg, rgba(180, 83, 9, 0.34)");
 		expect(markdown).toContain('data-semantic="Theorem"');
 		expect(markdown).toContain("obsidian://weave-epub?file=Books%2Flatex.epub&amp;cfi=epubcfi");
+	});
+
+	it("hides the dual-window button when the note is rendered for dual-window mode", () => {
+		const markdown = renderEpubAnnotationNoteMarkdown({
+			book: {
+				title: "LaTeX Beginner",
+				filePath: "Books/latex.epub",
+			},
+			bookId: "epub-book-latex",
+			dualWindowMode: true,
+			annotations: [
+				{
+					id: "first",
+					cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:3)",
+					text: "theorem text",
+					semanticId: "theorem",
+				},
+			],
+			semanticProfile: null,
+		});
+
+		expect(markdown).toContain('data-dual-window-mode="true"');
+		expect(markdown).not.toContain("weave-annotation-note-dual-window");
+		expect(markdown).toContain('data-cfi-range="epubcfi(/6/2!/4/2,/1:0,/1:3)"');
+	});
+
+	it("puts book identity on dual-window controls and annotation lines for Obsidian chunked rendering", () => {
+		const markdown = renderEpubAnnotationNoteMarkdown({
+			book: {
+				title: "LaTeX Beginner",
+				filePath: "Books/latex.epub",
+			},
+			bookId: "epub-book-latex",
+			annotations: [
+				{
+					id: "first",
+					cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:3)",
+					text: "theorem text",
+					semanticId: "theorem",
+				},
+			],
+			semanticProfile: null,
+		});
+
+		expect(markdown).toMatch(
+			/<button[^>]+data-weave-dual-window-action="open"[^>]+data-book-id="epub-book-latex"[^>]+data-source-file="Books\/latex\.epub"/
+		);
+		expect(markdown).toMatch(
+			/<div class="weave-annotation-note-line"[^>]+data-book-id="epub-book-latex"[^>]+data-source-file="Books\/latex\.epub"/
+		);
 	});
 
 	it("renders an empty read-only note when no annotations exist", () => {
@@ -168,8 +224,10 @@ describe("annotation-note-markdown", () => {
 			semanticProfile: null,
 		});
 
-		expect(markdown).toContain('data-annotation-id="frontmatter" data-chapter-key="title-LaTeX Guide"');
-		expect(markdown).toContain('data-annotation-id="chapter-1-title" data-chapter-key="title-Chapter 1"');
+		expect(markdown).toContain('data-annotation-id="frontmatter"');
+		expect(markdown).toContain('data-chapter-key="title-LaTeX Guide"');
+		expect(markdown).toContain('data-annotation-id="chapter-1-title"');
+		expect(markdown).toContain('data-chapter-key="title-Chapter 1"');
 		expect(markdown.indexOf("copyright text")).toBeLessThan(markdown.indexOf("chapter text"));
 		expect(markdown).toContain("Chapter 1");
 		expect(markdown).not.toContain("Chapter 1 / What is LaTeX? / LaTeX Guide");

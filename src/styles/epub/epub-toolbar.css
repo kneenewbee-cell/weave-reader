@@ -956,6 +956,31 @@ body.weave-epub-immersive-paragraph-mode .workspace .mod-root .workspace-leaf-co
 	display: flex;
 }
 
+.weave-epub-dual-window-swap {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	z-index: var(--layer-popover, 1000);
+	width: 34px;
+	height: 34px;
+	transform: translate(-50%, -50%);
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 36%, var(--background-modifier-border));
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--background-primary) 82%, var(--interactive-accent));
+	color: var(--text-accent);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.weave-epub-dual-window-swap:hover,
+.weave-epub-dual-window-swap:focus-visible {
+	background: color-mix(in srgb, var(--background-primary) 70%, var(--interactive-accent));
+	color: var(--text-accent-hover);
+}
+
+.weave-epub-dual-window-swap.is-hidden {
+	display: none;
+}
+
 @container (max-width: 900px) {
 	.epub-left-inline-toolbar {
 		left: 10px;
@@ -1035,4 +1060,3 @@ body.weave-epub-immersive-paragraph-mode .workspace .mod-root .workspace-leaf-co
 		gap: 3px;
 	}
 }
-

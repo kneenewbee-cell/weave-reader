@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEpubNavigationController } from "./useEpubNavigation";
-import { READER_SOURCE_LOCATE_OVERLAY_TIMING } from "../../services/ui/source-locate-overlay-timing";
+import {
+	READER_SOURCE_LOCATE_FOCUS_DURATION_MS,
+	READER_SOURCE_LOCATE_OVERLAY_TIMING,
+} from "../../services/ui/source-locate-overlay-timing";
 
 describe("createEpubNavigationController locate overlay session", () => {
 	beforeEach(() => {
@@ -71,5 +74,37 @@ describe("createEpubNavigationController locate overlay session", () => {
 			left: 100,
 			top: 200,
 		});
+	});
+
+	it("keeps the reader focus highlight visible longer than the locate bubble", async () => {
+		const showAtRect = vi.fn(() => true);
+		const controller = createEpubNavigationController({
+			getReaderReady: () => true,
+			getReaderService: () => ({
+				navigateAndHighlight: vi.fn(async () => undefined),
+				navigateTo: vi.fn(),
+				getCurrentPosition: () => ({ cfi: "cfi-focus" }),
+				getSourceLocateOverlayRect: () => new DOMRect(24, 36, 120, 20),
+			}),
+			getSourceLocateOverlay: () => ({ showAtRect }),
+			getLocateOverlayLabel: () => "Locate",
+		});
+
+		controller.requestBookLocate({
+			cfi: "cfi-focus",
+			flashStyle: "highlight",
+			flashColor: "yellow",
+			showLocateOverlay: true,
+		});
+
+		const totalDelay =
+			READER_SOURCE_LOCATE_OVERLAY_TIMING.initialDelayMs +
+			READER_SOURCE_LOCATE_OVERLAY_TIMING.retryDelayMs *
+				(READER_SOURCE_LOCATE_OVERLAY_TIMING.maxAttempts - 1);
+		await vi.advanceTimersByTimeAsync(totalDelay + 50);
+
+		const overlayDuration = showAtRect.mock.calls[0]?.[1]?.durationMs;
+		expect(typeof overlayDuration).toBe("number");
+		expect(overlayDuration).toBeLessThan(READER_SOURCE_LOCATE_FOCUS_DURATION_MS);
 	});
 });

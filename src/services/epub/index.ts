@@ -157,6 +157,33 @@ export type {
 	EpubWeaveRemoveExcerptResult,
 } from "./epub-host";
 export {
+	EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
+	EPUB_DUAL_WINDOW_SESSION_EVENT,
+	createEpubDualWindowAnnotationDetail,
+	dispatchEpubDualWindowAnnotationEvent,
+	dispatchEpubDualWindowSessionEvent,
+	type EpubDualWindowAnnotationDetail,
+	type EpubDualWindowAnnotationPhase,
+	type EpubDualWindowMode,
+	type EpubDualWindowSessionDetail,
+} from "./epub-dual-window";
+export {
+	getEpubDualWindowLeafContainerEl,
+	getEpubDualWindowLeafContainerEls,
+	getEpubDualWindowSession,
+	hasEpubDualWindowSession,
+	markEpubDualWindowPaneRoles,
+	markEpubDualWindowNoteLeaf,
+	registerEpubDualWindowSession,
+	resolveEpubDualWindowBoundaryPosition,
+	resolveEpubDualWindowPanes,
+	swapEpubDualWindowPanes,
+	type EpubDualWindowPanes,
+	type EpubDualWindowPosition,
+	type EpubDualWindowRect,
+	type EpubDualWindowSession,
+} from "./epub-dual-window-workspace";
+export {
 	EPUB_RUNTIME,
 	getEpubRuntime,
 	isLegacyEpubProtocolName,

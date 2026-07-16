@@ -71,6 +71,9 @@ export interface EpubHostOpenAnnotationNoteInput {
 	filePath: string;
 	currentCfi?: string;
 	currentChapterIndex?: number;
+	dualWindowMode?: boolean;
+	openMode?: "existing" | "right-split";
+	focus?: boolean;
 }
 
 export interface EpubHostSelectedTextAISplitMenuOptions {
@@ -128,6 +131,7 @@ export interface EpubHostCapabilities {
 	exportEpubChapterToMarkdown?: (input: EpubHostExportChapterInput) => Promise<void>;
 	exportEpubBookNotesToMarkdown?: (input: EpubHostExportBookNotesInput) => Promise<void>;
 	openEpubAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
+	refreshEpubAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
 	markEpubResumePointFromReader?: (input: EpubHostResumePointInput) => Promise<void>;
 	openSelectedTextAISplitMenu?: (options: EpubHostSelectedTextAISplitMenuOptions) => void;
 	openAISplitConfigModal?: (input?: EpubHostAISplitConfigModalInput) => unknown;
@@ -195,6 +199,7 @@ const EPUB_HOST_CAPABILITY_KEYS: Array<keyof EpubHostCapabilities> = [
 	"exportEpubChapterToMarkdown",
 	"exportEpubBookNotesToMarkdown",
 	"openEpubAnnotationNote",
+	"refreshEpubAnnotationNote",
 	"markEpubResumePointFromReader",
 	"openSelectedTextAISplitMenu",
 	"openAISplitConfigModal",

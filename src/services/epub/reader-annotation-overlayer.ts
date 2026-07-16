@@ -197,7 +197,24 @@ export class ReaderAnnotationOverlayRenderer {
 		const strokeColor = this.ports.resolveHighlightTint(color);
 
 		for (const rect of rects as RawViewportRect[]) {
+			if (rect.width <= 0 || rect.height <= 0) {
+				continue;
+			}
+			const fill = activeDocument.createElementNS(SVG_NS, "rect");
+			fill.setAttribute("data-weave-source-locate-focus", "fill");
+			fill.setAttribute("x", String(rect.left - 1.5));
+			fill.setAttribute("y", String(rect.top - 1.5));
+			fill.setAttribute("width", String(rect.width + 3));
+			fill.setAttribute("height", String(rect.height + 3));
+			fill.setAttribute("rx", "5");
+			fill.setAttribute("fill", strokeColor);
+			fill.setAttribute("fill-opacity", "0.24");
+			fill.setAttribute("stroke", "none");
+			setSvgInteractionAttributes(fill, { pointerEvents: "none" });
+			group.appendChild(fill);
+
 			const outline = activeDocument.createElementNS(SVG_NS, "rect");
+			outline.setAttribute("data-weave-source-locate-focus", "outline");
 			outline.setAttribute("x", String(rect.left - 1.5));
 			outline.setAttribute("y", String(rect.top - 1.5));
 			outline.setAttribute("width", String(rect.width + 3));
@@ -207,6 +224,7 @@ export class ReaderAnnotationOverlayRenderer {
 			outline.setAttribute("stroke", strokeColor);
 			outline.setAttribute("stroke-width", "2");
 			outline.setAttribute("stroke-opacity", "0.95");
+			setSvgInteractionAttributes(outline, { pointerEvents: "none" });
 			group.appendChild(outline);
 		}
 

@@ -5,8 +5,8 @@ export const READER_SOURCE_LOCATE_OVERLAY_TIMING = {
 	maxAttempts: 12,
 } as const;
 
-/** Source-locate focus ring in reader body; excerpt highlights stay visible underneath. */
-export const READER_SOURCE_LOCATE_FOCUS_DURATION_MS = 1500;
+/** Source-locate focus in reader body; keep it longer than the floating locate bubble. */
+export const READER_SOURCE_LOCATE_FOCUS_DURATION_MS = 3400;
 
 /** Markdown preview/editor overlay can retry sooner once DOM blocks exist. */
 export const MARKDOWN_SOURCE_LOCATE_OVERLAY_TIMING = {

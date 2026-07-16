@@ -266,6 +266,32 @@ describe("FoliateReaderService comment marker layering", () => {
 		}
 	});
 
+	it("draws source-locate focus as a visible translucent box over an existing styled annotation", () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const overlay = (service as any).createTemporaryFocusOverlay(
+				[
+					{
+						left: 10,
+						top: 20,
+						width: 90,
+						height: 18,
+					},
+				],
+				"yellow"
+			);
+			const rects = Array.from(overlay.querySelectorAll("rect"));
+
+			expect(rects).toHaveLength(2);
+			expect(rects[0].getAttribute("fill")).not.toBe("none");
+			expect(Number(rects[0].getAttribute("fill-opacity"))).toBeGreaterThan(0);
+			expect(rects[1].getAttribute("fill")).toBe("none");
+			expect(rects[1].getAttribute("stroke-opacity")).toBe("0.95");
+		} finally {
+			service.destroy();
+		}
+	});
+
 	it("draws a reference badge inside the composite overlay when a styled highlight has multiple references", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {

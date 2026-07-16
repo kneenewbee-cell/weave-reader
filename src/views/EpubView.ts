@@ -22,7 +22,16 @@ import type {
 } from "../services/epub";
 import { canOpenEpubFile } from "../services/epub/epub-premium";
 import { stripSupportedBookExtension } from "../services/epub/book-format";
-import { EPUB_RUNTIME } from "../services/epub";
+import {
+	EPUB_DUAL_WINDOW_SESSION_EVENT,
+	EPUB_RUNTIME,
+	getEpubDualWindowLeafContainerEl,
+	resolveEpubDualWindowBoundaryPosition,
+	resolveEpubDualWindowPanes,
+	swapEpubDualWindowPanes,
+	type EpubDualWindowPanes,
+	type EpubDualWindowSessionDetail,
+} from "../services/epub";
 import type { EpubCanvasService } from "../services/epub/EpubCanvasService";
 import { reportEpubError } from "../services/epub/epub-error";
 import type { CanvasLayoutDirection } from "../services/epub/canvas-types";
@@ -85,6 +94,7 @@ export class EpubView extends ItemView {
 	private inlineAnnotationNoteBtn: HTMLButtonElement | null = null;
 	private annotationVersionsBtn: HTMLElement | null = null;
 	private inlineAnnotationVersionsBtn: HTMLButtonElement | null = null;
+	private dualWindowSwapBtn: HTMLButtonElement | null = null;
 	private screenshotBtn: HTMLElement | null = null;
 	private inlineScreenshotBtn: HTMLButtonElement | null = null;
 	private saveAsImageBtn: HTMLElement | null = null;
@@ -109,6 +119,7 @@ export class EpubView extends ItemView {
 	private bookmarkBtn: HTMLElement | null = null;
 	private readingPositionAutoSaveEnabled = false;
 	private toolbarHandlersReady = false;
+	private dualWindowSessionHandler: ((event: Event) => void) | null = null;
 	private readerKeymapHandlers: KeymapEventHandler[] = [];
 	private actionHandlers: {
 		setAutoInsert?: (enabled: boolean) => void;
@@ -145,6 +156,7 @@ export class EpubView extends ItemView {
 		exportCurrentChapterHighlightsToMarkdown?: () => Promise<void>;
 		exportBookHighlightsToMarkdown?: (event?: MouseEvent) => Promise<void>;
 		openAnnotationNote?: () => Promise<void>;
+		openAnnotationDualWindow?: () => Promise<void>;
 		getExcerptSettings?: () => EpubExcerptSettings;
 		updateExcerptSettings?: (patch: Partial<EpubExcerptSettings>) => Promise<void>;
 		prevPage?: () => void | Promise<void>;
@@ -484,6 +496,8 @@ export class EpubView extends ItemView {
 		const excerptSettings = this.actionHandlers.getExcerptSettings?.();
 		const readerSettings = this.actionHandlers.getReaderSettings?.();
 
+		this.appendDualWindowPaneMenu(menu);
+
 		if (readerSettings && this.actionHandlers.updateReaderSettings) {
 			this.appendReadingAndDisplayPaneMenu(menu, readerSettings);
 		}
@@ -530,6 +544,40 @@ export class EpubView extends ItemView {
 		if (typeof menu.close === "function") {
 			menu.close();
 		}
+	}
+
+	private appendDualWindowPaneMenu(menu: Menu): void {
+		if (!this.filePath) {
+			return;
+		}
+		menu.addItem((item) => {
+			item.setTitle("双窗模式");
+			item.setIcon("columns-2");
+			const dualWindowMenu = this.resolveMenuSubmenu(item, menu);
+			dualWindowMenu.addItem((subItem) => {
+				subItem.setTitle("原书与标注笔记");
+				subItem.setIcon("notebook-pen");
+				subItem.onClick(() => {
+					void this.actionHandlers.openAnnotationDualWindow?.();
+				});
+			});
+			dualWindowMenu.addItem((subItem) => {
+				subItem.setTitle("两种标注对比（暂未开放）");
+				subItem.setIcon("git-compare");
+				(subItem as { setDisabled?: (disabled: boolean) => void }).setDisabled?.(true);
+				subItem.onClick(() => {
+					new Notice("两种标注对比将在后续版本开放");
+				});
+			});
+			dualWindowMenu.addItem((subItem) => {
+				subItem.setTitle("原书与翻译（暂未开放）");
+				subItem.setIcon("languages");
+				(subItem as { setDisabled?: (disabled: boolean) => void }).setDisabled?.(true);
+				subItem.onClick(() => {
+					new Notice("原书与翻译将在后续版本开放");
+				});
+			});
+		});
 	}
 
 	private appendReadingFlowModeItems(subMenu: Menu): void {
@@ -1104,6 +1152,7 @@ export class EpubView extends ItemView {
 		}
 		this.setupLeafChangeTracking();
 		this.setupLinkedTabTracking();
+		this.setupDualWindowSessionTracking();
 
 		if (this.filePath) {
 			await this.mountComponent();
@@ -1147,6 +1196,7 @@ export class EpubView extends ItemView {
 		this.contentEl.empty();
 		const shellEl = this.contentEl.createDiv({ cls: "weave-epub-view-shell" });
 		this.readerHostEl = shellEl.createDiv({ cls: "weave-epub-reader-host" });
+		this.buildDualWindowSwapButton(shellEl);
 		this.applySurfaceContext();
 
 		if (!Platform.isMobile) {
@@ -1280,6 +1330,66 @@ export class EpubView extends ItemView {
 		this.refreshInlineToolbarVisibility();
 	}
 
+	private buildDualWindowSwapButton(shellEl: HTMLDivElement): void {
+		this.dualWindowSwapBtn = shellEl.createEl("button", {
+			cls: "weave-epub-dual-window-swap clickable-icon",
+			attr: {
+				type: "button",
+				"aria-label": "交换双窗内容",
+				title: "交换双窗内容",
+			},
+		});
+		(shellEl.ownerDocument || document).body.appendChild(this.dualWindowSwapBtn);
+		this.dualWindowSwapBtn.classList.add("is-hidden");
+		setIcon(this.dualWindowSwapBtn, "arrow-left-right");
+		this.dualWindowSwapBtn.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			event.stopImmediatePropagation();
+			void this.swapDualWindowPanes();
+		});
+		this.updateDualWindowSwapBtn();
+	}
+
+	private async swapDualWindowPanes(): Promise<void> {
+		const swapped = await swapEpubDualWindowPanes(this.app, this.filePath);
+		if (!swapped) {
+			new Notice("暂无可交换的双窗");
+		}
+		this.updateDualWindowSwapBtn();
+	}
+
+	private positionDualWindowSwapBtn(panes: EpubDualWindowPanes): void {
+		if (!this.dualWindowSwapBtn) {
+			return;
+		}
+		const epubContainerEl = getEpubDualWindowLeafContainerEl(panes.epubLeaf);
+		const noteContainerEl = getEpubDualWindowLeafContainerEl(panes.noteLeaf);
+		if (!epubContainerEl || !noteContainerEl) {
+			this.dualWindowSwapBtn.style.removeProperty("left");
+			this.dualWindowSwapBtn.style.removeProperty("top");
+			return;
+		}
+		const position = resolveEpubDualWindowBoundaryPosition(
+			epubContainerEl.getBoundingClientRect(),
+			noteContainerEl.getBoundingClientRect()
+		);
+		this.dualWindowSwapBtn.style.left = `${position.left}px`;
+		this.dualWindowSwapBtn.style.top = `${position.top}px`;
+	}
+
+	private updateDualWindowSwapBtn(): void {
+		if (!this.dualWindowSwapBtn) {
+			return;
+		}
+		const panes = this.filePath ? resolveEpubDualWindowPanes(this.app, this.filePath) : null;
+		const visible = Boolean(panes);
+		this.dualWindowSwapBtn.toggleClass("is-hidden", !visible);
+		if (panes) {
+			this.positionDualWindowSwapBtn(panes);
+		}
+	}
+
 	private appendInlineActionButton(
 		icon: string,
 		label: string,
@@ -1345,6 +1455,7 @@ export class EpubView extends ItemView {
 		this.updateParagraphModeBtn();
 		this.updateCanvasBtn();
 		this.updateDirectionBtn();
+		this.updateDualWindowSwapBtn();
 	}
 
 	private applyActionButtonState(
@@ -1641,6 +1752,10 @@ export class EpubView extends ItemView {
 			this.app.workspace.off("layout-change", this.layoutChangeHandler);
 			this.layoutChangeHandler = null;
 		}
+		if (this.dualWindowSessionHandler) {
+			window.removeEventListener(EPUB_DUAL_WINDOW_SESSION_EVENT, this.dualWindowSessionHandler);
+			this.dualWindowSessionHandler = null;
+		}
 		if (this.component) {
 			const { unmount } = await import("svelte");
 			try {
@@ -1668,6 +1783,8 @@ export class EpubView extends ItemView {
 		this.inlineCanvasBtn = null;
 		this.inlineReadingReferenceBtn = null;
 		this.inlineTutorialBtn = null;
+		this.dualWindowSwapBtn?.remove();
+		this.dualWindowSwapBtn = null;
 		this.readingReferenceBtn = null;
 		this.readingPositionAutoSaveEnabled = false;
 		this.hasReadingReferencePoint = false;
@@ -1683,11 +1800,28 @@ export class EpubView extends ItemView {
 		this.layoutChangeHandler = () => {
 			this.applySurfaceContext();
 			this.checkLinkedCanvasTab();
+			this.updateDualWindowSwapBtn();
 			if (this.toolbarHandlersReady) {
 				this.refreshAllActionButtons();
 			}
 		};
 		this.app.workspace.on("layout-change", this.layoutChangeHandler);
+	}
+
+	private setupDualWindowSessionTracking(): void {
+		if (this.dualWindowSessionHandler) {
+			return;
+		}
+		this.dualWindowSessionHandler = (event: Event) => {
+			const detail = (event as CustomEvent<EpubDualWindowSessionDetail>).detail || null;
+			const eventPath = normalizePath(String(detail?.filePath || "").trim());
+			const currentPath = normalizePath(String(this.filePath || "").trim());
+			if (!eventPath || !currentPath || eventPath !== currentPath) {
+				return;
+			}
+			this.updateDualWindowSwapBtn();
+		};
+		window.addEventListener(EPUB_DUAL_WINDOW_SESSION_EVENT, this.dualWindowSessionHandler);
 	}
 
 	private checkLinkedCanvasTab(): void {

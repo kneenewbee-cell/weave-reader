@@ -70,6 +70,41 @@ describe("epub-host resolution", () => {
 		expect(legacyCreateCard).toHaveBeenCalledWith({ initialContent: "demo" });
 	});
 
+	it("falls back to refreshEpubAnnotationNote when the primary host does not implement it", async () => {
+		const refreshEpubAnnotationNote = vi.fn(async () => undefined);
+		const localHost = {
+			openEpubReader: vi.fn(async () => undefined),
+		};
+		const app = {
+			plugins: {
+				getPlugin: vi.fn((pluginId: string) => {
+					if (pluginId === "weave-epub-reader") {
+						return localHost;
+					}
+					if (pluginId === "weave") {
+						return {
+							refreshEpubAnnotationNote,
+						};
+					}
+					return null;
+				}),
+			},
+		} as any;
+
+		registerEpubHost(app, localHost);
+		const resolved = resolveEpubHost(app);
+		await resolved?.refreshEpubAnnotationNote?.({
+			bookId: "epub-book-1",
+			filePath: "Books/demo.epub",
+		});
+		unregisterEpubHost(app);
+
+		expect(refreshEpubAnnotationNote).toHaveBeenCalledWith({
+			bookId: "epub-book-1",
+			filePath: "Books/demo.epub",
+		});
+	});
+
 	it("falls back to legacy Weave AI split config modal when the local host is registered", () => {
 		const legacyOpenAISplitConfigModal = vi.fn();
 		const localHost = {

@@ -19,6 +19,10 @@ vi.mock('obsidian', () => ({
 
 import { createEpubLinkPostProcessor } from '../EpubLinkPostProcessor';
 import { EpubLinkService } from '../EpubLinkService';
+import {
+	EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
+} from '../epub-dual-window';
+import { registerEpubHost, unregisterEpubHost } from '../epub-host';
 
 beforeAll(() => {
 	Object.defineProperty(HTMLElement.prototype, 'addClass', {
@@ -283,6 +287,195 @@ describe('EpubLinkPostProcessor', () => {
 		searchInput!.dispatchEvent(new Event('input'));
 		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(0);
 		expect(count?.textContent).toBe('0 / 3');
+	});
+
+	it('binds the annotation note dual-window button to the EPUB host', () => {
+		const openEpubAnnotationNote = vi.fn(async () => undefined);
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		registerEpubHost(app, { openEpubAnnotationNote });
+		try {
+			const container = document.createElement('div');
+			container.className = 'markdown-rendered';
+			container.innerHTML = [
+				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open">双窗模式</button>',
+				'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>',
+				'<div class="weave-annotation-note-line" data-cfi-range="epubcfi(/6/2)" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
+			].join('');
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			container.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+
+			expect(openEpubAnnotationNote).toHaveBeenCalledWith({
+				bookId: 'book-1',
+				filePath: 'Books/demo.epub',
+				dualWindowMode: true,
+				openMode: 'right-split',
+				focus: false,
+			});
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('keeps the annotation note dual-window button working when the button renders after the marker', () => {
+		const openEpubAnnotationNote = vi.fn(async () => undefined);
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		registerEpubHost(app, { openEpubAnnotationNote });
+		try {
+			const page = document.createElement('div');
+			page.className = 'markdown-rendered';
+			page.innerHTML = '<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>';
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(page, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+
+			const lateButton = document.createElement('button');
+			lateButton.className = 'weave-annotation-note-dual-window';
+			lateButton.type = 'button';
+			lateButton.dataset.weaveDualWindowAction = 'open';
+			lateButton.textContent = '双窗模式';
+			page.appendChild(lateButton);
+			lateButton.click();
+
+			expect(openEpubAnnotationNote).toHaveBeenCalledWith({
+				bookId: 'book-1',
+				filePath: 'Books/demo.epub',
+				dualWindowMode: true,
+				openMode: 'right-split',
+				focus: false,
+			});
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('binds a chunked annotation note dual-window button without a nearby marker', () => {
+		const openEpubAnnotationNote = vi.fn(async () => undefined);
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		registerEpubHost(app, { openEpubAnnotationNote });
+		try {
+			const buttonChunk = document.createElement('div');
+			buttonChunk.className = 'el-button';
+			buttonChunk.innerHTML =
+				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="book-1" data-source-file="Books/demo.epub">双窗模式</button>';
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(buttonChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			buttonChunk.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+
+			expect(openEpubAnnotationNote).toHaveBeenCalledWith({
+				bookId: 'book-1',
+				filePath: 'Books/demo.epub',
+				dualWindowMode: true,
+				openMode: 'right-split',
+				focus: false,
+			});
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('dispatches dual-window annotation hover events from annotation note lines', () => {
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		const events: CustomEvent[] = [];
+		const listener = (event: Event) => events.push(event as CustomEvent);
+		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		try {
+			const container = document.createElement('div');
+			container.className = 'markdown-rendered';
+			container.innerHTML = [
+				'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="true"></div>',
+				'<div class="weave-annotation-note-line" data-annotation-id="anno-1" data-cfi-range="epubcfi(/6/2)" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
+			].join('');
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			const line = container.querySelector<HTMLElement>('.weave-annotation-note-line');
+			line?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+			line?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+
+			expect(events.map((event) => event.detail.phase)).toEqual(['enter', 'leave']);
+			expect(events[0]?.detail).toMatchObject({
+				bookId: 'book-1',
+				filePath: 'Books/demo.epub',
+				cfiRange: 'epubcfi(/6/2)',
+				annotationId: 'anno-1',
+				semanticId: 'theorem',
+				text: 'alpha theorem',
+			});
+		} finally {
+			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		}
+	});
+
+	it('dispatches dual-window annotation hover events for note lines rendered after the marker', () => {
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		const events: CustomEvent[] = [];
+		const listener = (event: Event) => events.push(event as CustomEvent);
+		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		try {
+			const page = document.createElement('div');
+			page.className = 'markdown-rendered';
+			page.innerHTML = '<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="true"></div>';
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(page, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+
+			const lateLine = document.createElement('div');
+			lateLine.className = 'weave-annotation-note-line';
+			lateLine.dataset.annotationId = 'anno-late';
+			lateLine.dataset.cfiRange = 'epubcfi(/6/4)';
+			lateLine.dataset.semanticId = 'method';
+			lateLine.dataset.annotationText = 'late annotation';
+			lateLine.textContent = 'late';
+			page.appendChild(lateLine);
+			lateLine.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+			lateLine.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+
+			expect(events.map((event) => event.detail.phase)).toEqual(['enter', 'leave']);
+			expect(events[0]?.detail).toMatchObject({
+				bookId: 'book-1',
+				filePath: 'Books/demo.epub',
+				cfiRange: 'epubcfi(/6/4)',
+				annotationId: 'anno-late',
+				semanticId: 'method',
+				text: 'late annotation',
+			});
+		} finally {
+			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		}
+	});
+
+	it('dispatches dual-window annotation hover events from a chunked line without a nearby marker', () => {
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		const events: CustomEvent[] = [];
+		const listener = (event: Event) => events.push(event as CustomEvent);
+		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		try {
+			const lineChunk = document.createElement('div');
+			lineChunk.className = 'el-div';
+			lineChunk.innerHTML =
+				'<div class="weave-annotation-note-line" data-book-id="book-1" data-source-file="Books/demo.epub" data-annotation-id="anno-1" data-cfi-range="epubcfi(/6/2)" data-semantic-id="theorem" data-annotation-text="alpha theorem">alpha</div>';
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(lineChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			const line = lineChunk.querySelector<HTMLElement>('.weave-annotation-note-line');
+			line?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+			line?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+
+			expect(events.map((event) => event.detail.phase)).toEqual(['enter', 'leave']);
+			expect(events[0]?.detail).toMatchObject({
+				bookId: 'book-1',
+				filePath: 'Books/demo.epub',
+				cfiRange: 'epubcfi(/6/2)',
+				annotationId: 'anno-1',
+				semanticId: 'theorem',
+				text: 'alpha theorem',
+			});
+		} finally {
+			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		}
 	});
 
 	it('mounts annotation note filters after Obsidian renders note chunks separately', async () => {

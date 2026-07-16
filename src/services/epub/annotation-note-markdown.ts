@@ -38,6 +38,7 @@ export interface RenderEpubAnnotationNoteMarkdownInput {
 	annotations: EpubAnnotationNoteAnnotationInput[];
 	semanticProfile?: unknown | null;
 	now?: Date;
+	dualWindowMode?: boolean;
 }
 
 interface EpubAnnotationNoteChapter {
@@ -79,6 +80,7 @@ const TEXT = {
 	unlocatedChapter: "\u672a\u5b9a\u4f4d\u7ae0\u8282",
 	unsemantic: "\u672a\u6807\u6ce8\u8bed\u4e49",
 	comment: "\u5907\u6ce8",
+	dualWindow: "\u53cc\u7a97\u6a21\u5f0f",
 };
 
 function escapeHtml(value: unknown): string {
@@ -114,6 +116,7 @@ function normalizeStyle(value: unknown): "highlight" | "underline" | "strikethro
 function buildProtocolHref(input: {
 	filePath: string;
 	cfi?: string;
+	text?: string;
 	chapterIndex?: number;
 	sourceId?: string;
 	flashStyle?: "pulse" | "highlight" | "none";
@@ -124,6 +127,10 @@ function buildProtocolHref(input: {
 	const cfi = String(input.cfi || "").trim();
 	if (cfi) {
 		parts.push(`cfi=${cfi}`);
+	}
+	const text = String(input.text || "").trim();
+	if (text) {
+		parts.push(`text=${encodeQueryValue(text)}`);
 	}
 	if (typeof input.chapterIndex === "number" && Number.isFinite(input.chapterIndex)) {
 		parts.push(`chapter=${input.chapterIndex}`);
@@ -280,22 +287,28 @@ function renderStyledText(annotation: EpubAnnotationNoteAnnotationInput): string
 
 function renderAnnotationLine(
 	annotation: ResolvedEpubAnnotationNoteAnnotation,
+	bookId: string,
 	book: EpubAnnotationNoteBookInput
 ): string {
 	const chapterIndex = annotation.noteChapter.index;
 	const chapterTitle = annotation.noteChapter.title;
 	const semanticId = getSemanticId(annotation);
 	const semanticLabel = getSemanticLabel(annotation);
+	const cfiRange = String(annotation.cfiRange || "").trim();
+	const annotationText = normalizeInlineAnnotationText(annotation.text);
 	const href = buildProtocolHref({
 		filePath: book.filePath,
-		cfi: annotation.cfiRange,
+		cfi: cfiRange,
+		text: annotationText,
 		chapterIndex: annotation.chapterIndex,
 		sourceId: book.sourceId,
+		flashStyle: "highlight",
+		flashColor: "yellow",
+		showLocateOverlay: true,
 	});
 	const styledText = renderStyledText(annotation);
-	const annotationText = normalizeInlineAnnotationText(annotation.text);
 	const lines = [
-		`<div class="weave-annotation-note-line" data-annotation-id="${escapeHtml(annotation.id || "")}" data-chapter-key="${escapeHtml(annotation.noteChapter.key)}" data-chapter-index="${typeof chapterIndex === "number" ? chapterIndex : ""}" data-chapter-title="${escapeHtml(chapterTitle)}" data-semantic-id="${escapeHtml(semanticId)}" data-semantic-label="${escapeHtml(semanticLabel)}" data-annotation-text="${escapeHtml(annotationText)}"><a href="${escapeHtml(href)}" style="text-decoration: none; color: var(--text-normal);">${styledText}</a>`,
+		`<div class="weave-annotation-note-line" data-book-id="${escapeHtml(bookId)}" data-source-file="${escapeHtml(book.filePath)}" data-annotation-id="${escapeHtml(annotation.id || "")}" data-cfi-range="${escapeHtml(cfiRange)}" data-chapter-key="${escapeHtml(annotation.noteChapter.key)}" data-chapter-index="${typeof chapterIndex === "number" ? chapterIndex : ""}" data-chapter-title="${escapeHtml(chapterTitle)}" data-semantic-id="${escapeHtml(semanticId)}" data-semantic-label="${escapeHtml(semanticLabel)}" data-annotation-text="${escapeHtml(annotationText)}"><a href="${escapeHtml(href)}" style="text-decoration: none; color: var(--text-normal);">${styledText}</a>`,
 	];
 	const comment = String(annotation.commentText || "").trim();
 	if (comment) {
@@ -324,6 +337,7 @@ export function renderEpubAnnotationNoteMarkdown(
 	const bookTitle = String(input.book.title || "").trim() || TEXT.untitledBook;
 	const author = String(input.book.author || "").trim();
 	const generatedAt = (input.now || new Date()).toLocaleString("zh-CN", { hour12: false });
+	const dualWindowMode = input.dualWindowMode === true;
 	const annotations = sortAnnotations(
 		resolveAnnotationChapters(
 			(input.annotations || [])
@@ -343,7 +357,12 @@ export function renderEpubAnnotationNoteMarkdown(
 			flashStyle: input.book.currentCfi ? "pulse" : undefined,
 			showLocateOverlay: Boolean(input.book.currentCfi),
 		}))}">${TEXT.returnToBook}</a>`,
-		`<div class="weave-annotation-note-root" data-book-id="${escapeHtml(input.bookId)}"></div>`,
+		...(dualWindowMode
+			? []
+			: [
+					`<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="${escapeHtml(input.bookId)}" data-source-file="${escapeHtml(input.book.filePath)}">${TEXT.dualWindow}</button>`,
+				]),
+		`<div class="weave-annotation-note-root" data-book-id="${escapeHtml(input.bookId)}" data-source-file="${escapeHtml(input.book.filePath)}" data-dual-window-mode="${dualWindowMode ? "true" : "false"}"></div>`,
 		"",
 		`> ${TEXT.readonlyNotice}`,
 		"",
@@ -367,7 +386,7 @@ export function renderEpubAnnotationNoteMarkdown(
 			currentChapter = chapterTitle;
 			lines.push(renderChapterHeading(annotation), "");
 		}
-		lines.push(renderAnnotationLine(annotation, input.book), "");
+		lines.push(renderAnnotationLine(annotation, input.bookId, input.book), "");
 	}
 
 	return `${lines.join("\n").trim()}\n`;

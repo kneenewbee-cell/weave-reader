@@ -2,6 +2,7 @@ import { t } from "../../utils/i18n";
 import { generateCardUUID } from "../identifier/WeaveIDGenerator";
 import type { EpubBacklinkHighlightService } from "./EpubBacklinkHighlightService";
 import { EpubLinkService } from "./EpubLinkService";
+import { isEpubGeneratedAnnotationNotePath } from "./epub-portable-data-location";
 import {
 	getReaderHighlightIdentityKey,
 	mergeReaderHighlightsByIdentity,
@@ -366,6 +367,33 @@ export class EpubAnnotationService {
 		}
 	}
 
+	private getPortableHighlightRemovalKey(
+		existing: ReaderHighlight[],
+		target: ReaderHighlight
+	): string {
+		const targetKey = getReaderHighlightIdentityKey(target);
+		if (!targetKey) {
+			return "";
+		}
+		if (existing.some((item) => getReaderHighlightIdentityKey(item) === targetKey)) {
+			return targetKey;
+		}
+
+		const targetCfi = EpubLinkService.normalizeCfi(target.cfiRange);
+		const targetSemanticId = String(target.semanticId || "").trim();
+		if (!targetCfi || !targetSemanticId) {
+			return targetKey;
+		}
+		const sameSemanticRange = existing.filter((item) => (
+			EpubLinkService.normalizeCfi(item.cfiRange) === targetCfi &&
+			String(item.semanticId || "").trim() === targetSemanticId
+		));
+		if (sameSemanticRange.length !== 1) {
+			return targetKey;
+		}
+		return getReaderHighlightIdentityKey(sameSemanticRange[0]) || targetKey;
+	}
+
 	async savePortableHighlight(bookId: string, highlight: ReaderHighlight): Promise<void> {
 		await this.savePortableHighlightWithPolicy(bookId, highlight);
 	}
@@ -438,21 +466,21 @@ export class EpubAnnotationService {
 			if (!normalizedTarget) {
 				return null;
 			}
-			const targetKey = getReaderHighlightIdentityKey(normalizedTarget);
+			const existing = payload.annotations
+				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
+				.filter((item): item is ReaderHighlight => Boolean(item));
+			const targetKey = this.getPortableHighlightRemovalKey(existing, normalizedTarget);
 			if (!targetKey) {
 				return null;
 			}
 			let removed: ReaderHighlight | null = null;
-			const remaining = payload.annotations
-				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
-				.filter((item): item is ReaderHighlight => Boolean(item))
-				.filter((item) => {
-					if (getReaderHighlightIdentityKey(item) !== targetKey) {
-						return true;
-					}
-					removed = removed || item;
-					return false;
-				});
+			const remaining = existing.filter((item) => {
+				if (getReaderHighlightIdentityKey(item) !== targetKey) {
+					return true;
+				}
+				removed = removed || item;
+				return false;
+			});
 			if (!removed) {
 				return null;
 			}
@@ -542,6 +570,18 @@ export class EpubAnnotationService {
 			});
 		}
 		return this.mergeHighlightSourceLocators([], locators);
+	}
+
+	private isGeneratedAnnotationNoteSourcePath(sourcePath: unknown): boolean {
+		return isEpubGeneratedAnnotationNotePath(sourcePath);
+	}
+
+	private excludeGeneratedAnnotationNoteLocators(
+		locators: HighlightSourceLocator[]
+	): HighlightSourceLocator[] {
+		return locators.filter(
+			(locator) => !this.isGeneratedAnnotationNoteSourcePath(locator.sourceFile)
+		);
 	}
 
 	private mergeHighlightSourceLocators(
@@ -665,7 +705,12 @@ export class EpubAnnotationService {
 				if (!this.isActiveSemanticAnnotation(bh, effectiveSemanticProfile)) {
 					continue;
 				}
-				const incomingLocators = this.collectHighlightSourceLocators(bh);
+				const incomingLocators = this.excludeGeneratedAnnotationNoteLocators(
+					this.collectHighlightSourceLocators(bh)
+				);
+				if (incomingLocators.length === 0) {
+					continue;
+				}
 				const incomingIdentity = getReaderHighlightIdentityKey(bh);
 				const existing = allHighlightsByKey.get(incomingIdentity);
 				if (existing) {

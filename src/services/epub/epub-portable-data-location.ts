@@ -111,6 +111,11 @@ export function resolveEpubPortableBookDataLocation(
 	};
 }
 
+export function isEpubGeneratedAnnotationNotePath(value: unknown): boolean {
+	const normalizedPath = normalizePath(cleanString(value));
+	return /^weave\/epub-data\/books\/[^/]+\/annotations\.md$/i.test(normalizedPath);
+}
+
 export function findEpubPortableBookIdInIndex(index: unknown, filePath: unknown): string {
 	return findEpubPortableBookIdInIndexByIdentity(index, { filePath });
 }
