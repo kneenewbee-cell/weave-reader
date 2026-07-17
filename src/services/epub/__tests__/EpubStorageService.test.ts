@@ -5,6 +5,7 @@ import { computeEpubFingerprints } from '../epub-fingerprints';
 import type { EpubBook } from '../types';
 
 const SYNC_EPUB_ROOT = 'weave/incremental-reading/epub-reading';
+const PORTABLE_EPUB_ROOT = 'weave/epub-data';
 const LOCAL_EPUB_DATA_PATH = '.obsidian/plugins/weave/state/epub-local-state.json';
 const LEGACY_LOCAL_EPUB_DATA_PATH = '.obsidian/plugins/weave/state/incremental-reading/epub-reader-data.json';
 const LOCAL_EPUB_SCAN_INDEX_PATH = '.obsidian/plugins/weave/cache/epub-scan-index.json';
@@ -26,6 +27,10 @@ function readLocalEpubData(files: Map<string, string>) {
 
 function readLocalScanIndex(files: Map<string, string>) {
   return JSON.parse(files.get(LOCAL_EPUB_SCAN_INDEX_PATH) || '[]');
+}
+
+function readPortableEpubIndex(files: Map<string, string>) {
+  return JSON.parse(files.get(`${PORTABLE_EPUB_ROOT}/index.json`) || '{"books":{}}');
 }
 
 async function createValidEpubBinary(): Promise<Uint8Array> {
@@ -1405,6 +1410,84 @@ describe('EpubStorageService', () => {
     const books = await service.loadBooks({ hydrateStates: false });
     expect(Object.keys(books)).toContain('book-2');
     expect(books['book-2']?.filePath).toBe('Books/demo.epub');
+  });
+
+  it('creates a portable book data directory as soon as a book is added to the bookshelf', async () => {
+    const epubBinary = await createValidEpubBinary();
+    const { app, files } = createMemoryApp({}, ['Books/demo.epub'], {
+      'Books/demo.epub': epubBinary,
+    });
+    const service = new EpubStorageService(app);
+
+    const added = await service.addBooksToBookshelf(['Books/demo.epub']);
+
+    expect(added).toHaveLength(1);
+    const portableIndex = readPortableEpubIndex(files);
+    const bookIds = Object.keys(portableIndex.books || {});
+    expect(bookIds).toHaveLength(1);
+    const bookId = bookIds[0];
+    expect(bookId).toMatch(/^epub-book-/);
+    expect(portableIndex.books[bookId]).toMatchObject({
+      bookId,
+      filePath: 'Books/demo.epub',
+      knownPaths: ['Books/demo.epub'],
+      fileFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      packageFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      contentFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(JSON.parse(files.get(`${PORTABLE_EPUB_ROOT}/books/${bookId}/book.json`) || '{}')).toMatchObject({
+      bookId,
+      filePath: 'Books/demo.epub',
+      knownPaths: ['Books/demo.epub'],
+      fileFingerprint: portableIndex.books[bookId].fileFingerprint,
+    });
+  });
+
+  it('removes the portable book data directory when removing a book from the bookshelf', async () => {
+    const epubBinary = await createValidEpubBinary();
+    const { app, files } = createMemoryApp({}, ['Books/demo.epub'], {
+      'Books/demo.epub': epubBinary,
+    });
+    const service = new EpubStorageService(app);
+
+    await service.addBooksToBookshelf(['Books/demo.epub']);
+    const bookId = Object.keys(readPortableEpubIndex(files).books || {})[0];
+    files.set(
+      `${PORTABLE_EPUB_ROOT}/books/${bookId}/versions/default/annotations.json`,
+      JSON.stringify({ bookId, annotations: [{ semanticId: 'note' }] })
+    );
+
+    const result = await service.removeFromBookshelfByFilePath('Books/demo.epub', { purgeCache: true });
+
+    expect(result.removedBookId).toBe(bookId);
+    expect(readPortableEpubIndex(files).books || {}).not.toHaveProperty(bookId);
+    expect(Array.from(files.keys()).some((path) => path.startsWith(`${PORTABLE_EPUB_ROOT}/books/${bookId}/`))).toBe(false);
+  });
+
+  it('backfills portable book data for existing bookshelf membership during bookshelf refresh', async () => {
+    const epubBinary = await createValidEpubBinary();
+    const { app, files } = createMemoryApp({
+      [LOCAL_EPUB_DATA_PATH]: JSON.stringify({
+        version: 1,
+        updatedAt: 1,
+        bookCatalogStoredLocally: true,
+        books: {},
+        bookshelfMembership: [{ path: 'Books/demo.epub', addedAt: 10 }],
+      }),
+    }, ['Books/demo.epub'], {
+      'Books/demo.epub': epubBinary,
+    });
+    const service = new EpubStorageService(app);
+
+    await service.listBookshelfEntries();
+
+    const portableIndex = readPortableEpubIndex(files);
+    const bookIds = Object.keys(portableIndex.books || {});
+    expect(bookIds).toHaveLength(1);
+    expect(portableIndex.books[bookIds[0]]).toMatchObject({
+      filePath: 'Books/demo.epub',
+      knownPaths: ['Books/demo.epub'],
+    });
   });
 
   it('does not let another storage instance rewrite stale bookshelf membership back into unified local data', async () => {

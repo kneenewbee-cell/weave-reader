@@ -91,6 +91,13 @@ import {
 	type PartialEpubFingerprints,
 } from "./epub-fingerprints";
 import {
+	getEpubPortableBookPath,
+	getEpubPortableDataRoot,
+	readEpubSemanticJson,
+	safeEpubSemanticBookId,
+	writeEpubSemanticJson,
+} from "./semantic/semantic-store";
+import {
 	normalizeTocChapterMarkKey,
 	normalizeTocChapterMarkMap,
 	type EpubTocChapterMark,
@@ -2616,6 +2623,249 @@ export class EpubStorageService {
 		return String(value || "").trim().toLowerCase();
 	}
 
+	private isPlainRecord(value: unknown): value is Record<string, unknown> {
+		return Boolean(value && typeof value === "object" && !Array.isArray(value));
+	}
+
+	private getPortableIndexPath(): string {
+		return normalizePath(`${getEpubPortableDataRoot()}/index.json`);
+	}
+
+	private getPortableBookDir(bookId: string): string {
+		return normalizePath(`${getEpubPortableDataRoot()}/books/${safeEpubSemanticBookId(bookId)}`);
+	}
+
+	private getPortableBookFingerprints(value: unknown): PartialEpubFingerprints {
+		if (!this.isPlainRecord(value)) {
+			return {};
+		}
+		return {
+			...(this.normalizeFingerprint(value.fileFingerprint || value.sourceFingerprint)
+				? { fileFingerprint: this.normalizeFingerprint(value.fileFingerprint || value.sourceFingerprint) }
+				: {}),
+			...(this.normalizeFingerprint(value.packageFingerprint)
+				? { packageFingerprint: this.normalizeFingerprint(value.packageFingerprint) }
+				: {}),
+			...(this.normalizeFingerprint(value.contentFingerprint)
+				? { contentFingerprint: this.normalizeFingerprint(value.contentFingerprint) }
+				: {}),
+		};
+	}
+
+	private portableRecordMatchesSource(
+		value: unknown,
+		sourceEntry: EpubSourceRegistryEntry | null | undefined,
+		filePath: string
+	): boolean {
+		if (!this.isPlainRecord(value)) {
+			return false;
+		}
+		const normalizedPath = normalizePath(filePath || "");
+		const sourceFileFingerprint = this.normalizeFingerprint(
+			sourceEntry?.fileFingerprint || sourceEntry?.sourceFingerprint
+		);
+		const recordFingerprints = this.getPortableBookFingerprints(value);
+		if (sourceFileFingerprint) {
+			return this.normalizeFingerprint(recordFingerprints.fileFingerprint) === sourceFileFingerprint;
+		}
+		if (sourceEntry?.sourceId && String(value.sourceId || "").trim() === sourceEntry.sourceId) {
+			return true;
+		}
+		if (normalizePath(String(value.filePath || "")) === normalizedPath) {
+			return true;
+		}
+		return Array.isArray(value.knownPaths)
+			? value.knownPaths.some((entry) => normalizePath(String(entry || "")) === normalizedPath)
+			: false;
+	}
+
+	private async readPortableIndex(): Promise<Record<string, unknown>> {
+		const current = await readEpubSemanticJson(this.app, this.getPortableIndexPath());
+		return this.isPlainRecord(current) ? current : {};
+	}
+
+	private findPortableBookIdInIndex(
+		index: Record<string, unknown>,
+		sourceEntry: EpubSourceRegistryEntry | null | undefined,
+		filePath: string
+	): string {
+		const books = this.isPlainRecord(index.books) ? index.books : {};
+		for (const [fallbackBookId, value] of Object.entries(books)) {
+			if (!this.portableRecordMatchesSource(value, sourceEntry, filePath)) {
+				continue;
+			}
+			const bookId = this.isPlainRecord(value) ? value.bookId || fallbackBookId : fallbackBookId;
+			return safeEpubSemanticBookId(bookId);
+		}
+		return "";
+	}
+
+	private async findPortableBookIdForPath(filePath: string): Promise<string> {
+		const normalizedPath = normalizePath(filePath || "");
+		if (!normalizedPath) {
+			return "";
+		}
+		const sourceEntry = await this.ensureSourceIdentity(normalizedPath);
+		const index = await this.readPortableIndex();
+		return this.findPortableBookIdInIndex(index, sourceEntry, normalizedPath);
+	}
+
+	private buildBookFromScanEntryAndSource(
+		scanEntry: EpubScanIndexEntry,
+		sourceEntry: EpubSourceRegistryEntry | null | undefined,
+		bookId: string
+	): EpubBook {
+		const book = this.buildShelfOnlyBookFromScanEntry(scanEntry);
+		book.id = safeEpubSemanticBookId(bookId);
+		book.sourceId = sourceEntry?.sourceId;
+		book.sourceFingerprint = sourceEntry?.sourceFingerprint;
+		book.fileFingerprint = sourceEntry?.fileFingerprint;
+		book.packageFingerprint = sourceEntry?.packageFingerprint;
+		book.contentFingerprint = sourceEntry?.contentFingerprint;
+		book.sourceSize = sourceEntry?.sourceSize;
+		book.sourceMtime = sourceEntry?.sourceMtime;
+		return book;
+	}
+
+	private async ensureLocalBookDescriptorForBookshelfPath(
+		scanEntry: EpubScanIndexEntry,
+		sourceEntry: EpubSourceRegistryEntry | null | undefined,
+		bookId: string
+	): Promise<void> {
+		const book = this.buildBookFromScanEntryAndSource(scanEntry, sourceEntry, bookId);
+		await this.updateUnifiedLocalReaderData((localData) => {
+			const books = { ...(localData.books || {}) };
+			const previous = this.isPlainRecord(books[book.id]) ? books[book.id] : {};
+			books[book.id] = {
+				...previous,
+				descriptor: this.toStoredBookDescriptor(book),
+			};
+			localData.bookCatalogStoredLocally = true;
+			localData.books = books;
+		});
+		if (!this._booksCache) {
+			this._booksCache = {};
+		}
+		this._booksCache[book.id] = book;
+	}
+
+	private async ensurePortableBookDataForBookshelfPath(
+		scanEntry: EpubScanIndexEntry,
+		sourceEntry: EpubSourceRegistryEntry | null | undefined
+	): Promise<string | null> {
+		const normalizedPath = normalizePath(scanEntry.path || "");
+		if (!normalizedPath) {
+			return null;
+		}
+
+		const currentIndex = await this.readPortableIndex();
+		const currentBooks = this.isPlainRecord(currentIndex.books) ? currentIndex.books : {};
+		const existingBookId = this.findPortableBookIdInIndex(currentIndex, sourceEntry, normalizedPath);
+		const bookId = safeEpubSemanticBookId(
+			existingBookId ||
+				this.buildStableBookId({
+					sourceId: sourceEntry?.sourceId,
+					sourceFingerprint: sourceEntry?.sourceFingerprint || sourceEntry?.fileFingerprint,
+					filePath: normalizedPath,
+				})
+		);
+		const previous = this.isPlainRecord(currentBooks[bookId]) ? currentBooks[bookId] : {};
+		const previousKnownPaths = Array.isArray(previous.knownPaths) ? previous.knownPaths : [];
+		const knownPaths = Array.from(
+			new Set([...previousKnownPaths, normalizedPath].map((entry) => normalizePath(String(entry || ""))).filter(Boolean))
+		);
+		const title =
+			String(previous.title || previous.displayTitle || "").trim() ||
+			String(scanEntry.name || "").trim() ||
+			stripSupportedBookExtension(normalizedPath.split("/").pop() || "") ||
+			"书籍";
+		const fingerprints = this.getPortableBookFingerprints({
+			...previous,
+			sourceFingerprint: sourceEntry?.sourceFingerprint,
+			fileFingerprint: sourceEntry?.fileFingerprint || sourceEntry?.sourceFingerprint,
+			packageFingerprint: sourceEntry?.packageFingerprint,
+			contentFingerprint: sourceEntry?.contentFingerprint,
+		});
+		const nextBook = {
+			...previous,
+			format: "weave-reader-book/v1",
+			version: 1,
+			bookId,
+			filePath: normalizedPath,
+			knownPaths,
+			sourceId: sourceEntry?.sourceId || String(previous.sourceId || "").trim() || undefined,
+			sourceFingerprint: fingerprints.fileFingerprint || undefined,
+			fileFingerprint: fingerprints.fileFingerprint || undefined,
+			packageFingerprint: fingerprints.packageFingerprint || undefined,
+			contentFingerprint: fingerprints.contentFingerprint || undefined,
+			sourceSize: sourceEntry?.sourceSize ?? previous.sourceSize,
+			sourceMtime: sourceEntry?.sourceMtime ?? previous.sourceMtime,
+			title,
+			displayTitle: String(previous.displayTitle || "").trim() || title,
+			updatedAt: Date.now(),
+		};
+		const nextBooks: Record<string, unknown> = {};
+		for (const [candidateBookId, value] of Object.entries(currentBooks)) {
+			if (candidateBookId === bookId) {
+				continue;
+			}
+			if (!this.isPlainRecord(value)) {
+				nextBooks[candidateBookId] = value;
+				continue;
+			}
+			const candidateKnownPaths = Array.isArray(value.knownPaths) ? value.knownPaths : [];
+			const filteredKnownPaths = candidateKnownPaths
+				.map((entry) => normalizePath(String(entry || "")))
+				.filter((entry) => entry && entry !== normalizedPath);
+			nextBooks[candidateBookId] = {
+				...value,
+				...(filteredKnownPaths.length !== candidateKnownPaths.length
+					? { knownPaths: Array.from(new Set(filteredKnownPaths)) }
+					: {}),
+				...(normalizePath(String(value.filePath || "")) === normalizedPath && filteredKnownPaths[0]
+					? { filePath: filteredKnownPaths[0] }
+					: {}),
+			};
+		}
+		nextBooks[bookId] = nextBook;
+
+		await writeEpubSemanticJson(this.app, this.getPortableIndexPath(), {
+			...currentIndex,
+			format: "weave-reader-epub-data-index/v1",
+			version: 1,
+			updatedAt: Date.now(),
+			books: nextBooks,
+		});
+		await writeEpubSemanticJson(this.app, getEpubPortableBookPath(bookId, "book.json"), nextBook);
+		await this.ensureLocalBookDescriptorForBookshelfPath(scanEntry, sourceEntry, bookId);
+		return bookId;
+	}
+
+	private async removePortableBookData(bookId: string): Promise<void> {
+		const safeBookId = safeEpubSemanticBookId(bookId);
+		if (!safeBookId) {
+			return;
+		}
+		const currentIndex = await this.readPortableIndex();
+		if (this.isPlainRecord(currentIndex.books)) {
+			const nextBooks = { ...currentIndex.books };
+			delete nextBooks[safeBookId];
+			await writeEpubSemanticJson(this.app, this.getPortableIndexPath(), {
+				...currentIndex,
+				format: "weave-reader-epub-data-index/v1",
+				version: 1,
+				updatedAt: Date.now(),
+				books: nextBooks,
+			});
+		}
+
+		const adapter = this.app.vault.adapter;
+		const bookDir = this.getPortableBookDir(safeBookId);
+		if (await adapter.exists(bookDir)) {
+			await adapter.rmdir(bookDir, true);
+		}
+	}
+
 	private sourceFingerprintsMatch(
 		entry: EpubSourceRegistryEntry | undefined,
 		fingerprints: PartialEpubFingerprints
@@ -2982,6 +3232,9 @@ export class EpubStorageService {
 					synthesizedEntries.push(scanEntry);
 				}
 
+				const sourceEntry = await this.ensureSourceIdentity(activePath);
+				await this.ensurePortableBookDataForBookshelfPath(scanEntry, sourceEntry);
+
 				return {
 					...this.toBookshelfIndexEntry(
 						scanEntry,
@@ -3028,7 +3281,9 @@ export class EpubStorageService {
 				continue;
 			}
 
-			await this.ensureSourceIdentity(canonicalPath);
+			const sourceEntry = await this.ensureSourceIdentity(canonicalPath);
+			const scanEntry = await this.createScanIndexEntryFromPath(canonicalPath);
+			await this.ensurePortableBookDataForBookshelfPath(scanEntry, sourceEntry);
 
 			const nextEntry = {
 				path: canonicalPath,
@@ -3037,7 +3292,7 @@ export class EpubStorageService {
 			nextMembership.push(nextEntry);
 			addedEntries.push(nextEntry);
 			membershipPaths.add(canonicalPath);
-			scanEntriesToUpsert.push(await this.createScanIndexEntryFromPath(canonicalPath));
+			scanEntriesToUpsert.push(scanEntry);
 		}
 
 		if (addedEntries.length === 0) {
@@ -3510,6 +3765,7 @@ export class EpubStorageService {
 				if (await this.app.vault.adapter.exists(bookDir)) {
 					await this.app.vault.adapter.rmdir(bookDir, true);
 				}
+				await this.removePortableBookData(bookId);
 				await this.removeLocalBookState(bookId);
 			}
 		}
@@ -3634,6 +3890,7 @@ export class EpubStorageService {
 		if (await adapter.exists(bookDir)) {
 			await adapter.rmdir(bookDir, true);
 		}
+		await this.removePortableBookData(bookId);
 		await this.removeLocalBookState(bookId);
 	}
 
@@ -3662,21 +3919,28 @@ export class EpubStorageService {
 			return { removedBookId: null, removedMembership: false };
 		}
 
+		const existingBook = options.purgeCache
+			? await this.findBookByFilePath(normalizedFilePath)
+			: null;
+		const portableBookId = options.purgeCache
+			? await this.findPortableBookIdForPath(normalizedFilePath)
+			: "";
 		const removedMembership = await this.removeMembershipEntry(normalizedFilePath);
 		await this.removeBookPathFromAllPlaylists(normalizedFilePath);
 		if (!options.purgeCache) {
 			return { removedBookId: null, removedMembership };
 		}
 
-		const existingBook = await this.findBookByFilePath(normalizedFilePath);
-		if (!existingBook) {
-			return { removedBookId: null, removedMembership };
+		if (existingBook) {
+			await this.deleteBook(existingBook.id);
 		}
-
-		await this.deleteBook(existingBook.id);
+		if (portableBookId && portableBookId !== existingBook?.id) {
+			await this.removePortableBookData(portableBookId);
+			await this.removeLocalBookState(portableBookId);
+		}
 		await this.loadScanIndex();
 		return {
-			removedBookId: existingBook.id,
+			removedBookId: portableBookId || existingBook?.id || null,
 			removedMembership,
 		};
 	}
@@ -3800,6 +4064,7 @@ export class EpubStorageService {
 			if (await this.app.vault.adapter.exists(bookDir)) {
 				await this.app.vault.adapter.rmdir(bookDir, true);
 			}
+			await this.removePortableBookData(bookId);
 			await this.removeLocalBookState(bookId);
 		}
 		if (removedBookIds.length > 0) {

@@ -162,6 +162,20 @@ function getFingerprintValue(
 	return cleanFingerprint(fingerprints[matchKind]);
 }
 
+function hasMatchingFingerprint(
+	left: PartialEpubFingerprints,
+	right: PartialEpubFingerprints
+): boolean {
+	for (const matchKind of FINGERPRINT_MATCH_ORDER) {
+		const leftValue = getFingerprintValue(left, matchKind);
+		const rightValue = getFingerprintValue(right, matchKind);
+		if (leftValue && rightValue && leftValue === rightValue) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function applyFingerprintsToRecord(
 	value: unknown,
 	fingerprints: PartialEpubFingerprints
@@ -240,6 +254,21 @@ async function readVaultBinary(app: App, filePath: string): Promise<ArrayBuffer 
 		return null;
 	}
 	return await adapter.readBinary(normalizedPath);
+}
+
+async function computeVaultBookFingerprints(
+	app: App,
+	filePath: string
+): Promise<PartialEpubFingerprints> {
+	const binary = await readVaultBinary(app, filePath);
+	if (!binary) {
+		return {};
+	}
+	try {
+		return await computeAvailableEpubFingerprints(binary);
+	} catch {
+		return {};
+	}
 }
 
 async function writeVaultBinary(app: App, filePath: string, binary: ArrayBuffer): Promise<void> {
@@ -671,12 +700,25 @@ export async function importEpubAnnotatedBookPackage(
 		throw new Error("missing-book-in-weave-reader-package");
 	}
 	const preferredBookId = safeEpubSemanticBookId(options.preferredBookId || "");
+	const preferredTargetFingerprints =
+		preferredBookId && options.targetBookPath
+			? await computeVaultBookFingerprints(app, options.targetBookPath)
+			: {};
+	const preferredTargetMatchesPackage = hasMatchingFingerprint(
+		packageFingerprints,
+		preferredTargetFingerprints
+	);
+	const canUsePreferredTarget =
+		Boolean(preferredBookId) &&
+		(hasAnyFingerprint(packageFingerprints)
+			? preferredTargetMatchesPackage
+			: !bookEntry && options.requireBook !== true);
 	const existingMatch = await findExistingBookMatchByFingerprints(
 		app,
 		packageFingerprints,
-		preferredBookId
+		canUsePreferredTarget ? preferredBookId : undefined
 	);
-	const fallbackToPreferredBook = Boolean(preferredBookId && !existingMatch && !bookEntry);
+	const fallbackToPreferredBook = Boolean(canUsePreferredTarget && !existingMatch && !bookEntry);
 	const targetBookId = safeEpubSemanticBookId(
 		existingMatch?.bookId ||
 			(fallbackToPreferredBook ? preferredBookId : "") ||
@@ -688,7 +730,7 @@ export async function importEpubAnnotatedBookPackage(
 		manifest.bookFileName || "book.epub"
 	);
 	const preferredTargetPath =
-		preferredBookId && targetBookId === preferredBookId
+		canUsePreferredTarget && targetBookId === preferredBookId
 			? normalizePath(options.targetBookPath || "")
 			: "";
 	const bookPath =
