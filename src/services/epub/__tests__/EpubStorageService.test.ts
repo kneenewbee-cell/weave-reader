@@ -1490,6 +1490,94 @@ describe('EpubStorageService', () => {
     });
   });
 
+  it('deduplicates portable book ids that point to the same source fingerprint during bookshelf refresh', async () => {
+    const epubBinary = await createValidEpubBinary();
+    const expected = await computeEpubFingerprints(epubBinary, 'Books/demo.epub');
+    const primaryBookId = 'epub-book-primary';
+    const duplicateBookId = 'epub-book-duplicate';
+    const { app, files } = createMemoryApp({
+      [LOCAL_EPUB_DATA_PATH]: JSON.stringify({
+        version: 1,
+        updatedAt: 1,
+        bookCatalogStoredLocally: true,
+        books: {
+          [primaryBookId]: {
+            descriptor: {
+              id: primaryBookId,
+              filePath: 'Books/demo.epub',
+              sourceFingerprint: expected.fileFingerprint,
+              fileFingerprint: expected.fileFingerprint,
+              metadata: { title: 'Demo primary', author: '', chapterCount: 0 },
+            },
+          },
+          [duplicateBookId]: {
+            descriptor: {
+              id: duplicateBookId,
+              filePath: 'Books/demo.epub',
+              sourceFingerprint: expected.fileFingerprint,
+              fileFingerprint: expected.fileFingerprint,
+              metadata: { title: 'Demo duplicate', author: '', chapterCount: 0 },
+            },
+          },
+        },
+        bookshelfMembership: [{ path: 'Books/demo.epub', addedAt: 10 }],
+      }),
+      [`${PORTABLE_EPUB_ROOT}/index.json`]: JSON.stringify({
+        format: 'weave-reader-epub-data-index/v1',
+        version: 1,
+        books: {
+          [primaryBookId]: {
+            bookId: primaryBookId,
+            filePath: 'Books/demo.epub',
+            knownPaths: ['Books/demo.epub'],
+            sourceFingerprint: expected.fileFingerprint,
+            fileFingerprint: expected.fileFingerprint,
+          },
+          [duplicateBookId]: {
+            bookId: duplicateBookId,
+            filePath: 'Books/demo-copy.epub',
+            knownPaths: ['Books/demo-copy.epub'],
+            sourceFingerprint: expected.fileFingerprint,
+            fileFingerprint: expected.fileFingerprint,
+          },
+        },
+      }),
+      [`${PORTABLE_EPUB_ROOT}/books/${primaryBookId}/book.json`]: JSON.stringify({
+        bookId: primaryBookId,
+        filePath: 'Books/demo.epub',
+        sourceFingerprint: expected.fileFingerprint,
+        fileFingerprint: expected.fileFingerprint,
+      }),
+      [`${PORTABLE_EPUB_ROOT}/books/${primaryBookId}/versions/default/annotations.json`]: JSON.stringify({
+        bookId: primaryBookId,
+        annotations: [{ semanticId: 'primary' }],
+      }),
+      [`${PORTABLE_EPUB_ROOT}/books/${duplicateBookId}/book.json`]: JSON.stringify({
+        bookId: duplicateBookId,
+        filePath: 'Books/demo-copy.epub',
+        sourceFingerprint: expected.fileFingerprint,
+        fileFingerprint: expected.fileFingerprint,
+      }),
+    }, ['Books/demo.epub'], {
+      'Books/demo.epub': epubBinary,
+    });
+    const service = new EpubStorageService(app);
+
+    await service.listBookshelfEntries();
+
+    const portableIndex = readPortableEpubIndex(files);
+    expect(Object.keys(portableIndex.books || {})).toEqual([primaryBookId]);
+    expect(portableIndex.books[primaryBookId]).toMatchObject({
+      bookId: primaryBookId,
+      filePath: 'Books/demo.epub',
+      knownPaths: ['Books/demo.epub', 'Books/demo-copy.epub'],
+      fileFingerprint: expected.fileFingerprint,
+    });
+    expect(files.has(`${PORTABLE_EPUB_ROOT}/books/${primaryBookId}/versions/default/annotations.json`)).toBe(true);
+    expect(Array.from(files.keys()).some((path) => path.startsWith(`${PORTABLE_EPUB_ROOT}/books/${duplicateBookId}/`))).toBe(false);
+    expect(readLocalEpubData(files).books || {}).not.toHaveProperty(duplicateBookId);
+  });
+
   it('does not let another storage instance rewrite stale bookshelf membership back into unified local data', async () => {
     const { app, files } = createMemoryApp({}, ['Books/demo.epub']);
 
