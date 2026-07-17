@@ -351,6 +351,15 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					"我的书架：所选书籍无法加入（路径无法解析或存在重名冲突），请刷新扫描后重试",
 				vaultScanAdded: "我的书架：已加入 {count} 本书籍或漫画",
 				vaultScanFailed: "我的书架：扫描书籍和漫画失败",
+				annotationPackageExportSuccess: "已导出标注包：{fileName}",
+				annotatedBookPackageExportSuccess: "已导出带标注的书籍包：{fileName}",
+				annotationPackageExportFailed: "导出标注包失败：{message}",
+				annotatedBookPackageExportFailed: "导出带标注的书籍包失败：{message}",
+				annotatedBookPackageImportSuccess:
+					"已导入书籍标注包：{count} 条标注，当前版本 {version}",
+				annotatedBookPackageImportFailed: "导入书籍标注包失败：{message}",
+				annotatedBookPackageMissingBook:
+					"这个压缩包不包含书籍文件。纯标注包请在具体书籍的右键菜单中导入",
 				menu: {
 					openInNewTab: "在新标签页打开",
 					viewFullInfo: "查看书籍完整信息",
@@ -360,6 +369,13 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					customCover: "自定义书籍封面",
 					openBookDataFolder: "打开本书数据目录",
 					copyAnnotationDataPath: "复制标注数据路径",
+					importBook: "导入书籍",
+					importGroup: "导入",
+					exportGroup: "导出",
+					importAnnotationPackage: "导入标注包",
+					importAnnotatedBookPackage: "导入带标注的书籍包",
+					exportAnnotationPackage: "导出标注包",
+					exportAnnotatedBookPackage: "导出带标注的书籍包",
 					removeFromShelf: "从书架中移除",
 					deleteBookFile: "删除书籍文件",
 					displayFeatures: "书架显示功能",
@@ -1590,6 +1606,17 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					"My Bookshelf: Selected books could not be added (unresolvable path or duplicate name conflict). Rescan and try again.",
 				vaultScanAdded: "My Bookshelf: Added {count} books or comics",
 				vaultScanFailed: "My Bookshelf: Failed to scan books and comics",
+				annotationPackageExportSuccess: "Exported annotation package: {fileName}",
+				annotatedBookPackageExportSuccess: "Exported annotated book package: {fileName}",
+				annotationPackageExportFailed: "Failed to export annotation package: {message}",
+				annotatedBookPackageExportFailed:
+					"Failed to export annotated book package: {message}",
+				annotatedBookPackageImportSuccess:
+					"Imported book annotation package: {count} annotations, current version {version}",
+				annotatedBookPackageImportFailed:
+					"Failed to import book annotation package: {message}",
+				annotatedBookPackageMissingBook:
+					"This package does not contain a book file. Import annotation-only packages from a specific book's context menu.",
 				menu: {
 					openInNewTab: "Open in new tab",
 					viewFullInfo: "View full book information",
@@ -1599,6 +1626,13 @@ export const epubTranslations: Record<EpubTranslationLocale, TranslationKey> = {
 					customCover: "Custom book cover",
 					openBookDataFolder: "Open book data folder",
 					copyAnnotationDataPath: "Copy annotation data path",
+					importBook: "Import book",
+					importGroup: "Import",
+					exportGroup: "Export",
+					importAnnotationPackage: "Import annotation package",
+					importAnnotatedBookPackage: "Import annotated book package",
+					exportAnnotationPackage: "Export annotation package",
+					exportAnnotatedBookPackage: "Export annotated book package",
 					removeFromShelf: "Remove from bookshelf",
 					deleteBookFile: "Delete book file",
 					displayFeatures: "Bookshelf display features",

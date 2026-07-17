@@ -352,6 +352,39 @@ describe("epub-portable-book-package", () => {
 		});
 	});
 
+	it("rejects a package without an embedded EPUB when a book file is required", async () => {
+		const bookId = "epub-book-annotations-only-import";
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId,
+				bookFileName: "AnnotationsOnly.epub",
+				exportedAt: 1,
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				annotations: [{ semanticId: "note" }],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app } = createAppHarness({});
+
+		await expect(
+			importEpubAnnotatedBookPackage(app, packageBuffer, {
+				defaultBookFolder: "Books",
+				requireBook: true,
+			}),
+		).rejects.toThrow("missing-book-in-weave-reader-package");
+	});
+
 	it("matches an existing book by package fingerprint after file fingerprint misses", async () => {
 		const localBookId = "epub-book-local";
 		const importedBookId = "epub-book-imported";

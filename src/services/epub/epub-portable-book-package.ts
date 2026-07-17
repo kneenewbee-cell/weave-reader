@@ -41,6 +41,7 @@ export interface ImportEpubAnnotatedBookPackageOptions {
 	defaultBookFolder?: string;
 	targetBookPath?: string;
 	preferredBookId?: string;
+	requireBook?: boolean;
 	activateImportedAnnotations?: boolean;
 }
 
@@ -666,6 +667,9 @@ export async function importEpubAnnotatedBookPackage(
 	const bookEntry = Object.values(zip.files).find(
 		(entry) => !entry.dir && normalizePath(entry.name).startsWith("book/")
 	);
+	if (options.requireBook === true && !bookEntry) {
+		throw new Error("missing-book-in-weave-reader-package");
+	}
 	const preferredBookId = safeEpubSemanticBookId(options.preferredBookId || "");
 	const existingMatch = await findExistingBookMatchByFingerprints(
 		app,

@@ -120,6 +120,8 @@
                 readingStatus: BookshelfReadingStatus;
         }
 
+        type BookshelfPackageImportKind = 'annotation-package' | 'annotated-book-package';
+
         interface ResolvedBookContext {
                 requestedPath: string;
                 targetPath: string;
@@ -1037,6 +1039,21 @@
                 menu.showAtMouseEvent(event);
         }
 
+        function getMenuSubmenu(item: unknown, fallbackMenu: Menu): Menu {
+                const candidate = item as { setSubmenu?: () => Menu };
+                return typeof candidate.setSubmenu === 'function'
+                        ? candidate.setSubmenu()
+                        : fallbackMenu;
+        }
+
+        function getPackageImportErrorMessage(error: unknown): string {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message === 'missing-book-in-weave-reader-package') {
+                        return t('epub.bookshelf.annotatedBookPackageMissingBook');
+                }
+                return message;
+        }
+
         function openAddToPlaylistMenu(event: MouseEvent, bookPath: string) {
                 const playlists = bookshelfPlaylists;
                 if (playlists.length === 0) {
@@ -1494,7 +1511,10 @@
                 }
         }
 
-        async function exportAnnotatedBookPackageFromShelf(filePath: string): Promise<void> {
+        async function exportAnnotatedBookPackageFromShelf(
+                filePath: string,
+                includeBook: boolean
+        ): Promise<void> {
                 try {
                         const context = await resolveBookContext(filePath);
                         if (!context) {
@@ -1513,16 +1533,63 @@
                                 bookId: location.bookId,
                                 filePath: context.targetPath,
                                 displayName: context.metadata.title?.trim() || context.file.basename,
+                                includeBook,
                         });
                         downloadEpubAnnotatedBookPackage(result);
-                        new Notice(`已导出书籍标注包：${result.fileName}`);
+                        new Notice(t(
+                                includeBook
+                                        ? 'epub.bookshelf.annotatedBookPackageExportSuccess'
+                                        : 'epub.bookshelf.annotationPackageExportSuccess',
+                                { fileName: result.fileName }
+                        ));
                 } catch (error) {
                         logger.error('Failed to export EPUB annotated book package:', error);
-                        new Notice(`导出书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
+                        new Notice(t(
+                                includeBook
+                                        ? 'epub.bookshelf.annotatedBookPackageExportFailed'
+                                        : 'epub.bookshelf.annotationPackageExportFailed',
+                                { message: error instanceof Error ? error.message : String(error) }
+                        ));
                 }
         }
 
-        async function importAnnotatedBookPackageToShelfBook(filePath: string): Promise<void> {
+        async function importAnnotatedBookPackageToShelf(
+                kind: BookshelfPackageImportKind
+        ): Promise<void> {
+                const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
+                if (!arrayBuffer) {
+                        return;
+                }
+                try {
+                        const result = await importEpubAnnotatedBookPackage(app, arrayBuffer, {
+                                defaultBookFolder: 'Books',
+                                requireBook: kind === 'annotated-book-package',
+                                activateImportedAnnotations: true,
+                        });
+                        await storageService.addBooksToBookshelf([result.bookPath]);
+                        notifyEpubAnnotationVersionChanged(result.bookId, {
+                                reason: 'import',
+                                filePath: result.bookPath,
+                                versionId: result.activeVersionId,
+                        });
+                        dispatchBookshelfDataChanged();
+                        await refreshBookshelf();
+                        new Notice(t('epub.bookshelf.annotatedBookPackageImportSuccess', {
+                                count: result.importedAnnotationCount,
+                                version: result.activeVersionId,
+                        }));
+                } catch (error) {
+                        logger.error('Failed to import EPUB annotated book package:', error);
+                        new Notice(t('epub.bookshelf.annotatedBookPackageImportFailed', {
+                                message: getPackageImportErrorMessage(error),
+                        }));
+                }
+        }
+
+        async function importAnnotatedBookPackageToShelfBook(
+                filePath: string,
+                kind: BookshelfPackageImportKind
+        ): Promise<void> {
                 const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
                 if (!arrayBuffer) {
                         return;
@@ -1544,8 +1611,11 @@
                         const result = await importEpubAnnotatedBookPackage(app, arrayBuffer, {
                                 preferredBookId: location.bookId,
                                 targetBookPath: context.targetPath,
+                                defaultBookFolder: 'Books',
+                                requireBook: kind === 'annotated-book-package',
                                 activateImportedAnnotations: true,
                         });
+                        await storageService.addBooksToBookshelf([result.bookPath]);
                         notifyEpubAnnotationVersionChanged(result.bookId, {
                                 reason: 'import',
                                 filePath: result.bookPath,
@@ -1553,12 +1623,15 @@
                         });
                         dispatchBookshelfDataChanged();
                         await refreshBookshelf();
-                        new Notice(
-                                `已导入书籍标注包：${result.importedAnnotationCount} 条标注，当前版本 ${result.activeVersionId}`
-                        );
+                        new Notice(t('epub.bookshelf.annotatedBookPackageImportSuccess', {
+                                count: result.importedAnnotationCount,
+                                version: result.activeVersionId,
+                        }));
                 } catch (error) {
                         logger.error('Failed to import EPUB annotated book package:', error);
-                        new Notice(`导入书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
+                        new Notice(t('epub.bookshelf.annotatedBookPackageImportFailed', {
+                                message: getPackageImportErrorMessage(error),
+                        }));
                 }
         }
 
@@ -1985,17 +2058,47 @@
                                 });
                 });
                 menu.addItem((item) => {
-                        item.setTitle('导出书籍标注包')
-                                .setIcon('download')
-                                .onClick(() => {
-                                        void exportAnnotatedBookPackageFromShelf(filePath);
+                        item.setTitle(t('epub.bookshelf.menu.importGroup'))
+                                .setIcon('upload');
+                        const subMenu = getMenuSubmenu(item, menu);
+                        subMenu.addItem((subItem) => {
+                                subItem.setTitle(t('epub.bookshelf.menu.importAnnotationPackage'))
+                                        .setIcon('file-up')
+                                        .onClick(() => {
+                                                void importAnnotatedBookPackageToShelfBook(
+                                                        filePath,
+                                                        'annotation-package'
+                                                );
+                                        });
+                        });
+                        subMenu.addItem((subItem) => {
+                                subItem.setTitle(t('epub.bookshelf.menu.importAnnotatedBookPackage'))
+                                        .setIcon('archive')
+                                        .onClick(() => {
+                                                void importAnnotatedBookPackageToShelfBook(
+                                                        filePath,
+                                                        'annotated-book-package'
+                                                );
+                                        });
                                 });
                 });
                 menu.addItem((item) => {
-                        item.setTitle('导入书籍标注包')
-                                .setIcon('upload')
-                                .onClick(() => {
-                                        void importAnnotatedBookPackageToShelfBook(filePath);
+                        item.setTitle(t('epub.bookshelf.menu.exportGroup'))
+                                .setIcon('download');
+                        const subMenu = getMenuSubmenu(item, menu);
+                        subMenu.addItem((subItem) => {
+                                subItem.setTitle(t('epub.bookshelf.menu.exportAnnotationPackage'))
+                                        .setIcon('file-down')
+                                        .onClick(() => {
+                                                void exportAnnotatedBookPackageFromShelf(filePath, false);
+                                        });
+                        });
+                        subMenu.addItem((subItem) => {
+                                subItem.setTitle(t('epub.bookshelf.menu.exportAnnotatedBookPackage'))
+                                        .setIcon('archive')
+                                        .onClick(() => {
+                                                void exportAnnotatedBookPackageFromShelf(filePath, true);
+                                        });
                                 });
                 });
                 menu.addSeparator();
@@ -2372,6 +2475,25 @@
                 }
         }
 
+        function openBookshelfImportMenu(event: MouseEvent): void {
+                const menu = new Menu();
+                menu.addItem((item) => {
+                        item.setTitle(t('epub.bookshelf.menu.importBook'))
+                                .setIcon('scan-search')
+                                .onClick(() => {
+                                        void scanVaultAndPromptImport();
+                                });
+                });
+                menu.addItem((item) => {
+                        item.setTitle(t('epub.bookshelf.menu.importAnnotatedBookPackage'))
+                                .setIcon('archive')
+                                .onClick(() => {
+                                        void importAnnotatedBookPackageToShelf('annotated-book-package');
+                                });
+                });
+                menu.showAtMouseEvent(event);
+        }
+
 	async function requestBookshelfRefresh() {
                 try {
                         await refreshBookshelf(true);
@@ -2386,10 +2508,10 @@
                 menu.addItem((item) => {
                         item.setTitle(t('epub.bookshelf.menu.displayFeatures'))
                                 .setIcon('library');
-                        const subMenu = (item as any).setSubmenu();
+                        const subMenu = getMenuSubmenu(item, menu);
 
                         for (const option of getBookshelfDisplayModeOptions()) {
-                                subMenu.addItem((subItem: any) => {
+                                subMenu.addItem((subItem) => {
                                         subItem.setTitle(option.label)
                                                 .setIcon(option.icon)
                                                 .setChecked(bookshelfDisplayMode === option.mode)
@@ -3726,7 +3848,7 @@
                 {searching}
                 backButtonLabel={effectiveBackButtonLabel}
                 {t}
-                onImport={scanVaultAndPromptImport}
+                onImport={openBookshelfImportMenu}
                 onToggleSearch={toggleBookshelfSearch}
                 onBack={handleToolbarBack}
                 onSettings={handleSettingsAction}
