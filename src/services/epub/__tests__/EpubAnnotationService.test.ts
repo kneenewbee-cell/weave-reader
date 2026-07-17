@@ -175,6 +175,56 @@ describe('EpubAnnotationService', () => {
 		});
 	});
 
+	it('persists multi-segment portable annotations in root and active version data', async () => {
+		const bookId = 'epub-book-segments';
+		const app = createPortableMockApp({});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.savePortableHighlightWithPolicy(bookId, {
+			cfiRange: 'epubcfi(/6/2!/4/2,/1:0,/3:12)',
+			color: 'green',
+			text: 'First paragraph has enough text.\nSecond paragraph should stay highlighted.',
+			semanticId: 'important',
+			semanticLabel: '重点',
+			segments: [
+				{
+					cfiRange: 'epubcfi(/6/2!/4/2,/1:0,/1:32)',
+					text: 'First paragraph has enough text.',
+				},
+				{
+					cfiRange: 'epubcfi(/6/2!/4/4,/1:0,/1:41)',
+					text: 'Second paragraph should stay highlighted.',
+				},
+			],
+			createdTime: 200,
+			presentation: 'highlight',
+		});
+
+		expect(result.kind).toBe('create');
+		const rootPayload = JSON.parse(
+			await (app as any).vault.adapter.read(`weave/epub-data/books/${bookId}/annotations.json`)
+		);
+		const versionPayload = JSON.parse(
+			await (app as any).vault.adapter.read(`weave/epub-data/books/${bookId}/versions/default/annotations.json`)
+		);
+		expect(rootPayload.annotations[0].segments).toEqual([
+			{
+				cfiRange: 'epubcfi(/6/2!/4/2,/1:0,/1:32)',
+				text: 'First paragraph has enough text.',
+			},
+			{
+				cfiRange: 'epubcfi(/6/2!/4/4,/1:0,/1:41)',
+				text: 'Second paragraph should stay highlighted.',
+			},
+		]);
+		expect(versionPayload.annotations[0].segments).toEqual(rootPayload.annotations[0].segments);
+	});
+
 	it('keeps partially overlapping portable annotations as separate records', async () => {
 		const bookId = 'epub-book-overlap';
 		const app = createPortableMockApp({

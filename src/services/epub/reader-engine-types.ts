@@ -108,6 +108,7 @@ export interface ReaderHighlightInput {
 	semanticDescription?: string;
 	semanticSource?: string;
 	text?: string;
+	segments?: ReaderHighlightSegment[];
 	commentText?: string;
 	hasCommentDivider?: boolean;
 	chapterIndex?: number;
@@ -127,6 +128,11 @@ export interface ReaderHighlightInput {
 	// 引用统计
 	referenceCount?: number;
 	referenceHeat?: number;
+}
+
+export interface ReaderHighlightSegment {
+	cfiRange: string;
+	text: string;
 }
 
 export interface ReaderHighlight extends ReaderHighlightInput {

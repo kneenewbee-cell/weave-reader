@@ -180,6 +180,7 @@ describe("epub-portable-book-package", () => {
 				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "important" }],
 			}),
 		);
+		zip.file("data/annotations.md", "# stale generated note from another device");
 		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
 		const { app, files, binaries } = createAppHarness({});
 
@@ -201,6 +202,7 @@ describe("epub-portable-book-package", () => {
 		expect(readJson(files, `weave/epub-data/books/${bookId}/versions/default/annotations.json`)).toMatchObject({
 			annotations: [{ semanticId: "important" }],
 		});
+		expect(files.has(`weave/epub-data/books/${bookId}/annotations.md`)).toBe(false);
 		expect(readJson(files, "weave/epub-data/index.json")).toMatchObject({
 			books: {
 				[bookId]: {

@@ -594,6 +594,7 @@ function toStoredAnnotation(annotation) {
     "id",
     "cfiRange",
     "text",
+    "segments",
     "commentText",
     "hasCommentDivider",
     "chapterIndex",

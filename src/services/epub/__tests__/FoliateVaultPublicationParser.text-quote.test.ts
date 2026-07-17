@@ -14,7 +14,7 @@ async function createParserHarness(html: string): Promise<TextQuoteParserHarness
 	const parser = new FoliateVaultPublicationParser({} as any);
 	const container = document.createElement("div");
 	container.innerHTML = html;
-	const root = container.querySelector("p");
+	const root = container.firstElementChild || container.querySelector("p");
 	return {
 		buildTextQuoteNeedles: (highlight: string) =>
 			(parser as any).buildTextQuoteNeedles(highlight),
@@ -27,6 +27,19 @@ async function createParserHarness(html: string): Promise<TextQuoteParserHarness
 }
 
 describe("FoliateVaultPublicationParser text quote matching", () => {
+	it("prefers the complete normalized quote over a short prefix for cross-paragraph selections", async () => {
+		const harness = await createParserHarness(
+			"<section><p>First paragraph has enough text.</p><p>Second paragraph should stay highlighted.</p></section>"
+		);
+		const range = harness.findRangeByTextQuote((harness as any).root, {
+			highlight:
+				"First paragraph has enough text.\nSecond paragraph should stay highlighted.",
+		});
+
+		expect(range).not.toBeNull();
+		expect(range?.toString()).toContain("Second paragraph should stay highlighted.");
+	});
+
 	it("matches MOBI excerpt quotes with curly quotation marks", async () => {
 		const harness = await createParserHarness(
 			"<p>“别生气，”乔布斯向他保证，“我要带走的都是些级别很低的员工。</p>"

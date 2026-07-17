@@ -39,7 +39,7 @@
 		type WeaveEpubCanvasLayoutDirectionPayload,
 	} from '../../services/epub/canvas-excerpt-anchor';
 	import type { EpubVisibleFrameLike, ScreenshotRect } from '../../services/epub/EpubScreenshotService';
-	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderParagraph, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
+	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderHighlightSegment, ReaderParagraph, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
 	import { PremiumFeatureGuard, PREMIUM_FEATURES } from '../../services/premium/PremiumFeatureGuard';
 	import { getBookFormatDisplayLabel, isSupportedBookFile } from '../../services/epub/book-format';
 	import {
@@ -3905,7 +3905,8 @@
 		cfiRange: string,
 		color?: string,
 		style?: EpubHighlightStyle,
-		semantic?: EpubAnnotationSemantic
+		semantic?: EpubAnnotationSemantic,
+		segments?: ReaderHighlightSegment[]
 	) {
 		if (!ensureEpubPremiumFeature(app, PREMIUM_FEATURES.EPUB_CANVAS_EXCERPTS, t('epub.reader.canvasExcerptFeatureNotice'))) {
 			return;
@@ -4679,12 +4680,13 @@
 		);
 	}
 
-        function handleAutoInsertSelection(
+	function handleAutoInsertSelection(
 		text: string,
 		cfiRange: string,
 		color?: string,
 		style?: EpubHighlightStyle,
-		semantic?: EpubAnnotationSemantic
+		semantic?: EpubAnnotationSemantic,
+		segments?: ReaderHighlightSegment[]
 	) {
 		if (!hasExcerptNotesCapability()) {
 			return;
@@ -4703,6 +4705,7 @@
 					semanticSource: semantic.source || 'preset',
 				} : {}),
 				text,
+				...(segments && segments.length > 1 ? { segments } : {}),
 				chapterIndex: readerService.getCurrentChapterIndex(),
 				chapterTitle: resolveExcerptChapterTitle(),
 				createdTime: Date.now(),

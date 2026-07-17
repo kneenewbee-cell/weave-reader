@@ -53,6 +53,7 @@ export type {
 	ReaderFrame,
 	ReaderHighlight,
 	ReaderHighlightInput,
+	ReaderHighlightSegment,
 	ReaderParagraph,
 	ReaderParagraphLocation,
 	ReaderParagraphSelectionResolution,

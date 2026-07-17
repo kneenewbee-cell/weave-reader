@@ -40,6 +40,11 @@
 		shouldDismissToolbarOnPointerDown,
 		resolveMobileFloatingInsetBottom,
 	} from './toolbar-positioning';
+	import {
+		resolveSelectionSegments,
+		shouldStoreSelectionSegments,
+	} from '../../services/epub/selection-segments';
+	import type { ReaderHighlightSegment } from '../../services/epub/reader-engine-types';
 
 	type ExternalSelectionState = {
 		text: string;
@@ -76,7 +81,8 @@
 			cfiRange: string,
 			color?: string,
 			style?: EpubHighlightStyle,
-			semantic?: EpubAnnotationSemantic
+			semantic?: EpubAnnotationSemantic,
+			segments?: ReaderHighlightSegment[]
 		) => void;
 		onExtractToCard?: (text: string, cfiRange: string) => void;
 		onCreateReadingPoint?: (text: string, cfiRange: string) => void;
@@ -133,6 +139,7 @@
 	let arrowOffset = $state(0);
 	let selectedText = $state('');
 	let currentCfiRange = $state('');
+	let currentSegments: ReaderHighlightSegment[] = [];
 	let iframeDoc: Document | null = null;
 	let teardownReaderTracking: (() => void) | null = null;
 	let teardownPositionTracking: (() => void) | null = null;
@@ -315,6 +322,7 @@
 		arrowOffset = 0;
 		selectedText = '';
 		currentCfiRange = '';
+		currentSegments = [];
 		activeClearSelection = null;
 		stopPositionTracking();
 	}
@@ -420,14 +428,22 @@
 				color,
 				style,
 				...buildSemanticFields(semantic),
-				text: selectedText
+				text: selectedText,
+				...(currentSegments.length > 1 ? { segments: currentSegments } : {})
 			};
 			readerService.addHighlight(highlight);
 		} catch (e) {
 			logger.warn('[SelectionToolbar] Failed to apply highlight:', e);
 		}
 
-		onAutoInsert?.(selectedText, currentCfiRange, color, style, semantic);
+		onAutoInsert?.(
+			selectedText,
+			currentCfiRange,
+			color,
+			style,
+			semantic,
+			currentSegments.length > 1 ? currentSegments : undefined
+		);
 		clearAndHide();
 	}
 
@@ -819,6 +835,10 @@
 
 			selectedText = text;
 			currentCfiRange = resolvedCfiRange;
+			const resolvedSegments = resolveSelectionSegments(selection, frame);
+			currentSegments = shouldStoreSelectionSegments(resolvedSegments, text)
+				? resolvedSegments
+				: [];
 			activeClearSelection = null;
 
 			const geometry = resolveSelectionGeometry(resolvedCfiRange, frame, selection);
@@ -909,6 +929,7 @@
 		untrack(() => {
 			selectedText = selection.text;
 			currentCfiRange = selection.cfiRange;
+			currentSegments = [];
 			activeClearSelection = selection.clear || null;
 			stopPositionTracking();
 		});

@@ -288,6 +288,11 @@ function countAnnotations(value: unknown): number {
 	return isRecord(value) && Array.isArray(value.annotations) ? value.annotations.length : 0;
 }
 
+function isDerivedPortableDataEntry(relativePath: string): boolean {
+	const normalizedPath = normalizePath(relativePath);
+	return normalizedPath === "annotations.md";
+}
+
 async function getUniqueImportedVersionId(
 	app: App,
 	bookId: string,
@@ -532,6 +537,9 @@ export async function importEpubAnnotatedBookPackage(
 	let importedBookJson: unknown = null;
 	for (const entry of dataEntries) {
 		const normalizedRelativePath = normalizePath(entry.relativePath);
+		if (isDerivedPortableDataEntry(normalizedRelativePath)) {
+			continue;
+		}
 		if (importAsSeparateVersion && (normalizedRelativePath === "active-version.json" || normalizedRelativePath === "annotations.json")) {
 			continue;
 		}

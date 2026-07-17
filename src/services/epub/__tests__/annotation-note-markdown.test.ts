@@ -115,6 +115,31 @@ describe("annotation-note-markdown", () => {
 		expect(markdown).toContain('data-cfi-range="epubcfi(/6/2!/4/2,/1:0,/1:3)"');
 	});
 
+	it("preserves line breaks in displayed multi-paragraph annotation text", () => {
+		const markdown = renderEpubAnnotationNoteMarkdown({
+			book: {
+				title: "LaTeX Beginner",
+				filePath: "Books/latex.epub",
+			},
+			bookId: "epub-book-latex",
+			annotations: [
+				{
+					id: "multi",
+					cfiRange: "epubcfi(/6/2!/4/2,/1:0,/3:12)",
+					text: "First paragraph has enough text.\nSecond paragraph should stay visible.",
+					semanticId: "important",
+					color: "green",
+					style: "highlight",
+				},
+			],
+			semanticProfile: null,
+		});
+
+		expect(markdown).toContain("First paragraph has enough text.<br>Second paragraph should stay visible.");
+		expect(markdown).toContain('data-annotation-text="First paragraph has enough text. Second paragraph should stay visible."');
+		expect(markdown).toContain("text=First%20paragraph%20has%20enough%20text.%20Second%20paragraph%20should%20stay%20visible.");
+	});
+
 	it("puts book identity on dual-window controls and annotation lines for Obsidian chunked rendering", () => {
 		const markdown = renderEpubAnnotationNoteMarkdown({
 			book: {

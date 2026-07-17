@@ -288,6 +288,26 @@ export class EpubAnnotationService {
 		if (!cfiRange || !text) {
 			return null;
 		}
+		const segmentSource = Array.isArray((presentedAnnotation as { segments?: unknown }).segments)
+			? presentedAnnotation
+			: annotation;
+		const rawSegments = Array.isArray((segmentSource as { segments?: unknown }).segments)
+			? ((segmentSource as { segments?: unknown[] }).segments || [])
+			: [];
+		const segments = rawSegments
+			.map((segment) => {
+				if (!segment || typeof segment !== "object") {
+					return null;
+				}
+				const segmentCfiRange = EpubLinkService.normalizeCfi(
+					String((segment as { cfiRange?: unknown }).cfiRange || "").trim()
+				);
+				const segmentText = String((segment as { text?: unknown }).text || "").trim();
+				return segmentCfiRange && segmentText
+					? { cfiRange: segmentCfiRange, text: segmentText }
+					: null;
+			})
+			.filter((segment): segment is { cfiRange: string; text: string } => Boolean(segment));
 		const color = String((presentedAnnotation as { color?: unknown }).color || "yellow")
 			.trim()
 			.toLowerCase() as HighlightColor;
@@ -326,6 +346,7 @@ export class EpubAnnotationService {
 			...(semanticDescription ? { semanticDescription } : {}),
 			...(semanticSource ? { semanticSource } : {}),
 			text,
+			...(segments.length > 1 ? { segments } : {}),
 			...(commentText ? { commentText } : {}),
 			...((presentedAnnotation as { hasCommentDivider?: unknown }).hasCommentDivider === true
 				? { hasCommentDivider: true }

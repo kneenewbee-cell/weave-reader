@@ -136,7 +136,70 @@ export function hasUsableOverlayRects(rects: unknown[]): boolean {
 	});
 }
 
+function getRangeRoot(range: Range): Element | null {
+	const container = range.commonAncestorContainer;
+	if (!container) {
+		return null;
+	}
+	if (container.nodeType === Node.ELEMENT_NODE) {
+		return container as Element;
+	}
+	return container.parentElement;
+}
+
+function getTextNodeSliceForRange(range: Range, node: Text): { start: number; end: number } | null {
+	if (!range.intersectsNode(node)) {
+		return null;
+	}
+	const text = node.textContent || "";
+	let start = 0;
+	let end = text.length;
+	if (range.startContainer === node) {
+		start = Math.max(0, Math.min(text.length, range.startOffset));
+	}
+	if (range.endContainer === node) {
+		end = Math.max(0, Math.min(text.length, range.endOffset));
+	}
+	if (end <= start || !text.slice(start, end).trim()) {
+		return null;
+	}
+	return { start, end };
+}
+
+function extractTextNodeClientRects(range: Range): RawViewportRect[] {
+	const root = getRangeRoot(range);
+	if (!root) {
+		return [];
+	}
+	const doc = root.ownerDocument;
+	const rects: RawViewportRect[] = [];
+	const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+	while (walker.nextNode()) {
+		const node = walker.currentNode as Text;
+		const slice = getTextNodeSliceForRange(range, node);
+		if (!slice) {
+			continue;
+		}
+		const textRange = doc.createRange();
+		textRange.setStart(node, slice.start);
+		textRange.setEnd(node, slice.end);
+		rects.push(
+			...Array.from(textRange.getClientRects?.() || []).map((rect) => ({
+				left: rect.left,
+				top: rect.top,
+				width: rect.width,
+				height: rect.height,
+			}))
+		);
+	}
+	return rects.filter((rect) => rect.width > 0 || rect.height > 0);
+}
+
 export function extractRangeClientRects(range: Range): RawViewportRect[] {
+	const textRects = extractTextNodeClientRects(range);
+	if (textRects.length > 0) {
+		return textRects;
+	}
 	const rects = Array.from(range.getClientRects?.() || [])
 		.map((rect) => ({
 			left: rect.left,

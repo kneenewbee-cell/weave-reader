@@ -15,6 +15,7 @@ export interface EpubAnnotationNoteAnnotationInput {
 	id?: string;
 	cfiRange?: string;
 	text?: string;
+	segments?: Array<{ cfiRange?: string; text?: string }>;
 	semanticId?: string;
 	semanticLabel?: string;
 	color?: string;
@@ -95,6 +96,22 @@ function normalizeInlineAnnotationText(value: unknown): string {
 	return String(value || "")
 		.replace(/\s+/g, " ")
 		.trim();
+}
+
+function getAnnotationDisplayText(annotation: EpubAnnotationNoteAnnotationInput): string {
+	const segments = Array.isArray(annotation.segments)
+		? annotation.segments
+				.map((segment) => String(segment?.text || "").trim())
+				.filter(Boolean)
+		: [];
+	return segments.length > 1 ? segments.join("\n") : String(annotation.text || "").trim();
+}
+
+function escapeAnnotationDisplayText(value: unknown): string {
+	return escapeHtml(String(value || "").trim())
+		.replace(/\r\n/g, "\n")
+		.replace(/\r/g, "\n")
+		.replace(/\n+/g, "<br>");
 }
 
 function encodeQueryValue(value: unknown): string {
@@ -271,7 +288,7 @@ function renderStyledText(annotation: EpubAnnotationNoteAnnotationInput): string
 	const color = normalizeColorToken(annotation.color);
 	const style = normalizeStyle(annotation.style);
 	const palette = COLOR_STYLES[color] || COLOR_STYLES.yellow;
-	const text = escapeHtml(normalizeInlineAnnotationText(annotation.text));
+	const text = escapeAnnotationDisplayText(getAnnotationDisplayText(annotation));
 	const semanticLabel = escapeHtml(annotation.semanticLabel || annotation.semanticId || "");
 	const semanticAttr = semanticLabel ? ` data-semantic="${semanticLabel}"` : "";
 
@@ -295,7 +312,7 @@ function renderAnnotationLine(
 	const semanticId = getSemanticId(annotation);
 	const semanticLabel = getSemanticLabel(annotation);
 	const cfiRange = String(annotation.cfiRange || "").trim();
-	const annotationText = normalizeInlineAnnotationText(annotation.text);
+	const annotationText = normalizeInlineAnnotationText(getAnnotationDisplayText(annotation));
 	const href = buildProtocolHref({
 		filePath: book.filePath,
 		cfi: cfiRange,

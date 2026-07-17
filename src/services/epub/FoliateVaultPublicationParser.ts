@@ -35,6 +35,7 @@ import {
 	resolveTocExportEndBoundary,
 	type FlatTocExportItem,
 } from "./epub-toc-export-scope";
+import { resolvedRangeCoversHighlightText } from "./highlight/highlight-identity";
 
 const EPUB_OPS_NAMESPACE = "http://www.idpf.org/2007/ops";
 const POSITION_CHAR_BUCKET = 1800;
@@ -758,7 +759,11 @@ export class FoliateVaultPublicationParser {
 					currentRoot
 				);
 				if (cfiRange) {
-					return cfiRange;
+					if (!currentTextHint || resolvedRangeCoversHighlightText(cfiRange, currentTextHint)) {
+						return cfiRange;
+					}
+					const quoteRange = this.findRangeByTextQuote(currentRoot, { highlight: currentTextHint });
+					return quoteRange || cfiRange;
 				}
 			}
 			if (currentTextHint) {
@@ -2081,6 +2086,15 @@ export class FoliateVaultPublicationParser {
 			return null;
 		}
 		const combined = segments.map((segment) => segment.text).join("");
+		const normalizedMatch = this.findRangeByNormalizedTextQuote(
+			root.ownerDocument,
+			segments,
+			combined,
+			highlight
+		);
+		if (normalizedMatch) {
+			return normalizedMatch;
+		}
 		const needles = this.buildTextQuoteNeedles(highlight);
 		let bestIndex = -1;
 		let bestLength = 0;
