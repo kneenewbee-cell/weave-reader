@@ -269,6 +269,7 @@
 	let currentChapterIndex = $state(0);
 	let showScrolledChapterNavActions = $state(false);
 	let readerVersion = $state(0);
+	let readerRenderKey = $state(0);
 	let autoInsert = $state(untrack(() => initialAutoInsert));
 	let screenshotMode = $state(false);
 	let screenshotSaveAsImage = $state(true);
@@ -1496,6 +1497,7 @@
 	type HighlightReloadOptions = {
 		invalidateCache?: boolean;
 		incremental?: boolean;
+		forceReaderReplace?: boolean;
 	};
 
 	function reloadHighlightsAfterExcerptMutation(sourcePath?: string | null) {
@@ -2697,19 +2699,38 @@
 	}
 
 	async function refreshAfterAnnotationVersionChanged() {
-		if (!book?.id || !readerReady) {
+		if (!book?.id) {
 			return;
 		}
-		pendingLoadedHighlights = [];
+		const annotationBookId = await syncPortableBookIdForCurrentBook() || getCurrentAnnotationBookId();
+		highlightReloadToken += 1;
+		pendingLoadedHighlights = null;
 		trackedHighlightSourceFiles = new Set<string>();
 		annotationUndoStack.clear();
 		highlightToolbarInfo = null;
 		closeAnnotationDisambiguation();
 		commentEditorInfo = null;
 		getExcerptPipeline().syncCollectedHighlights([]);
-		await readerService.applyHighlights([]);
 		publishSidebarHighlights([]);
-		await reloadHighlights({ invalidateCache: true });
+		try {
+			annotationService.invalidateCollectedHighlightsCache(annotationBookId, filePath);
+			highlightViewSnapshotService.invalidate(annotationBookId, filePath);
+			referenceStatsService.clearCache(filePath);
+			await backlinkService.invalidateHighlightsCacheForEpub(filePath, getBoundCanvasPath());
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to invalidate annotation version caches:', error);
+		}
+		try {
+			if (readerReady) {
+				await readerService.applyHighlights([]);
+			}
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to clear reader highlights before annotation version reload:', error);
+		}
+		readerReady = false;
+		highlightReloading = true;
+		readerRenderKey += 1;
+		queueOpenAnnotationNoteRefresh(annotationBookId);
 	}
 
 	function hasCreateReadingPointCapability(): boolean {
@@ -3905,8 +3926,7 @@
 		cfiRange: string,
 		color?: string,
 		style?: EpubHighlightStyle,
-		semantic?: EpubAnnotationSemantic,
-		segments?: ReaderHighlightSegment[]
+		semantic?: EpubAnnotationSemantic
 	) {
 		if (!ensureEpubPremiumFeature(app, PREMIUM_FEATURES.EPUB_CANVAS_EXCERPTS, t('epub.reader.canvasExcerptFeatureNotice'))) {
 			return;
@@ -4680,7 +4700,7 @@
 		);
 	}
 
-	function handleAutoInsertSelection(
+        function handleAutoInsertSelection(
 		text: string,
 		cfiRange: string,
 		color?: string,
@@ -5889,6 +5909,7 @@
 		}
 		const incremental = options?.incremental === true;
 		const invalidateCache = options?.invalidateCache === true;
+		const forceReaderReplace = options?.forceReaderReplace === true;
 		const reloadToken = ++highlightReloadToken;
 		highlightReloading = true;
 		const previousHighlights = pendingLoadedHighlights || [];
@@ -5953,6 +5974,7 @@
 				);
 				const hasRemovedHighlights = [...previousKeys].some((key) => !nextKeys.has(key));
 				const shouldReplaceAllHighlights =
+					forceReaderReplace ||
 					!incremental ||
 					hasRemovedHighlights ||
 					highlightsWithStats.length < previousHighlights.length ||
@@ -6647,6 +6669,8 @@
 					{backlinkService}
 					{settings}
 					{excerptSettings}
+					annotationBookId={getCurrentAnnotationBookId()}
+					renderKey={readerRenderKey}
 					canUseReadingProgress={hasReadingProgressCapability()}
 					canUseExcerptNotes={hasExcerptNotesCapability()}
 					getReadingPositionAutoSaveConfig={getContinuousReadingPositionAutoSaveConfig}

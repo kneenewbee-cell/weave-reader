@@ -1,6 +1,5 @@
 import { App, TFile, normalizePath } from "obsidian";
 import type { EpubHighlightStyle } from "./types";
-import type { FlashStyle } from "./reader-engine-types";
 import { deflateRaw, inflateRaw } from "pako";
 import { generateBlockID } from "../identifier/WeaveIDGenerator";
 import { logger } from "../../utils/logger";
@@ -24,9 +23,6 @@ export interface EpubLinkParams {
 	excerptId?: string;
 	/** EPUB package 内章节 href；与 cfi 二选一或同时存在（cfi 优先）。 */
 	tocHref?: string;
-	flashStyle?: FlashStyle;
-	flashColor?: string;
-	showLocateOverlay?: boolean;
 }
 
 /** Controls which locator fields are embedded in generated wikilink hashes. */
@@ -762,7 +758,7 @@ export class EpubLinkService {
 
 	private static extractProtocolQueryParams(href: string): Record<string, string> {
 		const params: Record<string, string> = {};
-		for (const key of ["file", "cfi", "text", "chapter", "sid", "flashStyle", "flashColor", "showLocateOverlay"]) {
+		for (const key of ["file", "cfi", "text", "chapter", "sid"]) {
 			const match = href.match(new RegExp(`[?&]${key}=([^&)]*)`, "i"));
 			if (match?.[1]) {
 				params[key] = EpubLinkService.decodeQueryValue(match[1]);
@@ -1248,24 +1244,6 @@ export class EpubLinkService {
 		}
 	}
 
-	private static parseProtocolFlashStyle(value?: string): FlashStyle | undefined {
-		const normalized = String(value || "").trim().toLowerCase();
-		return normalized === "pulse" || normalized === "highlight" || normalized === "none"
-			? normalized
-			: undefined;
-	}
-
-	private static parseProtocolBoolean(value?: string): boolean | undefined {
-		const normalized = String(value || "").trim().toLowerCase();
-		if (normalized === "true" || normalized === "1" || normalized === "yes") {
-			return true;
-		}
-		if (normalized === "false" || normalized === "0" || normalized === "no") {
-			return false;
-		}
-		return undefined;
-	}
-
 	static parseProtocolParams(params: Record<string, string>): EpubLinkParams | null {
 		const file = params.file;
 		const cfi = String(params.cfi || "").trim();
@@ -1273,15 +1251,15 @@ export class EpubLinkService {
 		const text = params.text || "";
 		const chapter = params.chapter;
 		const sourceId = params.sid;
-		const flashStyle = EpubLinkService.parseProtocolFlashStyle(params.flashStyle);
-		const flashColor = String(params.flashColor || "").trim();
-		const showLocateOverlay = EpubLinkService.parseProtocolBoolean(params.showLocateOverlay);
 
 		if (!file && !sourceId) {
 			return null;
 		}
+		if (!cfi && !href) {
+			return null;
+		}
 
-		const parsed: EpubLinkParams = {
+		return {
 			filePath: file || "",
 			cfi,
 			text,
@@ -1289,16 +1267,6 @@ export class EpubLinkService {
 			sourceId: sourceId || undefined,
 			tocHref: href || undefined,
 		};
-		if (flashStyle) {
-			parsed.flashStyle = flashStyle;
-		}
-		if (flashColor) {
-			parsed.flashColor = flashColor;
-		}
-		if (typeof showLocateOverlay === "boolean") {
-			parsed.showLocateOverlay = showLocateOverlay;
-		}
-		return parsed;
 	}
 
 	async navigateToEpubChapter(
@@ -1346,12 +1314,7 @@ export class EpubLinkService {
 		cfi: string,
 		text: string,
 		sourceId?: string,
-		sourceMarkdownPath?: string,
-		options?: {
-			flashStyle?: FlashStyle;
-			flashColor?: string;
-			showLocateOverlay?: boolean;
-		}
+		sourceMarkdownPath?: string
 	): Promise<void> {
 		if (
 			!ensureBookSourceLocationAccess(
@@ -1363,26 +1326,10 @@ export class EpubLinkService {
 		}
 		try {
 			const { getNavigationHub } = await import("../navigation/navigation-hub-access");
-			const locate: {
-				cfi: string;
-				text: string;
-				flashStyle?: FlashStyle;
-				flashColor?: string;
-				showLocateOverlay?: boolean;
-			} = { cfi, text };
-			if (options?.flashStyle) {
-				locate.flashStyle = options.flashStyle;
-			}
-			if (options?.flashColor) {
-				locate.flashColor = options.flashColor;
-			}
-			if (typeof options?.showLocateOverlay === "boolean") {
-				locate.showLocateOverlay = options.showLocateOverlay;
-			}
 			const result = await getNavigationHub(this.app).navigate({
 				kind: "book",
 				resourcePath: filePath,
-				locate,
+				locate: { cfi, text },
 				context: { sourceId, sourceMarkdownPath },
 				policy: { reuseLeaf: true, preferredLeaf: true, focus: true },
 			});
@@ -1391,27 +1338,6 @@ export class EpubLinkService {
 			}
 		} catch (error) {
 			logger.error("[EpubLinkService] Navigation failed:", error);
-		}
-	}
-
-	async navigateToEpubBook(
-		filePath: string,
-		sourceId?: string,
-		sourceMarkdownPath?: string
-	): Promise<void> {
-		try {
-			const { getNavigationHub } = await import("../navigation/navigation-hub-access");
-			const result = await getNavigationHub(this.app).navigate({
-				kind: "book",
-				resourcePath: filePath,
-				context: { sourceId, sourceMarkdownPath },
-				policy: { reuseLeaf: true, preferredLeaf: true, focus: true },
-			});
-			if (result.success) {
-				logger.debug("[EpubLinkService] Navigated to book:", filePath, sourceId);
-			}
-		} catch (error) {
-			logger.error("[EpubLinkService] Book navigation failed:", error);
 		}
 	}
 }

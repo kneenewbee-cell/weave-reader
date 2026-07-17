@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	findEpubPortableBookIdInIndexByIdentity,
 	findEpubPortableBookIdInIndex,
 	resolveEpubPortableBookDataLocation,
 } from "../epub-portable-data-location";
@@ -14,7 +13,6 @@ describe("epub portable data location", () => {
 			bookDir: "weave/epub-data/books/epub-book-rv441q",
 			bookMetadataPath: "weave/epub-data/books/epub-book-rv441q/book.json",
 			annotationsPath: "weave/epub-data/books/epub-book-rv441q/annotations.json",
-			annotationsMarkdownPath: "weave/epub-data/books/epub-book-rv441q/annotations.md",
 			semanticProfilePath: "weave/epub-data/books/epub-book-rv441q/semantic-profile.json",
 			bookmarksPath: "weave/epub-data/books/epub-book-rv441q/bookmarks.json",
 			readingStatePath: "weave/epub-data/books/epub-book-rv441q/reading-state.json",
@@ -47,39 +45,5 @@ describe("epub portable data location", () => {
 		expect(findEpubPortableBookIdInIndex(index, "Books/New Name.epub")).toBe("epub-book-a");
 		expect(findEpubPortableBookIdInIndex(index, "Books/Other.epub")).toBe("epub-book-b");
 		expect(findEpubPortableBookIdInIndex(index, "Books/Missing.epub")).toBe("");
-	});
-
-	it("prefers the indexed portable book id when the runtime book id changed for the same epub source", () => {
-		const index = {
-			books: {
-				"epub-book-rv441q": {
-					bookId: "epub-book-rv441q",
-					sourceId: "epubsrc-2937234a35a2e33dff05bd00",
-					sourceFingerprint:
-						"2937234a35a2e33dff05bd005f6130eaaf24fcc5a82e4ac0d0225628e035215e",
-					filePath: "Books/LaTeX.epub",
-					knownPaths: ["Books/LaTeX.epub"],
-				},
-			},
-		};
-
-		expect(
-			findEpubPortableBookIdInIndexByIdentity(index, {
-				bookId: "epub-book-i6zqes",
-				sourceId: "epubsrc-2937234a35a2e33dff05bd00",
-				sourceFingerprint:
-					"2937234a35a2e33dff05bd005f6130eaaf24fcc5a82e4ac0d0225628e035215e",
-				filePath: "Books/LaTeX.epub",
-			})
-		).toBe("epub-book-rv441q");
-	});
-
-	it("falls back to the runtime book id when no indexed source matches", () => {
-		expect(
-			findEpubPortableBookIdInIndexByIdentity(
-				{ books: {} },
-				{ bookId: "epub-book-i6zqes", filePath: "Books/LaTeX.epub" }
-			)
-		).toBe("epub-book-i6zqes");
 	});
 });

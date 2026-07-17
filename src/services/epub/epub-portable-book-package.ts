@@ -15,6 +15,10 @@ import {
 	safeEpubAnnotationVersionId,
 	switchEpubAnnotationVersion,
 } from "./epub-annotation-version-store";
+import {
+	computeAvailableEpubFingerprints,
+	type PartialEpubFingerprints,
+} from "./epub-fingerprints";
 
 export const EPUB_ANNOTATED_BOOK_PACKAGE_FORMAT =
 	"weave-reader-annotated-book-package/v1";
@@ -23,6 +27,7 @@ export interface CreateEpubAnnotatedBookPackageOptions {
 	bookId: string;
 	filePath: string;
 	displayName?: string;
+	includeBook?: boolean;
 }
 
 export interface EpubAnnotatedBookPackageResult {
@@ -59,13 +64,35 @@ interface EpubAnnotatedBookPackageManifest {
 	bookPath?: string;
 	exportedAt: number;
 	sourceFingerprint?: string;
+	fileFingerprint?: string;
+	packageFingerprint?: string;
+	contentFingerprint?: string;
 	title?: string;
 }
 
 interface ExistingPortableBookMatch {
 	bookId: string;
 	filePath?: string;
+	fingerprints: PartialEpubFingerprints;
+	matchKind: EpubFingerprintMatchKind | "preferred-fallback";
 }
+
+interface PortableBookCandidate {
+	bookId: string;
+	filePath?: string;
+	fingerprints: PartialEpubFingerprints;
+}
+
+type EpubFingerprintMatchKind =
+	| "fileFingerprint"
+	| "packageFingerprint"
+	| "contentFingerprint";
+
+const FINGERPRINT_MATCH_ORDER: EpubFingerprintMatchKind[] = [
+	"fileFingerprint",
+	"packageFingerprint",
+	"contentFingerprint",
+];
 
 interface PackageDataEntry {
 	relativePath: string;
@@ -79,6 +106,80 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cleanString(value: unknown): string {
 	return String(value || "").trim();
+}
+
+function cleanFingerprint(value: unknown): string {
+	return cleanString(value).toLowerCase();
+}
+
+function readFingerprintsFromRecord(value: unknown): PartialEpubFingerprints {
+	if (!isRecord(value)) {
+		return {};
+	}
+	const fileFingerprint =
+		cleanFingerprint(value.fileFingerprint) ||
+		cleanFingerprint(value.sourceFingerprint);
+	const packageFingerprint = cleanFingerprint(value.packageFingerprint);
+	const contentFingerprint = cleanFingerprint(value.contentFingerprint);
+	return {
+		...(fileFingerprint ? { fileFingerprint } : {}),
+		...(packageFingerprint ? { packageFingerprint } : {}),
+		...(contentFingerprint ? { contentFingerprint } : {}),
+	};
+}
+
+function mergeFingerprints(
+	...fingerprintSets: PartialEpubFingerprints[]
+): PartialEpubFingerprints {
+	const merged: PartialEpubFingerprints = {};
+	for (const fingerprints of fingerprintSets) {
+		if (!merged.fileFingerprint && fingerprints.fileFingerprint) {
+			merged.fileFingerprint = cleanFingerprint(fingerprints.fileFingerprint);
+		}
+		if (!merged.packageFingerprint && fingerprints.packageFingerprint) {
+			merged.packageFingerprint = cleanFingerprint(fingerprints.packageFingerprint);
+		}
+		if (!merged.contentFingerprint && fingerprints.contentFingerprint) {
+			merged.contentFingerprint = cleanFingerprint(fingerprints.contentFingerprint);
+		}
+	}
+	return merged;
+}
+
+function hasAnyFingerprint(fingerprints: PartialEpubFingerprints): boolean {
+	return Boolean(
+		fingerprints.fileFingerprint ||
+			fingerprints.packageFingerprint ||
+			fingerprints.contentFingerprint
+	);
+}
+
+function getFingerprintValue(
+	fingerprints: PartialEpubFingerprints,
+	matchKind: EpubFingerprintMatchKind
+): string {
+	return cleanFingerprint(fingerprints[matchKind]);
+}
+
+function applyFingerprintsToRecord(
+	value: unknown,
+	fingerprints: PartialEpubFingerprints
+): unknown {
+	if (!isRecord(value)) {
+		return value;
+	}
+	const next: Record<string, unknown> = { ...value };
+	if (fingerprints.fileFingerprint) {
+		next.sourceFingerprint = fingerprints.fileFingerprint;
+		next.fileFingerprint = fingerprints.fileFingerprint;
+	}
+	if (fingerprints.packageFingerprint) {
+		next.packageFingerprint = fingerprints.packageFingerprint;
+	}
+	if (fingerprints.contentFingerprint) {
+		next.contentFingerprint = fingerprints.contentFingerprint;
+	}
+	return next;
 }
 
 function sanitizeFileName(value: unknown, fallback: string): string {
@@ -206,6 +307,7 @@ function normalizeManifest(value: unknown): EpubAnnotatedBookPackageManifest | n
 	}
 	const bookId = safeEpubSemanticBookId(value.bookId);
 	const bookFileName = sanitizeFileName(value.bookFileName, "book.epub");
+	const fingerprints = readFingerprintsFromRecord(value);
 	return {
 		format: EPUB_ANNOTATED_BOOK_PACKAGE_FORMAT,
 		version: 1,
@@ -216,35 +318,109 @@ function normalizeManifest(value: unknown): EpubAnnotatedBookPackageManifest | n
 			typeof value.exportedAt === "number" && Number.isFinite(value.exportedAt)
 				? value.exportedAt
 				: Date.now(),
-		sourceFingerprint: cleanString(value.sourceFingerprint) || undefined,
+		sourceFingerprint:
+			fingerprints.fileFingerprint ||
+			cleanFingerprint(value.sourceFingerprint) ||
+			undefined,
+		fileFingerprint: fingerprints.fileFingerprint,
+		packageFingerprint: fingerprints.packageFingerprint,
+		contentFingerprint: fingerprints.contentFingerprint,
 		title: cleanString(value.title) || undefined,
 	};
 }
 
-async function findExistingBookMatchByFingerprint(
-	app: App,
-	sourceFingerprint: string
-): Promise<ExistingPortableBookMatch | null> {
-	const normalizedFingerprint = cleanString(sourceFingerprint).toLowerCase();
-	if (!normalizedFingerprint) {
-		return null;
-	}
+async function loadPortableBookCandidates(app: App): Promise<PortableBookCandidate[]> {
 	const index = await readEpubSemanticJson(app, `${getEpubPortableDataRoot()}/index.json`);
 	if (!isRecord(index) || !isRecord(index.books)) {
-		return null;
+		return [];
 	}
+	const candidates: PortableBookCandidate[] = [];
 	for (const [fallbackBookId, rawBook] of Object.entries(index.books)) {
 		if (!isRecord(rawBook)) {
 			continue;
 		}
-		if (cleanString(rawBook.sourceFingerprint).toLowerCase() === normalizedFingerprint) {
+		const bookId = safeEpubSemanticBookId(rawBook.bookId || fallbackBookId);
+		if (!bookId) {
+			continue;
+		}
+		candidates.push({
+			bookId,
+			filePath: cleanString(rawBook.filePath) || undefined,
+			fingerprints: readFingerprintsFromRecord(rawBook),
+		});
+	}
+	return candidates;
+}
+
+function candidateMatchesFingerprint(
+	candidate: PortableBookCandidate,
+	packageFingerprints: PartialEpubFingerprints,
+	matchKind: EpubFingerprintMatchKind
+): boolean {
+	const packageFingerprint = getFingerprintValue(packageFingerprints, matchKind);
+	return Boolean(
+		packageFingerprint &&
+			getFingerprintValue(candidate.fingerprints, matchKind) === packageFingerprint
+	);
+}
+
+function findPreferredBookMatch(
+	candidates: PortableBookCandidate[],
+	preferredBookId: string | undefined,
+	packageFingerprints: PartialEpubFingerprints
+): ExistingPortableBookMatch | null {
+	const normalizedPreferredBookId = safeEpubSemanticBookId(preferredBookId || "");
+	if (!normalizedPreferredBookId) {
+		return null;
+	}
+	const candidate = candidates.find((entry) => entry.bookId === normalizedPreferredBookId);
+	if (!candidate) {
+		return null;
+	}
+	if (!hasAnyFingerprint(packageFingerprints)) {
+		return {
+			...candidate,
+			matchKind: "preferred-fallback",
+		};
+	}
+	for (const matchKind of FINGERPRINT_MATCH_ORDER) {
+		if (candidateMatchesFingerprint(candidate, packageFingerprints, matchKind)) {
 			return {
-				bookId: safeEpubSemanticBookId(rawBook.bookId || fallbackBookId),
-				filePath: cleanString(rawBook.filePath) || undefined,
+				...candidate,
+				matchKind,
 			};
 		}
 	}
 	return null;
+}
+
+function findGlobalBookMatch(
+	candidates: PortableBookCandidate[],
+	packageFingerprints: PartialEpubFingerprints
+): ExistingPortableBookMatch | null {
+	for (const matchKind of FINGERPRINT_MATCH_ORDER) {
+		for (const candidate of candidates) {
+			if (candidateMatchesFingerprint(candidate, packageFingerprints, matchKind)) {
+				return {
+					...candidate,
+					matchKind,
+				};
+			}
+		}
+	}
+	return null;
+}
+
+async function findExistingBookMatchByFingerprints(
+	app: App,
+	packageFingerprints: PartialEpubFingerprints,
+	preferredBookId?: string
+): Promise<ExistingPortableBookMatch | null> {
+	const candidates = await loadPortableBookCandidates(app);
+	return (
+		findPreferredBookMatch(candidates, preferredBookId, packageFingerprints) ||
+		findGlobalBookMatch(candidates, packageFingerprints)
+	);
 }
 
 function retargetPortableJson(value: unknown, bookId: string, bookPath: string): unknown {
@@ -356,6 +532,10 @@ async function updatePortableIndexForImportedBook(
 	const currentBooks = isRecord(currentIndex.books) ? currentIndex.books : {};
 	const book = isRecord(bookJson) ? bookJson : {};
 	const previous = isRecord(currentBooks[bookId]) ? currentBooks[bookId] : {};
+	const fingerprints = mergeFingerprints(
+		readFingerprintsFromRecord(book),
+		readFingerprintsFromRecord(previous)
+	);
 	const knownPaths = Array.from(
 		new Set([
 			...(Array.isArray(previous.knownPaths) ? previous.knownPaths : []),
@@ -375,7 +555,22 @@ async function updatePortableIndexForImportedBook(
 				bookId,
 				filePath: bookPath,
 				knownPaths,
-				sourceFingerprint: cleanString(book.sourceFingerprint || previous.sourceFingerprint) || undefined,
+				sourceFingerprint:
+					fingerprints.fileFingerprint ||
+					cleanFingerprint(book.sourceFingerprint || previous.sourceFingerprint) ||
+					undefined,
+				fileFingerprint:
+					fingerprints.fileFingerprint ||
+					cleanFingerprint(book.fileFingerprint || previous.fileFingerprint) ||
+					undefined,
+				packageFingerprint:
+					fingerprints.packageFingerprint ||
+					cleanFingerprint(book.packageFingerprint || previous.packageFingerprint) ||
+					undefined,
+				contentFingerprint:
+					fingerprints.contentFingerprint ||
+					cleanFingerprint(book.contentFingerprint || previous.contentFingerprint) ||
+					undefined,
 				sourceId: cleanString(book.sourceId || previous.sourceId) || undefined,
 				title: cleanString(book.title || previous.title) || undefined,
 				displayTitle: cleanString(book.displayTitle || previous.displayTitle) || undefined,
@@ -397,7 +592,15 @@ export async function createEpubAnnotatedBookPackage(
 	const bookJson = await readEpubSemanticJson(app, getBookDataPath(bookId, "book.json"));
 	const bookFileName = sanitizeFileName(getFileNameFromPath(bookPath), "book.epub");
 	const title = isRecord(bookJson) ? cleanString(bookJson.title || bookJson.displayTitle) : "";
-	const sourceFingerprint = isRecord(bookJson) ? cleanString(bookJson.sourceFingerprint) : "";
+	const bookBinary = await readVaultBinary(app, bookPath);
+	const computedFingerprints = bookBinary
+		? await computeAvailableEpubFingerprints(bookBinary)
+		: {};
+	const fingerprints = mergeFingerprints(
+		computedFingerprints,
+		readFingerprintsFromRecord(bookJson)
+	);
+	const sourceFingerprint = fingerprints.fileFingerprint;
 	const zip = new JSZip();
 	const manifest: EpubAnnotatedBookPackageManifest = {
 		format: EPUB_ANNOTATED_BOOK_PACKAGE_FORMAT,
@@ -407,12 +610,14 @@ export async function createEpubAnnotatedBookPackage(
 		bookPath,
 		exportedAt: Date.now(),
 		...(sourceFingerprint ? { sourceFingerprint } : {}),
+		...(fingerprints.fileFingerprint ? { fileFingerprint: fingerprints.fileFingerprint } : {}),
+		...(fingerprints.packageFingerprint ? { packageFingerprint: fingerprints.packageFingerprint } : {}),
+		...(fingerprints.contentFingerprint ? { contentFingerprint: fingerprints.contentFingerprint } : {}),
 		...(title ? { title } : {}),
 	};
 	zip.file("manifest.json", JSON.stringify(manifest, null, 2));
 
-	const bookBinary = await readVaultBinary(app, bookPath);
-	if (bookBinary) {
+	if (options.includeBook !== false && bookBinary) {
 		zip.file(
 			`book/${bookFileName}`,
 			bookBinary instanceof Uint8Array ? bookBinary : new Uint8Array(bookBinary)
@@ -423,7 +628,13 @@ export async function createEpubAnnotatedBookPackage(
 		const relativePath = relativize(bookDir, filePath);
 		const content = await readVaultText(app, filePath);
 		if (content !== null) {
-			zip.file(`data/${relativePath}`, content);
+			if (normalizePath(relativePath) === "book.json") {
+				const parsed = parseJsonText(content);
+				const withFingerprints = applyFingerprintsToRecord(parsed, fingerprints);
+				zip.file(`data/${relativePath}`, JSON.stringify(withFingerprints, null, 2));
+			} else {
+				zip.file(`data/${relativePath}`, content);
+			}
 		}
 	}
 
@@ -448,28 +659,42 @@ export async function importEpubAnnotatedBookPackage(
 		throw new Error("invalid-weave-reader-package");
 	}
 	const packageBookJson = parseJsonText(await zip.file("data/book.json")?.async("string") || null);
-	const fingerprintFromBook = isRecord(packageBookJson) ? cleanString(packageBookJson.sourceFingerprint) : "";
-	const existingMatch = await findExistingBookMatchByFingerprint(
-		app,
-		manifest.sourceFingerprint || fingerprintFromBook
+	const packageFingerprints = mergeFingerprints(
+		readFingerprintsFromRecord(manifest),
+		readFingerprintsFromRecord(packageBookJson)
 	);
-	const targetBookId = safeEpubSemanticBookId(
-		options.preferredBookId ||
-			existingMatch?.bookId ||
-			manifest.bookId
-	);
-	const matchedExistingBook = Boolean(existingMatch?.bookId && existingMatch.bookId === targetBookId);
 	const bookEntry = Object.values(zip.files).find(
 		(entry) => !entry.dir && normalizePath(entry.name).startsWith("book/")
 	);
+	const preferredBookId = safeEpubSemanticBookId(options.preferredBookId || "");
+	const existingMatch = await findExistingBookMatchByFingerprints(
+		app,
+		packageFingerprints,
+		preferredBookId
+	);
+	const fallbackToPreferredBook = Boolean(preferredBookId && !existingMatch && !bookEntry);
+	const targetBookId = safeEpubSemanticBookId(
+		existingMatch?.bookId ||
+			(fallbackToPreferredBook ? preferredBookId : "") ||
+			manifest.bookId
+	);
+	const matchedExistingBook = Boolean(existingMatch?.bookId || fallbackToPreferredBook);
 	const bookFileName = sanitizeFileName(
 		bookEntry ? normalizePath(bookEntry.name).split("/").pop() : manifest.bookFileName,
 		manifest.bookFileName || "book.epub"
 	);
+	const preferredTargetPath =
+		preferredBookId && targetBookId === preferredBookId
+			? normalizePath(options.targetBookPath || "")
+			: "";
 	const bookPath =
-		options.targetBookPath ||
+		preferredTargetPath ||
 		(matchedExistingBook && existingMatch?.filePath ? normalizePath(existingMatch.filePath) : "") ||
 		(await generateUniqueVaultFilePath(app, options.defaultBookFolder || "Books", bookFileName));
+	const targetFingerprints =
+		matchedExistingBook && existingMatch
+			? mergeFingerprints(existingMatch.fingerprints, packageFingerprints)
+			: packageFingerprints;
 
 	const adapter = getAdapter(app);
 	const shouldWriteBookBinary =
@@ -489,8 +714,7 @@ export async function importEpubAnnotatedBookPackage(
 	const existingAnnotationCount = countAnnotations(existingActiveAnnotations);
 	const importAsSeparateVersion =
 		matchedExistingBook &&
-		existingAnnotationCount > 0 &&
-		options.activateImportedAnnotations !== true;
+		existingAnnotationCount > 0;
 	const dataEntries: PackageDataEntry[] = [];
 	for (const entry of Object.values(zip.files)) {
 		const normalizedEntryName = normalizePath(entry.name);
@@ -549,6 +773,9 @@ export async function importEpubAnnotatedBookPackage(
 			? replaceVersionIdInRelativePath(normalizedRelativePath, mappedVersionId)
 			: normalizedRelativePath;
 		let retargeted = entry.parsed ? retargetPortableJson(entry.parsed, targetBookId, bookPath) : null;
+		if (retargeted && normalizedRelativePath === "book.json") {
+			retargeted = applyFingerprintsToRecord(retargeted, targetFingerprints);
+		}
 		if (retargeted && normalizedRelativePath === "active-version.json") {
 			retargeted = retargetActiveVersionJson(retargeted, targetBookId, versionMap);
 		}
@@ -579,7 +806,10 @@ export async function importEpubAnnotatedBookPackage(
 			filePath: bookPath,
 			knownPaths: [bookPath],
 			title: manifest.title || bookFileName.replace(/\.[^.]+$/, ""),
-			sourceFingerprint: manifest.sourceFingerprint,
+			sourceFingerprint: targetFingerprints.fileFingerprint || manifest.sourceFingerprint,
+			fileFingerprint: targetFingerprints.fileFingerprint,
+			packageFingerprint: targetFingerprints.packageFingerprint,
+			contentFingerprint: targetFingerprints.contentFingerprint,
 			updatedAt: Date.now(),
 		};
 		await writeEpubSemanticJson(app, getBookDataPath(targetBookId, "book.json"), importedBookJson);
@@ -622,4 +852,42 @@ export function downloadEpubAnnotatedBookPackage(result: EpubAnnotatedBookPackag
 	anchor.click();
 	anchor.remove();
 	window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function pickEpubAnnotatedBookPackageArrayBuffer(): Promise<ArrayBuffer | null> {
+	if (typeof document === "undefined") {
+		return Promise.resolve(null);
+	}
+	return new Promise((resolve) => {
+		const input = document.createElement("input");
+		let settled = false;
+		const finish = (value: ArrayBuffer | null) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			input.remove();
+			resolve(value);
+		};
+		input.type = "file";
+		input.accept = ".zip,application/zip,application/x-zip-compressed";
+		input.style.display = "none";
+		input.addEventListener("change", () => {
+			void (async () => {
+				const file = input.files?.[0];
+				if (!file) {
+					finish(null);
+					return;
+				}
+				try {
+					finish(await file.arrayBuffer());
+				} catch {
+					finish(null);
+				}
+			})();
+		});
+		input.addEventListener("cancel", () => finish(null));
+		document.body.appendChild(input);
+		input.click();
+	});
 }

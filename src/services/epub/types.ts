@@ -3,6 +3,9 @@ export interface EpubBook {
 	filePath: string;
 	sourceId?: string;
 	sourceFingerprint?: string;
+	fileFingerprint?: string;
+	packageFingerprint?: string;
+	contentFingerprint?: string;
 	sourceMtime?: number;
 	sourceSize?: number;
 	metadata: BookMetadata;

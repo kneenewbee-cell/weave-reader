@@ -1,5 +1,5 @@
 <script lang="ts">
- 	import { onMount } from 'svelte';
+ 	import { onMount, untrack } from 'svelte';
 	import { Platform } from 'obsidian';
 	import {
 		DEFAULT_CONTINUOUS_READING_POSITION_AUTO_SAVE_ENABLED,
@@ -28,6 +28,7 @@
 		backlinkService: EpubBacklinkHighlightService;
 		settings: EpubReaderSettings;
 		excerptSettings: EpubExcerptSettings;
+		annotationBookId?: string;
 		canUseReadingProgress?: boolean;
 		canUseExcerptNotes?: boolean;
 		getReadingPositionAutoSaveConfig?: () => { enabled: boolean; pages: number };
@@ -41,6 +42,7 @@
 		onChapterChange?: (title: string) => void;
 		onReaderReady?: () => void;
 		onRenderError?: (message: string) => void;
+		renderKey?: number;
 	}
 
 	let {
@@ -52,6 +54,7 @@
 		backlinkService,
 		settings,
 		excerptSettings,
+		annotationBookId = '',
 		canUseReadingProgress = true,
 		canUseExcerptNotes = true,
 		getReadingPositionAutoSaveConfig,
@@ -65,6 +68,7 @@
 		onChapterChange,
 		onReaderReady: onReaderReadyProp,
 		onRenderError: onRenderErrorProp,
+		renderKey = 0,
 	}: Props = $props();
 
 	let viewerContainer: HTMLDivElement;
@@ -82,6 +86,7 @@
 	let renderSessionToken = 0;
 	let mobileStabilizationToken = 0;
 	let viewDisposed = false;
+	let lastRenderKey = renderKey;
 	let readingPositionAutoSaveTrackerState = createReadingPositionAutoSaveTrackerState('', 0);
 	let readingPositionAutoSaveEnabled = DEFAULT_CONTINUOUS_READING_POSITION_AUTO_SAVE_ENABLED;
 	let readingPositionAutoSavePages = DEFAULT_CONTINUOUS_READING_POSITION_AUTO_SAVE_PAGES;
@@ -632,6 +637,35 @@
 		resizeObserver.observe(viewerContainer);
 	}
 
+	function resetRenderLifecycle(): void {
+		renderSessionToken += 1;
+		mobileStabilizationToken += 1;
+		rendered = false;
+		highlightsReady = false;
+		skipNextAppearanceSync = false;
+
+		if (detachRelocatedHandler) {
+			detachRelocatedHandler();
+			detachRelocatedHandler = null;
+		}
+		if (retryTimer) {
+			window.clearTimeout(retryTimer);
+			retryTimer = null;
+		}
+		if (highlightReapplyTimer) {
+			window.clearTimeout(highlightReapplyTimer);
+			highlightReapplyTimer = null;
+		}
+		if (mobileStabilizationTimer) {
+			window.clearTimeout(mobileStabilizationTimer);
+			mobileStabilizationTimer = null;
+		}
+		if (resizeObserver) {
+			resizeObserver.disconnect();
+			resizeObserver = null;
+		}
+	}
+
 	async function applySettings() {
 		if (!rendered) return;
 		await readerService.applyReaderAppearance({
@@ -647,7 +681,8 @@
 		if (!canUseExcerptNotes) return [];
 		if (!book) return [];
 		try {
-			const allHighlights = await annotationService.collectAllHighlights(book.id, filePath, backlinkService);
+			const targetBookId = String(annotationBookId || book.id).trim();
+			const allHighlights = await annotationService.collectAllHighlights(targetBookId, filePath, backlinkService);
 			logger.debug('[EpubReaderView] total highlights to apply:', allHighlights.length);
 			return allHighlights;
 		} catch (e) {
@@ -774,6 +809,20 @@
 		if (book && viewerContainer && !rendered) {
 			renderBook();
 		}
+	});
+
+	$effect(() => {
+		const nextRenderKey = renderKey;
+		if (nextRenderKey === lastRenderKey) {
+			return;
+		}
+		lastRenderKey = nextRenderKey;
+		untrack(() => {
+			resetRenderLifecycle();
+			if (book && viewerContainer) {
+				void renderBook();
+			}
+		});
 	});
 
 	$effect(() => {

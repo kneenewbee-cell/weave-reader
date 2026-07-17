@@ -87,6 +87,10 @@ import {
 } from "./epub-bookshelf-playlist-store";
 import { peelEmbeddedScanIndexFromUnifiedData } from "./epub-unified-local-data-read";
 import {
+	computeAvailableEpubFingerprints,
+	type PartialEpubFingerprints,
+} from "./epub-fingerprints";
+import {
 	normalizeTocChapterMarkKey,
 	normalizeTocChapterMarkMap,
 	type EpubTocChapterMark,
@@ -132,6 +136,9 @@ export interface EpubSourceRegistryEntry {
 	sourceId: string;
 	filePath: string;
 	sourceFingerprint?: string;
+	fileFingerprint?: string;
+	packageFingerprint?: string;
+	contentFingerprint?: string;
 	legacySourceIds?: string[];
 	sourceSize?: number;
 	sourceMtime?: number;
@@ -1139,6 +1146,9 @@ export class EpubStorageService {
 					filePath: sourceEntry.filePath,
 					sourceId: sourceEntry.sourceId,
 					sourceFingerprint: sourceEntry.sourceFingerprint,
+					fileFingerprint: sourceEntry.fileFingerprint,
+					packageFingerprint: sourceEntry.packageFingerprint,
+					contentFingerprint: sourceEntry.contentFingerprint,
 					sourceSize: sourceEntry.sourceSize,
 					sourceMtime: sourceEntry.sourceMtime,
 				};
@@ -1172,6 +1182,9 @@ export class EpubStorageService {
 				nextDescriptor.id !== descriptor.id ||
 				nextDescriptor.sourceId !== descriptor.sourceId ||
 				nextDescriptor.sourceFingerprint !== descriptor.sourceFingerprint ||
+				nextDescriptor.fileFingerprint !== descriptor.fileFingerprint ||
+				nextDescriptor.packageFingerprint !== descriptor.packageFingerprint ||
+				nextDescriptor.contentFingerprint !== descriptor.contentFingerprint ||
 				nextDescriptor.filePath !== descriptor.filePath
 			) {
 				booksChanged = true;
@@ -1280,9 +1293,12 @@ export class EpubStorageService {
 	): EpubSourceRegistryEntry[] {
 		const merged = new Map<string, EpubSourceRegistryEntry>();
 		for (const entry of entries || []) {
+			const fileFingerprint = String(
+				entry.fileFingerprint || entry.sourceFingerprint || ""
+			).trim();
 			const canonicalSourceId =
-				String(entry.sourceFingerprint || "").trim()
-					? this.generateSourceId(entry.sourceFingerprint)
+				fileFingerprint
+					? this.generateSourceId(fileFingerprint)
 					: String(entry.sourceId || "").trim();
 			if (!canonicalSourceId) {
 				continue;
@@ -1292,6 +1308,8 @@ export class EpubStorageService {
 			const normalizedEntry: EpubSourceRegistryEntry = {
 				...entry,
 				sourceId: canonicalSourceId,
+				sourceFingerprint: fileFingerprint || entry.sourceFingerprint,
+				fileFingerprint: fileFingerprint || entry.fileFingerprint,
 				legacySourceIds: this.normalizeLegacySourceIds(
 					[
 						...(entry.legacySourceIds || []),
@@ -1310,6 +1328,9 @@ export class EpubStorageService {
 				...normalizedEntry,
 				filePath: existing.filePath || normalizedEntry.filePath,
 				sourceFingerprint: existing.sourceFingerprint || normalizedEntry.sourceFingerprint,
+				fileFingerprint: existing.fileFingerprint || normalizedEntry.fileFingerprint,
+				packageFingerprint: existing.packageFingerprint || normalizedEntry.packageFingerprint,
+				contentFingerprint: existing.contentFingerprint || normalizedEntry.contentFingerprint,
 				legacySourceIds: this.normalizeLegacySourceIds(
 					[
 						...(existing.legacySourceIds || []),
@@ -2153,6 +2174,9 @@ export class EpubStorageService {
 		if (sourceEntry) {
 			book.sourceId = sourceEntry.sourceId;
 			book.sourceFingerprint = sourceEntry.sourceFingerprint;
+			book.fileFingerprint = sourceEntry.fileFingerprint;
+			book.packageFingerprint = sourceEntry.packageFingerprint;
+			book.contentFingerprint = sourceEntry.contentFingerprint;
 			book.sourceSize = sourceEntry.sourceSize;
 			book.sourceMtime = sourceEntry.sourceMtime;
 			book.filePath = sourceEntry.filePath;
@@ -2588,39 +2612,70 @@ export class EpubStorageService {
 		return (hash >>> 0).toString(36);
 	}
 
-	private async computeSourceFingerprint(filePath: string): Promise<string | undefined> {
+	private normalizeFingerprint(value: unknown): string {
+		return String(value || "").trim().toLowerCase();
+	}
+
+	private sourceFingerprintsMatch(
+		entry: EpubSourceRegistryEntry | undefined,
+		fingerprints: PartialEpubFingerprints
+	): boolean {
+		if (!entry) {
+			return false;
+		}
+		const fileFingerprint = this.normalizeFingerprint(fingerprints.fileFingerprint);
+		const packageFingerprint = this.normalizeFingerprint(fingerprints.packageFingerprint);
+		const contentFingerprint = this.normalizeFingerprint(fingerprints.contentFingerprint);
+		if (
+			fileFingerprint &&
+			this.normalizeFingerprint(entry.fileFingerprint || entry.sourceFingerprint) !== fileFingerprint
+		) {
+			return false;
+		}
+		if (
+			packageFingerprint &&
+			this.normalizeFingerprint(entry.packageFingerprint) !== packageFingerprint
+		) {
+			return false;
+		}
+		if (
+			contentFingerprint &&
+			this.normalizeFingerprint(entry.contentFingerprint) !== contentFingerprint
+		) {
+			return false;
+		}
+		return true;
+	}
+
+	private async computeSourceFingerprints(filePath: string): Promise<PartialEpubFingerprints> {
 		const normalizedPath = normalizePath(filePath || "");
 		if (!normalizedPath) {
-			return undefined;
+			return {};
 		}
 
 		const adapter = this.app.vault.adapter as {
 			readBinary?: (path: string) => Promise<ArrayBuffer | Uint8Array>;
 		};
 		if (typeof adapter.readBinary !== "function" || typeof crypto?.subtle?.digest !== "function") {
-			return undefined;
+			return {};
 		}
 
 		try {
 			const binary = await adapter.readBinary(normalizedPath);
-			const input = binary instanceof Uint8Array ? binary : new Uint8Array(binary);
-			const digest = await crypto.subtle.digest("SHA-256", input);
-			return Array.from(new Uint8Array(digest))
-				.map((value) => value.toString(16).padStart(2, "0"))
-				.join("");
+			return await computeAvailableEpubFingerprints(binary);
 		} catch (error) {
-			logger.debug("[EpubStorageService] Failed to compute book source fingerprint:", {
+			logger.debug("[EpubStorageService] Failed to compute book source fingerprints:", {
 				filePath: normalizedPath,
 				error,
 			});
-			return undefined;
+			return {};
 		}
 	}
 
 	private async buildSourceRegistryEntry(
 		filePath: string,
 		sourceId: string,
-		sourceFingerprint?: string,
+		fingerprints: PartialEpubFingerprints = {},
 		legacySourceIds?: string[]
 	): Promise<EpubSourceRegistryEntry | null> {
 		const normalizedPath = normalizePath(filePath || "");
@@ -2658,10 +2713,16 @@ export class EpubStorageService {
 			}
 		}
 
+		const fileFingerprint = this.normalizeFingerprint(fingerprints.fileFingerprint);
+		const packageFingerprint = this.normalizeFingerprint(fingerprints.packageFingerprint);
+		const contentFingerprint = this.normalizeFingerprint(fingerprints.contentFingerprint);
 		return {
 			sourceId,
 			filePath: normalizedPath,
-			sourceFingerprint,
+			sourceFingerprint: fileFingerprint || undefined,
+			fileFingerprint: fileFingerprint || undefined,
+			packageFingerprint: packageFingerprint || undefined,
+			contentFingerprint: contentFingerprint || undefined,
 			legacySourceIds: this.normalizeLegacySourceIds(legacySourceIds, sourceId),
 			sourceSize,
 			sourceMtime,
@@ -2712,7 +2773,13 @@ export class EpubStorageService {
 
 	async ensureSourceIdentity(
 		filePath: string,
-		options: { preferredSourceId?: string; preferredSourceFingerprint?: string } = {}
+		options: {
+			preferredSourceId?: string;
+			preferredSourceFingerprint?: string;
+			preferredFileFingerprint?: string;
+			preferredPackageFingerprint?: string;
+			preferredContentFingerprint?: string;
+		} = {}
 	): Promise<EpubSourceRegistryEntry | null> {
 		const normalizedPath = normalizePath(filePath || "");
 		if (!normalizedPath || !(await this.hasExistingEpubFile(normalizedPath))) {
@@ -2723,10 +2790,24 @@ export class EpubStorageService {
 		const byPath = registry.find((entry) => entry.filePath === normalizedPath);
 		const currentStat = await this.getExistingEpubFileStat(normalizedPath);
 		const preferredSourceFingerprint = String(
-			options.preferredSourceFingerprint || ""
+			options.preferredFileFingerprint || options.preferredSourceFingerprint || ""
 		).trim().toLowerCase();
-		const sourceFingerprint =
-			preferredSourceFingerprint || (await this.computeSourceFingerprint(normalizedPath));
+		const computedFingerprints = await this.computeSourceFingerprints(normalizedPath);
+		const fingerprints: PartialEpubFingerprints = {
+			fileFingerprint:
+				preferredSourceFingerprint ||
+				this.normalizeFingerprint(computedFingerprints.fileFingerprint) ||
+				undefined,
+			packageFingerprint:
+				this.normalizeFingerprint(options.preferredPackageFingerprint) ||
+				this.normalizeFingerprint(computedFingerprints.packageFingerprint) ||
+				undefined,
+			contentFingerprint:
+				this.normalizeFingerprint(options.preferredContentFingerprint) ||
+				this.normalizeFingerprint(computedFingerprints.contentFingerprint) ||
+				undefined,
+		};
+		const sourceFingerprint = fingerprints.fileFingerprint;
 		const canonicalSourceId = sourceFingerprint
 			? this.generateSourceId(sourceFingerprint)
 			: undefined;
@@ -2742,7 +2823,8 @@ export class EpubStorageService {
 					currentStat &&
 					entry.filePath === normalizedPath &&
 					entry.sourceSize === currentStat.size &&
-					entry.sourceMtime === currentStat.mtime
+					entry.sourceMtime === currentStat.mtime &&
+					this.sourceFingerprintsMatch(entry, fingerprints)
 			);
 
 		if (matchesCurrentStat(byCanonicalId)) {
@@ -2764,7 +2846,9 @@ export class EpubStorageService {
 		}
 		const byFingerprint = sourceFingerprint
 			? registry.find(
-					(entry) => entry.sourceFingerprint && entry.sourceFingerprint === sourceFingerprint
+					(entry) =>
+						this.normalizeFingerprint(entry.sourceFingerprint || entry.fileFingerprint) ===
+						sourceFingerprint
 			  )
 			: undefined;
 
@@ -2786,7 +2870,7 @@ export class EpubStorageService {
 		const nextEntry = await this.buildSourceRegistryEntry(
 			normalizedPath,
 			sourceId,
-			sourceFingerprint,
+			fingerprints,
 			legacySourceIds
 		);
 		if (!nextEntry) {
@@ -2798,6 +2882,9 @@ export class EpubStorageService {
 			target.sourceId === nextEntry.sourceId &&
 			target.filePath === nextEntry.filePath &&
 			target.sourceFingerprint === nextEntry.sourceFingerprint &&
+			target.fileFingerprint === nextEntry.fileFingerprint &&
+			target.packageFingerprint === nextEntry.packageFingerprint &&
+			target.contentFingerprint === nextEntry.contentFingerprint &&
 			JSON.stringify(target.legacySourceIds || []) ===
 				JSON.stringify(nextEntry.legacySourceIds || []) &&
 			target.sourceSize === nextEntry.sourceSize &&
@@ -2812,6 +2899,12 @@ export class EpubStorageService {
 				return false;
 			}
 			if (sourceFingerprint && entry.sourceFingerprint === sourceFingerprint) {
+				return false;
+			}
+			if (
+				sourceFingerprint &&
+				this.normalizeFingerprint(entry.fileFingerprint) === sourceFingerprint
+			) {
 				return false;
 			}
 			return entry.filePath !== normalizedPath;
@@ -3134,7 +3227,10 @@ export class EpubStorageService {
 			return null;
 		}
 		for (const book of Object.values(books)) {
-			if (String(book.sourceFingerprint || "").trim().toLowerCase() === normalizedFingerprint) {
+			if (
+				String(book.sourceFingerprint || book.fileFingerprint || "").trim().toLowerCase() ===
+				normalizedFingerprint
+			) {
 				return book;
 			}
 		}

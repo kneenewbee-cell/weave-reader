@@ -7,6 +7,7 @@ vi.mock("obsidian", () => ({
 
 import {
 	createEpubAnnotationVersion,
+	deleteEpubAnnotationVersion,
 	ensureActiveEpubAnnotationVersion,
 	EPUB_ANNOTATION_VERSION_CHANGED_EVENT,
 	listEpubAnnotationVersions,
@@ -220,5 +221,41 @@ describe("epub-annotation-version-store", () => {
 				}),
 			]),
 		);
+	});
+
+	it("falls back to default and refreshes the root mirror when deleting the active version", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files } = createAppHarness({
+			[`${root}/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 10,
+				authoritative: true,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "default-note" }],
+			},
+		});
+
+		const temporary = await createEpubAnnotationVersion(app, bookId, "临时版本", {
+			setActive: true,
+			initialAnnotations: [{ cfiRange: "epubcfi(/6/4)", semanticId: "temporary-note" }],
+		});
+		expect(readJson(files, `${root}/active-version.json`)).toMatchObject({
+			activeVersionId: temporary.versionId,
+		});
+		expect(readJson(files, `${root}/annotations.json`)).toMatchObject({
+			annotations: [{ semanticId: "temporary-note" }],
+		});
+
+		await expect(deleteEpubAnnotationVersion(app, bookId, temporary.versionId)).resolves.toBe(true);
+
+		expect(readJson(files, `${root}/active-version.json`)).toMatchObject({
+			activeVersionId: "default",
+		});
+		expect(readJson(files, `${root}/annotations.json`)).toMatchObject({
+			annotations: [{ semanticId: "default-note" }],
+		});
+		expect(files.has(`${root}/versions/${temporary.versionId}/annotations.json`)).toBe(false);
 	});
 });

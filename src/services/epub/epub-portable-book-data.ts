@@ -1,26 +1,38 @@
 import type { App } from "obsidian";
-import {
-	getEpubPortableBookPath,
-	readEpubSemanticJson,
-	safeEpubSemanticBookId,
-	writeEpubSemanticJson,
-} from "./semantic/semantic-store";
-import type { ReadingPosition, ReadingStats } from "./types";
+import { DirectoryUtils } from "../../utils/directory-utils";
+import { getEpubPortableBookPath, safeEpubSemanticBookId } from "./semantic/semantic-store";
 
-export interface EpubPortableReadingState {
-	currentPosition: ReadingPosition;
-	readingStats: ReadingStats;
+export interface EpubPortableReadingPosition {
+	chapterIndex: number;
+	cfi: string;
+	percent: number;
 }
 
-export interface EpubPortableBookmarkRecord {
+export interface EpubPortableReadingStats {
+	totalReadTime: number;
+	lastReadTime: number;
+	createdTime: number;
+	completedTime?: number;
+	bookWpm?: number;
+	paceSampleCount?: number;
+	paceSampleWords?: number;
+	recentIntervalWpms?: number[];
+}
+
+export interface EpubPortableReadingState {
+	currentPosition: EpubPortableReadingPosition;
+	readingStats: EpubPortableReadingStats;
+}
+
+export interface EpubPortableBookmark {
 	id: string;
 	cfi: string;
 	chapterIndex: number;
 	percent: number;
 	chapterTitle: string;
+	createdAt: number;
 	pageNumber?: number;
 	totalPages?: number;
-	createdAt: number;
 	preview?: string;
 }
 
@@ -28,19 +40,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function finiteNumber(value: unknown, fallback = 0): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
 function cleanString(value: unknown): string {
 	return String(value || "").trim();
 }
 
-function normalizeReadingPosition(value: unknown): ReadingPosition | null {
+function finiteNumber(value: unknown, fallback = 0): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+async function readPortableJson(app: App, filePath: string): Promise<unknown | null> {
+	try {
+		const adapter = app?.vault?.adapter;
+		if (!adapter || typeof adapter.exists !== "function" || typeof adapter.read !== "function") {
+			return null;
+		}
+		if (!(await adapter.exists(filePath))) {
+			return null;
+		}
+		return JSON.parse(await adapter.read(filePath)) as unknown;
+	} catch {
+		return null;
+	}
+}
+
+async function writePortableJson(app: App, filePath: string, value: unknown): Promise<void> {
+	const adapter = app?.vault?.adapter;
+	if (!adapter || typeof adapter.write !== "function") {
+		return;
+	}
+	await DirectoryUtils.ensureDirForFile(adapter, filePath);
+	await adapter.write(filePath, JSON.stringify(value, null, 2));
+}
+
+function normalizeReadingPosition(value: unknown): EpubPortableReadingPosition | null {
 	if (!isRecord(value)) {
 		return null;
 	}
 	const cfi = cleanString(value.cfi);
+	if (!cfi) {
+		return null;
+	}
 	return {
 		chapterIndex: finiteNumber(value.chapterIndex),
 		cfi,
@@ -48,7 +87,7 @@ function normalizeReadingPosition(value: unknown): ReadingPosition | null {
 	};
 }
 
-function normalizeReadingStats(value: unknown): ReadingStats | null {
+function normalizeReadingStats(value: unknown): EpubPortableReadingStats | null {
 	if (!isRecord(value)) {
 		return null;
 	}
@@ -69,12 +108,16 @@ function normalizeReadingStats(value: unknown): ReadingStats | null {
 			? { paceSampleWords: value.paceSampleWords }
 			: {}),
 		...(Array.isArray(value.recentIntervalWpms)
-			? { recentIntervalWpms: value.recentIntervalWpms.filter((item): item is number => typeof item === "number") }
+			? {
+					recentIntervalWpms: value.recentIntervalWpms.filter(
+						(entry): entry is number => typeof entry === "number" && Number.isFinite(entry)
+					),
+			  }
 			: {}),
 	};
 }
 
-function normalizeBookmarkRecord(value: unknown): EpubPortableBookmarkRecord | null {
+function normalizeBookmark(value: unknown): EpubPortableBookmark | null {
 	if (!isRecord(value)) {
 		return null;
 	}
@@ -105,7 +148,7 @@ export async function readEpubPortableReadingState(
 	bookId: unknown
 ): Promise<EpubPortableReadingState | null> {
 	const safeBookId = safeEpubSemanticBookId(bookId);
-	const payload = await readEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "reading-state.json"));
+	const payload = await readPortableJson(app, getEpubPortableBookPath(safeBookId, "reading-state.json"));
 	if (!isRecord(payload)) {
 		return null;
 	}
@@ -121,8 +164,12 @@ export async function hasEpubPortableReadingStateData(
 	app: App,
 	bookId: unknown
 ): Promise<boolean> {
-	const safeBookId = safeEpubSemanticBookId(bookId);
-	return Boolean(await readEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "reading-state.json")));
+	return Boolean(
+		await readPortableJson(
+			app,
+			getEpubPortableBookPath(safeEpubSemanticBookId(bookId), "reading-state.json")
+		)
+	);
 }
 
 export async function writeEpubPortableReadingState(
@@ -131,7 +178,7 @@ export async function writeEpubPortableReadingState(
 	state: EpubPortableReadingState
 ): Promise<void> {
 	const safeBookId = safeEpubSemanticBookId(bookId);
-	await writeEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "reading-state.json"), {
+	await writePortableJson(app, getEpubPortableBookPath(safeBookId, "reading-state.json"), {
 		format: "weave-reader-reading-state/v1",
 		version: 1,
 		bookId: safeBookId,
@@ -144,15 +191,15 @@ export async function writeEpubPortableReadingState(
 export async function readEpubPortableBookmarks(
 	app: App,
 	bookId: unknown
-): Promise<EpubPortableBookmarkRecord[]> {
+): Promise<EpubPortableBookmark[]> {
 	const safeBookId = safeEpubSemanticBookId(bookId);
-	const payload = await readEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "bookmarks.json"));
+	const payload = await readPortableJson(app, getEpubPortableBookPath(safeBookId, "bookmarks.json"));
 	if (!isRecord(payload) || !Array.isArray(payload.bookmarks)) {
 		return [];
 	}
 	return payload.bookmarks
-		.map((bookmark) => normalizeBookmarkRecord(bookmark))
-		.filter((bookmark): bookmark is EpubPortableBookmarkRecord => Boolean(bookmark))
+		.map((bookmark) => normalizeBookmark(bookmark))
+		.filter((bookmark): bookmark is EpubPortableBookmark => Boolean(bookmark))
 		.sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0));
 }
 
@@ -160,8 +207,12 @@ export async function hasEpubPortableBookmarksData(
 	app: App,
 	bookId: unknown
 ): Promise<boolean> {
-	const safeBookId = safeEpubSemanticBookId(bookId);
-	return Boolean(await readEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "bookmarks.json")));
+	return Boolean(
+		await readPortableJson(
+			app,
+			getEpubPortableBookPath(safeEpubSemanticBookId(bookId), "bookmarks.json")
+		)
+	);
 }
 
 export async function writeEpubPortableBookmarks(
@@ -170,15 +221,15 @@ export async function writeEpubPortableBookmarks(
 	bookmarks: unknown[]
 ): Promise<void> {
 	const safeBookId = safeEpubSemanticBookId(bookId);
-	await writeEpubSemanticJson(app, getEpubPortableBookPath(safeBookId, "bookmarks.json"), {
+	await writePortableJson(app, getEpubPortableBookPath(safeBookId, "bookmarks.json"), {
 		format: "weave-reader-bookmarks/v1",
 		version: 1,
 		bookId: safeBookId,
 		updatedAt: Date.now(),
 		bookmarks: Array.isArray(bookmarks)
 			? bookmarks
-					.map((bookmark) => normalizeBookmarkRecord(bookmark))
-					.filter((bookmark): bookmark is EpubPortableBookmarkRecord => Boolean(bookmark))
+					.map((bookmark) => normalizeBookmark(bookmark))
+					.filter((bookmark): bookmark is EpubPortableBookmark => Boolean(bookmark))
 			: [],
 	});
 }

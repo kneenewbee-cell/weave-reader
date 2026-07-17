@@ -96,9 +96,17 @@ export {
 	createEpubAnnotatedBookPackage,
 	downloadEpubAnnotatedBookPackage,
 	importEpubAnnotatedBookPackage,
+	pickEpubAnnotatedBookPackageArrayBuffer,
 	type EpubAnnotatedBookPackageResult,
 	type ImportEpubAnnotatedBookPackageResult,
 } from "./epub-portable-book-package";
+export {
+	computeAvailableEpubFingerprints,
+	computeEpubFileFingerprint,
+	computeEpubFingerprints,
+	type EpubFingerprints,
+	type PartialEpubFingerprints,
+} from "./epub-fingerprints";
 export {
 	hasEpubPortableBookmarksData,
 	hasEpubPortableReadingStateData,

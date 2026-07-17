@@ -38,6 +38,9 @@ export interface EpubSourceRegistryEntry {
 	sourceId: string;
 	filePath: string;
 	sourceFingerprint?: string;
+	fileFingerprint?: string;
+	packageFingerprint?: string;
+	contentFingerprint?: string;
 	legacySourceIds?: string[];
 	sourceSize?: number;
 	sourceMtime?: number;
@@ -50,6 +53,9 @@ export interface EpubStoredBookDescriptor {
 	filePath: string;
 	sourceId?: string;
 	sourceFingerprint?: string;
+	fileFingerprint?: string;
+	packageFingerprint?: string;
+	contentFingerprint?: string;
 	sourceMtime?: number;
 	sourceSize?: number;
 	metadata: BookMetadata;

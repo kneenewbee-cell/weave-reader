@@ -240,6 +240,12 @@ export function normalizeSourceRegistryEntries(value: unknown): EpubSourceRegist
 			filePath: normalizePath(String(entry.filePath || "").trim()),
 			sourceFingerprint:
 				typeof entry.sourceFingerprint === "string" ? entry.sourceFingerprint : undefined,
+			fileFingerprint:
+				typeof entry.fileFingerprint === "string" ? entry.fileFingerprint : undefined,
+			packageFingerprint:
+				typeof entry.packageFingerprint === "string" ? entry.packageFingerprint : undefined,
+			contentFingerprint:
+				typeof entry.contentFingerprint === "string" ? entry.contentFingerprint : undefined,
 			legacySourceIds: normalizeLegacySourceIds(
 				entry.legacySourceIds,
 				String(entry.sourceId || "").trim()
@@ -305,6 +311,12 @@ export function normalizeStoredBookDescriptor(value: unknown): EpubStoredBookDes
 		sourceId: typeof record.sourceId === "string" ? record.sourceId : undefined,
 		sourceFingerprint:
 			typeof record.sourceFingerprint === "string" ? record.sourceFingerprint : undefined,
+		fileFingerprint:
+			typeof record.fileFingerprint === "string" ? record.fileFingerprint : undefined,
+		packageFingerprint:
+			typeof record.packageFingerprint === "string" ? record.packageFingerprint : undefined,
+		contentFingerprint:
+			typeof record.contentFingerprint === "string" ? record.contentFingerprint : undefined,
 		sourceMtime: typeof record.sourceMtime === "number" ? record.sourceMtime : undefined,
 		sourceSize: typeof record.sourceSize === "number" ? record.sourceSize : undefined,
 		metadata,
@@ -522,6 +534,12 @@ export function toStoredBookDescriptor(book: EpubBook): EpubStoredBookDescriptor
 		sourceId: typeof book.sourceId === "string" ? book.sourceId : undefined,
 		sourceFingerprint:
 			typeof book.sourceFingerprint === "string" ? book.sourceFingerprint : undefined,
+		fileFingerprint:
+			typeof book.fileFingerprint === "string" ? book.fileFingerprint : undefined,
+		packageFingerprint:
+			typeof book.packageFingerprint === "string" ? book.packageFingerprint : undefined,
+		contentFingerprint:
+			typeof book.contentFingerprint === "string" ? book.contentFingerprint : undefined,
 		sourceMtime: typeof book.sourceMtime === "number" ? book.sourceMtime : undefined,
 		sourceSize: typeof book.sourceSize === "number" ? book.sourceSize : undefined,
 		metadata: normalizeBookMetadata(book.metadata) ?? {
@@ -541,6 +559,9 @@ export function toBookFromDescriptor(
 		filePath: descriptor.filePath,
 		sourceId: descriptor.sourceId,
 		sourceFingerprint: descriptor.sourceFingerprint,
+		fileFingerprint: descriptor.fileFingerprint,
+		packageFingerprint: descriptor.packageFingerprint,
+		contentFingerprint: descriptor.contentFingerprint,
 		sourceMtime: descriptor.sourceMtime,
 		sourceSize: descriptor.sourceSize,
 		metadata: descriptor.metadata,

@@ -27,7 +27,12 @@ import {
 	DEFAULT_EPUB_ANNOTATION_SEMANTICS,
 	DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
 	DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
+	createEpubAnnotatedBookPackage as createPortableEpubAnnotatedBookPackage,
+	downloadEpubAnnotatedBookPackage as downloadPortableEpubAnnotatedBookPackage,
+	importEpubAnnotatedBookPackage as importPortableEpubAnnotatedBookPackage,
 	mergeProfiles,
+	notifyEpubAnnotationVersionChanged,
+	pickEpubAnnotatedBookPackageArrayBuffer as pickPortableEpubAnnotatedBookPackageArrayBuffer,
 	readAndMaterializeEffectiveEpubPortableAnnotations,
 	readBookEpubSemanticProfile,
 	readGlobalEpubSemanticProfile,
@@ -42,7 +47,10 @@ import {
 	writeBookEpubPortableAnnotations,
 	type EpubAnnotationNoteAnnotationInput,
 	type EpubAnnotationSemantic,
+	type EpubAnnotatedBookPackageResult,
 	type EpubHostOpenAnnotationNoteInput,
+	type ImportEpubAnnotatedBookPackageOptions,
+	type ImportEpubAnnotatedBookPackageResult,
 	type TocItem,
 	type EpubReaderUiMode,
 } from "./services/epub";
@@ -157,6 +165,18 @@ interface StandaloneEpubPluginSettings {
 	selectionTranslation: SelectionTranslationSettings;
 }
 
+export interface EpubAnnotatedBookPackageExportInput {
+	bookId?: string;
+	filePath: string;
+	displayName?: string;
+}
+
+export interface EpubAnnotatedBookPackageImportInput
+	extends ImportEpubAnnotatedBookPackageOptions {
+	arrayBuffer: ArrayBuffer;
+	notify?: boolean;
+}
+
 const DEFAULT_STANDALONE_EPUB_SETTINGS: StandaloneEpubPluginSettings = {
 	license: DEFAULT_LICENSE_INFO,
 	licenseState: DEFAULT_LICENSE_STORE,
@@ -267,6 +287,50 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		new EpubDataManagementModalObsidian(this.app, {
 			plugin: this,
 		}).open();
+	}
+
+	async createEpubAnnotatedBookPackage(
+		input: EpubAnnotatedBookPackageExportInput
+	): Promise<EpubAnnotatedBookPackageResult> {
+		const filePath = normalizePath(String(input.filePath || "").trim());
+		if (!filePath) {
+			throw new Error("EPUB file path is required");
+		}
+		const bookId = await this.resolveAnnotatedBookPackageBookId(input);
+		return createPortableEpubAnnotatedBookPackage(this.app, {
+			bookId,
+			filePath,
+			displayName: input.displayName,
+		});
+	}
+
+	downloadEpubAnnotatedBookPackage(result: EpubAnnotatedBookPackageResult): void {
+		downloadPortableEpubAnnotatedBookPackage(result);
+	}
+
+	async exportEpubAnnotatedBookPackage(
+		input: EpubAnnotatedBookPackageExportInput
+	): Promise<EpubAnnotatedBookPackageResult> {
+		const result = await this.createEpubAnnotatedBookPackage(input);
+		this.downloadEpubAnnotatedBookPackage(result);
+		return result;
+	}
+
+	async importEpubAnnotatedBookPackage(
+		input: EpubAnnotatedBookPackageImportInput
+	): Promise<ImportEpubAnnotatedBookPackageResult> {
+		const { arrayBuffer, notify = true, ...options } = input;
+		const result = await importPortableEpubAnnotatedBookPackage(this.app, arrayBuffer, options);
+		dispatchEpubBookshelfDataChanged(undefined, { bookPaths: [result.bookPath] });
+		dispatchEpubBookshelfFullRefresh(undefined, { showNotice: false });
+		if (notify) {
+			notifyEpubAnnotationVersionChanged(result.bookId, {
+				reason: "import",
+				filePath: result.bookPath,
+				versionId: result.activeVersionId,
+			});
+		}
+		return result;
 	}
 
 	async refreshPremiumState(): Promise<void> {
@@ -821,6 +885,25 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 				return canOpen;
 			},
 		});
+		this.addCommand({
+			id: "export-active-epub-annotated-book-package",
+			name: "导出当前书籍标注包",
+			checkCallback: (checking) => {
+				const activeFile = this.app.workspace.getActiveFile();
+				const canExport = activeFile instanceof TFile && isSupportedBookFile(activeFile);
+				if (!checking && canExport) {
+					void this.exportActiveEpubAnnotatedBookPackage(activeFile);
+				}
+				return canExport;
+			},
+		});
+		this.addCommand({
+			id: "import-epub-annotated-book-package",
+			name: "导入书籍标注包",
+			callback: () => {
+				void this.importEpubAnnotatedBookPackageFromPicker();
+			},
+		});
 	}
 
 	onunload(): void {
@@ -850,6 +933,57 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 			i18n.t("views.epubView.notice.bookFileMissing"),
 			i18n.t("views.epubView.notice.bookOpenFailed")
 		);
+	}
+
+	private async resolveAnnotatedBookPackageBookId(
+		input: EpubAnnotatedBookPackageExportInput
+	): Promise<string> {
+		const explicitBookId = String(input.bookId || "").trim();
+		const filePath = normalizePath(String(input.filePath || "").trim());
+		const resolvedBookId = await findEpubPortableBookIdByIdentity(this.app, {
+			bookId: explicitBookId,
+			filePath,
+		});
+		if (resolvedBookId) {
+			return resolvedBookId;
+		}
+		if (explicitBookId) {
+			return explicitBookId;
+		}
+		throw new Error("未找到当前书籍对应的 weave/epub-data 数据目录");
+	}
+
+	private async exportActiveEpubAnnotatedBookPackage(activeFile: TFile): Promise<void> {
+		try {
+			const result = await this.exportEpubAnnotatedBookPackage({
+				filePath: activeFile.path,
+				displayName: activeFile.basename,
+			});
+			new Notice(`已导出书籍标注包：${result.fileName}`);
+		} catch (error) {
+			logger.error("[StandaloneEpubPlugin] Failed to export annotated book package:", error);
+			new Notice(`导出书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private async importEpubAnnotatedBookPackageFromPicker(): Promise<void> {
+		const arrayBuffer = await pickPortableEpubAnnotatedBookPackageArrayBuffer();
+		if (!arrayBuffer) {
+			return;
+		}
+		try {
+			const result = await this.importEpubAnnotatedBookPackage({
+				arrayBuffer,
+				defaultBookFolder: "Books",
+				activateImportedAnnotations: true,
+			});
+			new Notice(
+				`已导入书籍标注包：${result.importedAnnotationCount} 条标注，当前版本 ${result.activeVersionId}`
+			);
+		} catch (error) {
+			logger.error("[StandaloneEpubPlugin] Failed to import annotated book package:", error);
+			new Notice(`导入书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	async exportEpubChapterToMarkdown(input: EpubHostExportChapterInput): Promise<void> {

@@ -1,5 +1,7 @@
 import { Platform, TFile } from 'obsidian';
+import JSZip from 'jszip';
 import { EpubStorageService, flushEpubStoragePendingProgress } from '../EpubStorageService';
+import { computeEpubFingerprints } from '../epub-fingerprints';
 import type { EpubBook } from '../types';
 
 const SYNC_EPUB_ROOT = 'weave/incremental-reading/epub-reading';
@@ -24,6 +26,39 @@ function readLocalEpubData(files: Map<string, string>) {
 
 function readLocalScanIndex(files: Map<string, string>) {
   return JSON.parse(files.get(LOCAL_EPUB_SCAN_INDEX_PATH) || '[]');
+}
+
+async function createValidEpubBinary(): Promise<Uint8Array> {
+  const zip = new JSZip();
+  zip.file(
+    'META-INF/container.xml',
+    `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+  );
+  zip.file(
+    'OPS/content.opf',
+    `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Demo</dc:title>
+  </metadata>
+  <manifest>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter"/>
+  </spine>
+</package>`
+  );
+  zip.file(
+    'OPS/chapter.xhtml',
+    '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hello world.</p></body></html>'
+  );
+  return zip.generateAsync({ type: 'uint8array' });
 }
 
 function createMemoryApp(
@@ -1730,6 +1765,35 @@ describe('EpubStorageService', () => {
 
     expect(savedBook?.sourceFingerprint).toBe(fingerprint);
     expect(savedBook?.sourceId).toBe(`epubsrc-${fingerprint.slice(0, 24)}`);
+  });
+
+  it('stores file, package, and content fingerprints for a valid epub source', async () => {
+    const epubBinary = await createValidEpubBinary();
+    const expected = await computeEpubFingerprints(epubBinary);
+    const { app, files } = createMemoryApp({}, ['Books/demo.epub'], {
+      'Books/demo.epub': epubBinary,
+    });
+    const service = new EpubStorageService(app);
+
+    await service.saveBook(createBook({ id: 'book-a' }));
+
+    const savedBook = await service.findBookByFilePath('Books/demo.epub');
+    const localData = readLocalEpubData(files);
+
+    expect(savedBook).toMatchObject({
+      sourceFingerprint: expected.fileFingerprint,
+      fileFingerprint: expected.fileFingerprint,
+      packageFingerprint: expected.packageFingerprint,
+      contentFingerprint: expected.contentFingerprint,
+    });
+    expect(localData.sourceRegistry).toEqual([
+      expect.objectContaining({
+        sourceFingerprint: expected.fileFingerprint,
+        fileFingerprint: expected.fileFingerprint,
+        packageFingerprint: expected.packageFingerprint,
+        contentFingerprint: expected.contentFingerprint,
+      }),
+    ]);
   });
 
   it('replaces ephemeral runtime book ids with a stable book id and reuses it for the same source', async () => {

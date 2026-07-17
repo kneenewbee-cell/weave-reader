@@ -6,6 +6,8 @@ vi.mock("obsidian", () => ({
 }));
 
 import {
+	hasEpubPortableBookmarksData,
+	hasEpubPortableReadingStateData,
 	readEpubPortableBookmarks,
 	readEpubPortableReadingState,
 	writeEpubPortableBookmarks,
@@ -16,13 +18,8 @@ function normalizePath(value: string): string {
 	return String(value || "").replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
 }
 
-function createAppHarness(initialFiles: Record<string, unknown> = {}) {
-	const files = new Map(
-		Object.entries(initialFiles).map(([path, value]) => [
-			normalizePath(path),
-			typeof value === "string" ? value : JSON.stringify(value),
-		]),
-	);
+function createAppHarness() {
+	const files = new Map<string, string>();
 	const folders = new Set<string>();
 	const addParentFolders = (path: string) => {
 		const parts = normalizePath(path).split("/");
@@ -30,9 +27,6 @@ function createAppHarness(initialFiles: Record<string, unknown> = {}) {
 			folders.add(parts.slice(0, index).join("/"));
 		}
 	};
-	for (const path of files.keys()) {
-		addParentFolders(path);
-	}
 	const adapter = {
 		exists: vi.fn(async (path: string) => files.has(normalizePath(path)) || folders.has(normalizePath(path))),
 		read: vi.fn(async (path: string) => files.get(normalizePath(path)) ?? ""),
@@ -45,70 +39,94 @@ function createAppHarness(initialFiles: Record<string, unknown> = {}) {
 			folders.add(normalizePath(path));
 		}),
 	};
-	const app = {
-		vault: {
-			adapter,
-		},
-	} as any;
-	return { app, files, folders, adapter };
-}
-
-function readJson(files: Map<string, string>, path: string): any {
-	const content = files.get(normalizePath(path));
-	expect(content, `Expected ${path} to exist`).toBeTruthy();
-	return JSON.parse(content || "{}");
+	return {
+		app: {
+			vault: {
+				adapter,
+			},
+		} as any,
+		files,
+	};
 }
 
 describe("epub-portable-book-data", () => {
-	it("reads portable reading state and bookmarks as the primary book data", async () => {
-		const bookId = "epub-book-demo";
-		const root = `weave/epub-data/books/${bookId}`;
-		const { app } = createAppHarness({
-			[`${root}/reading-state.json`]: {
-				format: "weave-reader-reading-state/v1",
-				version: 1,
-				bookId,
-				currentPosition: { cfi: "epubcfi(/6/2)", chapterIndex: 1, percent: 12 },
-				readingStats: { totalReadTime: 5000, lastReadTime: 20, createdTime: 10 },
-			},
-			[`${root}/bookmarks.json`]: {
-				format: "weave-reader-bookmarks/v1",
-				version: 1,
-				bookId,
-				bookmarks: [{ id: "bm-1", cfi: "epubcfi(/6/4)", createdAt: 30 }],
-			},
-		});
-
-		await expect(readEpubPortableReadingState(app, bookId)).resolves.toMatchObject({
-			currentPosition: { cfi: "epubcfi(/6/2)" },
-			readingStats: { totalReadTime: 5000 },
-		});
-		await expect(readEpubPortableBookmarks(app, bookId)).resolves.toEqual([
-			expect.objectContaining({ id: "bm-1", cfi: "epubcfi(/6/4)" }),
-		]);
-	});
-
-	it("writes reading state and bookmarks under epub-data/books/<bookId>", async () => {
-		const bookId = "epub-book-demo";
+	it("writes and reads portable reading state", async () => {
 		const { app, files } = createAppHarness();
 
-		await writeEpubPortableReadingState(app, bookId, {
-			currentPosition: { cfi: "epubcfi(/6/8)", chapterIndex: 2, percent: 45 },
-			readingStats: { totalReadTime: 9000, lastReadTime: 30, createdTime: 10 },
+		await writeEpubPortableReadingState(app, "book one", {
+			currentPosition: {
+				chapterIndex: 2,
+				cfi: "epubcfi(/6/4)",
+				percent: 35.5,
+			},
+			readingStats: {
+				totalReadTime: 1200,
+				lastReadTime: 1784000000000,
+				createdTime: 1783990000000,
+				bookWpm: 260,
+			},
 		});
-		await writeEpubPortableBookmarks(app, bookId, [
-			{ id: "bm-1", cfi: "epubcfi(/6/4)", chapterIndex: 1, percent: 20, chapterTitle: "Chapter", createdAt: 30 },
+
+		expect(await hasEpubPortableReadingStateData(app, "book one")).toBe(true);
+		expect(JSON.parse(files.get("weave/epub-data/books/book-one/reading-state.json") || "{}")).toMatchObject({
+			format: "weave-reader-reading-state/v1",
+			bookId: "book-one",
+			currentPosition: {
+				chapterIndex: 2,
+				cfi: "epubcfi(/6/4)",
+				percent: 35.5,
+			},
+		});
+		await expect(readEpubPortableReadingState(app, "book one")).resolves.toMatchObject({
+			currentPosition: {
+				chapterIndex: 2,
+				cfi: "epubcfi(/6/4)",
+				percent: 35.5,
+			},
+			readingStats: {
+				totalReadTime: 1200,
+				lastReadTime: 1784000000000,
+				createdTime: 1783990000000,
+				bookWpm: 260,
+			},
+		});
+	});
+
+	it("writes and reads portable bookmarks sorted newest first", async () => {
+		const { app, files } = createAppHarness();
+
+		await writeEpubPortableBookmarks(app, "book one", [
+			{
+				id: "older",
+				cfi: "epubcfi(/6/2)",
+				chapterIndex: 1,
+				percent: 10,
+				chapterTitle: "Intro",
+				createdAt: 100,
+			},
+			{
+				id: "newer",
+				cfi: "epubcfi(/6/8)",
+				chapterIndex: 3,
+				percent: 55,
+				chapterTitle: "Later",
+				createdAt: 200,
+				preview: "Preview text",
+			},
 		]);
 
-		expect(readJson(files, `weave/epub-data/books/${bookId}/reading-state.json`)).toMatchObject({
-			format: "weave-reader-reading-state/v1",
-			bookId,
-			currentPosition: { percent: 45 },
-		});
-		expect(readJson(files, `weave/epub-data/books/${bookId}/bookmarks.json`)).toMatchObject({
+		expect(await hasEpubPortableBookmarksData(app, "book one")).toBe(true);
+		expect(JSON.parse(files.get("weave/epub-data/books/book-one/bookmarks.json") || "{}")).toMatchObject({
 			format: "weave-reader-bookmarks/v1",
-			bookId,
-			bookmarks: [{ id: "bm-1" }],
+			bookId: "book-one",
+			bookmarks: [
+				{ id: "older", cfi: "epubcfi(/6/2)" },
+				{ id: "newer", cfi: "epubcfi(/6/8)" },
+			],
 		});
+		await expect(readEpubPortableBookmarks(app, "book one")).resolves.toEqual([
+			expect.objectContaining({ id: "newer", preview: "Preview text" }),
+			expect.objectContaining({ id: "older" }),
+		]);
 	});
 });

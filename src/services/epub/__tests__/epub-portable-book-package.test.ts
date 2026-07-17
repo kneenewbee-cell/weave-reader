@@ -19,6 +19,46 @@ function toArrayBuffer(value: string): ArrayBuffer {
 	return new TextEncoder().encode(value).buffer;
 }
 
+async function createValidEpubBinary(options: {
+	title?: string;
+	chapterHtml?: string;
+	styleCss?: string;
+} = {}): Promise<ArrayBuffer> {
+	const zip = new JSZip();
+	zip.file(
+		"META-INF/container.xml",
+		`<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`,
+	);
+	zip.file(
+		"OPS/content.opf",
+		`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>${options.title || "Demo"}</dc:title>
+  </metadata>
+  <manifest>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="style" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter"/>
+  </spine>
+</package>`,
+	);
+	zip.file(
+		"OPS/chapter.xhtml",
+		options.chapterHtml ||
+			`<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hello world.</p></body></html>`,
+	);
+	zip.file("OPS/style.css", options.styleCss || "body { color: black; }");
+	return zip.generateAsync({ type: "arraybuffer" });
+}
+
 function createAppHarness(options: {
 	files?: Record<string, string>;
 	binaries?: Record<string, ArrayBuffer>;
@@ -132,9 +172,107 @@ describe("epub-portable-book-package", () => {
 			"weave-reader-annotated-book-package/v1",
 		);
 		await expect(zip.file("book/Demo.epub")?.async("string")).resolves.toBe("epub-binary");
-		await expect(zip.file("data/book.json")?.async("string")).resolves.toContain("fingerprint-demo");
+		await expect(zip.file("data/book.json")?.async("string")).resolves.toContain("weave-reader-book/v1");
 		await expect(zip.file("data/versions/default/annotations.json")?.async("string")).resolves.toContain("important");
 		expect(result.fileName).toMatch(/^Demo.*\.zip$/);
+	});
+
+	it("exports computed file, package, and content fingerprints into the package manifest and book metadata", async () => {
+		const bookId = "epub-book-fingerprinted";
+		const root = `weave/epub-data/books/${bookId}`;
+		const epubBinary = await createValidEpubBinary();
+		const { app } = createAppHarness({
+			binaries: {
+				"Books/Fingerprinted.epub": epubBinary,
+			},
+			files: {
+				[`${root}/book.json`]: JSON.stringify({
+					format: "weave-reader-book/v1",
+					version: 1,
+					bookId,
+					filePath: "Books/Fingerprinted.epub",
+					title: "Fingerprinted",
+					sourceFingerprint: "legacy-fingerprint",
+				}),
+				[`${root}/active-version.json`]: JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId,
+					activeVersionId: "default",
+				}),
+				[`${root}/versions/default/annotations.json`]: JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId,
+					annotations: [],
+				}),
+			},
+		});
+
+		const result = await createEpubAnnotatedBookPackage(app, {
+			bookId,
+			filePath: "Books/Fingerprinted.epub",
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const manifest = JSON.parse((await zip.file("manifest.json")?.async("string")) || "{}");
+		const bookJson = JSON.parse((await zip.file("data/book.json")?.async("string")) || "{}");
+
+		expect(manifest.fileFingerprint).toMatch(/^[a-f0-9]{64}$/);
+		expect(manifest.packageFingerprint).toMatch(/^[a-f0-9]{64}$/);
+		expect(manifest.contentFingerprint).toMatch(/^[a-f0-9]{64}$/);
+		expect(manifest.sourceFingerprint).toBe(manifest.fileFingerprint);
+		expect(bookJson).toMatchObject({
+			sourceFingerprint: manifest.fileFingerprint,
+			fileFingerprint: manifest.fileFingerprint,
+			packageFingerprint: manifest.packageFingerprint,
+			contentFingerprint: manifest.contentFingerprint,
+		});
+	});
+
+	it("can export an annotations-only package without embedding the EPUB file", async () => {
+		const bookId = "epub-book-annotations-only";
+		const root = `weave/epub-data/books/${bookId}`;
+		const epubBinary = await createValidEpubBinary();
+		const { app } = createAppHarness({
+			binaries: {
+				"Books/AnnotationsOnly.epub": epubBinary,
+			},
+			files: {
+				[`${root}/book.json`]: JSON.stringify({
+					format: "weave-reader-book/v1",
+					version: 1,
+					bookId,
+					filePath: "Books/AnnotationsOnly.epub",
+					title: "Annotations Only",
+				}),
+				[`${root}/active-version.json`]: JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId,
+					activeVersionId: "default",
+				}),
+				[`${root}/versions/default/annotations.json`]: JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId,
+					annotations: [{ semanticId: "note" }],
+				}),
+			},
+		});
+
+		const result = await createEpubAnnotatedBookPackage(app, {
+			bookId,
+			filePath: "Books/AnnotationsOnly.epub",
+			includeBook: false,
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const manifest = JSON.parse((await zip.file("manifest.json")?.async("string")) || "{}");
+
+		expect(Object.keys(zip.files).some((path) => normalizePath(path).startsWith("book/"))).toBe(false);
+		expect(manifest.fileFingerprint).toMatch(/^[a-f0-9]{64}$/);
+		await expect(zip.file("data/versions/default/annotations.json")?.async("string")).resolves.toContain("note");
 	});
 
 	it("imports a zip package into a vault book file and matching portable data directory", async () => {
@@ -212,6 +350,361 @@ describe("epub-portable-book-package", () => {
 				},
 			},
 		});
+	});
+
+	it("matches an existing book by package fingerprint after file fingerprint misses", async () => {
+		const localBookId = "epub-book-local";
+		const importedBookId = "epub-book-imported";
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId: importedBookId,
+				bookFileName: "Imported.epub",
+				exportedAt: 1,
+				sourceFingerprint: "remote-file",
+				fileFingerprint: "remote-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+				title: "Imported",
+			}),
+		);
+		zip.file("book/Imported.epub", "imported-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId: importedBookId,
+				filePath: "Remote/Imported.epub",
+				title: "Imported",
+				sourceFingerprint: "remote-file-from-book",
+				fileFingerprint: "remote-file-from-book",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: importedBookId,
+				activeVersionId: "default",
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: importedBookId,
+				annotations: [{ semanticId: "imported" }],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app, files } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[localBookId]: {
+							bookId: localBookId,
+							filePath: "Books/Local.epub",
+							sourceFingerprint: "local-file",
+							fileFingerprint: "local-file",
+							packageFingerprint: "same-package",
+							contentFingerprint: "same-content",
+						},
+					},
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			defaultBookFolder: "Books",
+		});
+
+		expect(result.bookId).toBe(localBookId);
+		expect(result.matchedExistingBook).toBe(true);
+		expect(readJson(files, `weave/epub-data/books/${localBookId}/book.json`)).toMatchObject({
+			bookId: localBookId,
+			filePath: "Books/Local.epub",
+			sourceFingerprint: "local-file",
+			fileFingerprint: "local-file",
+			packageFingerprint: "same-package",
+			contentFingerprint: "same-content",
+		});
+		expect(readJson(files, "weave/epub-data/index.json")).toMatchObject({
+			books: {
+				[localBookId]: {
+					bookId: localBookId,
+					sourceFingerprint: "local-file",
+					fileFingerprint: "local-file",
+					packageFingerprint: "same-package",
+					contentFingerprint: "same-content",
+				},
+			},
+		});
+		expect(files.has(`weave/epub-data/books/${importedBookId}/book.json`)).toBe(false);
+	});
+
+	it("uses global file fingerprint matches before package fingerprint matches", async () => {
+		const packageBookId = "epub-book-package-match";
+		const fileBookId = "epub-book-file-match";
+		const importedBookId = "epub-book-imported";
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId: importedBookId,
+				bookFileName: "Imported.epub",
+				exportedAt: 1,
+				fileFingerprint: "same-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file("book/Imported.epub", "imported-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId: importedBookId,
+				filePath: "Remote/Imported.epub",
+				title: "Imported",
+				fileFingerprint: "same-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: importedBookId,
+				activeVersionId: "default",
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: importedBookId,
+				annotations: [{ semanticId: "imported" }],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[packageBookId]: {
+							bookId: packageBookId,
+							filePath: "Books/Package.epub",
+							fileFingerprint: "other-file",
+							packageFingerprint: "same-package",
+						},
+						[fileBookId]: {
+							bookId: fileBookId,
+							filePath: "Books/File.epub",
+							sourceFingerprint: "same-file",
+							fileFingerprint: "same-file",
+						},
+					},
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			defaultBookFolder: "Books",
+		});
+
+		expect(result.bookId).toBe(fileBookId);
+		expect(result.bookPath).toBe("Books/File.epub");
+		expect(result.matchedExistingBook).toBe(true);
+	});
+
+	it("prioritizes the right-clicked book fingerprints before global matches", async () => {
+		const preferredBookId = "epub-book-preferred";
+		const fileBookId = "epub-book-file-match";
+		const importedBookId = "epub-book-imported";
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId: importedBookId,
+				bookFileName: "Imported.epub",
+				exportedAt: 1,
+				fileFingerprint: "same-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file("book/Imported.epub", "imported-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId: importedBookId,
+				filePath: "Remote/Imported.epub",
+				title: "Imported",
+				fileFingerprint: "same-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: importedBookId,
+				activeVersionId: "default",
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: importedBookId,
+				annotations: [{ semanticId: "imported" }],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[preferredBookId]: {
+							bookId: preferredBookId,
+							filePath: "Books/Preferred.epub",
+							fileFingerprint: "preferred-file",
+							packageFingerprint: "preferred-package",
+							contentFingerprint: "same-content",
+						},
+						[fileBookId]: {
+							bookId: fileBookId,
+							filePath: "Books/File.epub",
+							sourceFingerprint: "same-file",
+							fileFingerprint: "same-file",
+						},
+					},
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			defaultBookFolder: "Books",
+			preferredBookId,
+			targetBookPath: "Books/Preferred.epub",
+		});
+
+		expect(result.bookId).toBe(preferredBookId);
+		expect(result.bookPath).toBe("Books/Preferred.epub");
+		expect(result.matchedExistingBook).toBe(true);
+	});
+
+	it("falls back to global matching when the right-clicked book fingerprints do not match", async () => {
+		const preferredBookId = "epub-book-preferred";
+		const fileBookId = "epub-book-file-match";
+		const importedBookId = "epub-book-imported";
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId: importedBookId,
+				bookFileName: "Imported.epub",
+				exportedAt: 1,
+				fileFingerprint: "same-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file("book/Imported.epub", "imported-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId: importedBookId,
+				filePath: "Remote/Imported.epub",
+				title: "Imported",
+				fileFingerprint: "same-file",
+				packageFingerprint: "same-package",
+				contentFingerprint: "same-content",
+			}),
+		);
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: importedBookId,
+				activeVersionId: "default",
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: importedBookId,
+				annotations: [{ semanticId: "imported" }],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[preferredBookId]: {
+							bookId: preferredBookId,
+							filePath: "Books/Preferred.epub",
+							fileFingerprint: "preferred-file",
+							packageFingerprint: "preferred-package",
+							contentFingerprint: "preferred-content",
+						},
+						[fileBookId]: {
+							bookId: fileBookId,
+							filePath: "Books/File.epub",
+							sourceFingerprint: "same-file",
+							fileFingerprint: "same-file",
+						},
+					},
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			defaultBookFolder: "Books",
+			preferredBookId,
+			targetBookPath: "Books/Preferred.epub",
+		});
+
+		expect(result.bookId).toBe(fileBookId);
+		expect(result.bookPath).toBe("Books/File.epub");
+		expect(result.matchedExistingBook).toBe(true);
 	});
 
 	it("imports annotations for an existing same-fingerprint book as a new version without clobbering current annotations", async () => {
@@ -327,5 +820,107 @@ describe("epub-portable-book-package", () => {
 			annotations: [{ semanticId: "remote" }],
 		});
 		expect(files.has(`weave/epub-data/books/${remoteBookId}/book.json`)).toBe(false);
+	});
+
+	it("can activate an imported annotation version for an existing same-fingerprint book", async () => {
+		const localBookId = "epub-book-local";
+		const remoteBookId = "epub-book-remote";
+		const root = `weave/epub-data/books/${localBookId}`;
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId: remoteBookId,
+				bookFileName: "Demo.epub",
+				exportedAt: 1,
+				sourceFingerprint: "same-fingerprint",
+				title: "Demo",
+			}),
+		);
+		zip.file("book/Demo.epub", "remote-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId: remoteBookId,
+				filePath: "Remote/Demo.epub",
+				title: "Demo",
+				sourceFingerprint: "same-fingerprint",
+			}),
+		);
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: remoteBookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: remoteBookId,
+				updatedAt: 10,
+				annotations: [{ cfiRange: "epubcfi(/6/4)", semanticId: "remote" }],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app, files } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[localBookId]: {
+							bookId: localBookId,
+							filePath: "Books/Demo.epub",
+							sourceFingerprint: "same-fingerprint",
+						},
+					},
+				}),
+				[`${root}/active-version.json`]: JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId: localBookId,
+					activeVersionId: "default",
+					updatedAt: 1,
+				}),
+				[`${root}/versions/default/annotations.json`]: JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId: localBookId,
+					updatedAt: 1,
+					annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "local" }],
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			defaultBookFolder: "Books",
+			activateImportedAnnotations: true,
+		});
+
+		expect(result.bookId).toBe(localBookId);
+		expect(result.activatedImportedVersion).toBe(true);
+		expect(result.activeVersionId).toBe("imported-default");
+		expect(readJson(files, `${root}/active-version.json`)).toMatchObject({
+			bookId: localBookId,
+			activeVersionId: "imported-default",
+		});
+		expect(readJson(files, `${root}/annotations.json`)).toMatchObject({
+			bookId: localBookId,
+			annotations: [{ semanticId: "remote" }],
+		});
+		expect(readJson(files, `${root}/versions/default/annotations.json`)).toMatchObject({
+			bookId: localBookId,
+			annotations: [{ semanticId: "local" }],
+		});
 	});
 });

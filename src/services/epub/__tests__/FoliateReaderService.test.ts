@@ -1562,6 +1562,66 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("removes previously applied foliate annotations even if rendered tracking was reset", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const initialHighlight = {
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Old annotation from the previous version",
+				presentation: "highlight" as const,
+			};
+			const nextHighlight = {
+				cfiRange: "epubcfi(/6/4!/4/2,/1:0,/1:8)",
+				color: "green",
+				text: "New annotation from the active version",
+				presentation: "highlight" as const,
+			};
+			const view = {
+				addAnnotation: vi.fn(async () => undefined),
+				deleteAnnotation: vi.fn(async () => undefined),
+				removeEventListener: vi.fn(),
+				close: vi.fn(),
+				remove: vi.fn(),
+			};
+
+			(service as any).foliateView = view;
+			vi.spyOn(service as any, "resolveHighlightAnchorCfi").mockImplementation(
+				(async (...args: any[]) => {
+					const [highlight] = args as [{ cfiRange: string }];
+					return highlight.cfiRange;
+				}) as any
+			);
+			vi.spyOn((service as any).parser, "getSectionIndexForCfi").mockReturnValue(0);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{ index: 0 },
+			]);
+
+			await service.applyHighlights([initialHighlight]);
+			const initialAnnotation = view.addAnnotation.mock.calls[0]?.[0];
+			expect(initialAnnotation).toMatchObject({
+				value: initialHighlight.cfiRange,
+				text: initialHighlight.text,
+			});
+
+			(service as any).renderedAnnotations.clear();
+			view.addAnnotation.mockClear();
+			view.deleteAnnotation.mockClear();
+
+			await service.applyHighlights([nextHighlight]);
+
+			expect(view.deleteAnnotation).toHaveBeenCalledTimes(1);
+			expect(view.deleteAnnotation).toHaveBeenCalledWith(initialAnnotation);
+			expect(view.addAnnotation).toHaveBeenCalledTimes(1);
+			expect(view.addAnnotation.mock.calls[0]?.[0]).toMatchObject({
+				value: nextHighlight.cfiRange,
+				text: nextHighlight.text,
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
 	it("keeps persistent highlight color after temporary source-focus highlight expires", async () => {
 		vi.useFakeTimers();
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);

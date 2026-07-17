@@ -1,10 +1,14 @@
 import { App, Modal, Notice, setIcon } from "obsidian";
 import { copyTextToClipboard } from "../../utils/clipboard-copy";
 import {
+	createEpubAnnotatedBookPackage,
 	createEpubAnnotationVersion,
 	deleteEpubAnnotationVersion,
+	downloadEpubAnnotatedBookPackage,
+	importEpubAnnotatedBookPackage,
 	listEpubAnnotationVersions,
 	notifyEpubAnnotationVersionChanged,
+	pickEpubAnnotatedBookPackageArrayBuffer,
 	renameEpubAnnotationVersion,
 	switchEpubAnnotationVersion,
 	type EpubAnnotationVersionSummary,
@@ -104,8 +108,12 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 			if (!name?.trim()) {
 				return;
 			}
-			await createEpubAnnotationVersion(this.app, bookId, name, { setActive: true });
-			notifyEpubAnnotationVersionChanged(bookId, { reason: "create" });
+			const version = await createEpubAnnotationVersion(this.app, bookId, name, { setActive: true });
+			notifyEpubAnnotationVersionChanged(bookId, {
+				reason: "create",
+				filePath,
+				versionId: version.versionId,
+			});
 			await this.notifyVersionChanged("已新建并切换标注版本");
 			await this.render();
 		});
@@ -114,11 +122,15 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 			if (!name?.trim()) {
 				return;
 			}
-			await createEpubAnnotationVersion(this.app, bookId, name, {
+			const version = await createEpubAnnotationVersion(this.app, bookId, name, {
 				setActive: true,
 				copyFromActive: true,
 			});
-			notifyEpubAnnotationVersionChanged(bookId, { reason: "create" });
+			notifyEpubAnnotationVersionChanged(bookId, {
+				reason: "create",
+				filePath,
+				versionId: version.versionId,
+			});
 			await this.notifyVersionChanged("已复制并切换标注版本");
 			await this.render();
 		});
@@ -134,11 +146,69 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 			new Notice(copied ? "已复制标注数据路径" : "复制标注数据路径失败");
 		});
 
+		appendIconButton(topActions, "download", "导出书籍标注包", async () => {
+			await this.exportAnnotatedBookPackage(bookId, filePath, bookTitle);
+		});
+		appendIconButton(topActions, "upload", "导入书籍标注包", async () => {
+			await this.importAnnotatedBookPackage(bookId, filePath);
+		});
+
 		const versions = await listEpubAnnotationVersions(this.app, bookId);
 		const list = root.createDiv({ cls: "weave-annotation-version-list" });
 		list.createEl("h3", { text: "版本列表" });
 		for (const version of versions) {
 			this.renderVersionRow(list, version);
+		}
+	}
+
+	private async exportAnnotatedBookPackage(
+		bookId: string,
+		filePath: string,
+		bookTitle: string
+	): Promise<void> {
+		if (!bookId || !filePath) {
+			new Notice("当前书籍数据还没有准备好");
+			return;
+		}
+		try {
+			const result = await createEpubAnnotatedBookPackage(this.app, {
+				bookId,
+				filePath,
+				displayName: bookTitle || filePath,
+			});
+			downloadEpubAnnotatedBookPackage(result);
+			new Notice(`已导出书籍标注包：${result.fileName}`);
+		} catch (error) {
+			new Notice(`导出书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private async importAnnotatedBookPackage(bookId: string, filePath: string): Promise<void> {
+		if (!bookId || !filePath) {
+			new Notice("当前书籍数据还没有准备好");
+			return;
+		}
+		const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
+		if (!arrayBuffer) {
+			return;
+		}
+		try {
+			const result = await importEpubAnnotatedBookPackage(this.app, arrayBuffer, {
+				preferredBookId: bookId,
+				targetBookPath: filePath,
+				activateImportedAnnotations: true,
+			});
+			notifyEpubAnnotationVersionChanged(result.bookId, {
+				reason: "import",
+				filePath: result.bookPath,
+				versionId: result.activeVersionId,
+			});
+			await this.notifyVersionChanged(
+				`已导入书籍标注包：${result.importedAnnotationCount} 条标注，当前版本 ${result.activeVersionId}`
+			);
+			await this.render();
+		} catch (error) {
+			new Notice(`导入书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -165,6 +235,7 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 				await switchEpubAnnotationVersion(this.app, this.options.bookId, version.versionId);
 				notifyEpubAnnotationVersionChanged(this.options.bookId, {
 					reason: "switch",
+					filePath: this.options.filePath,
 					versionId: version.versionId,
 				});
 				await this.notifyVersionChanged(`已切换到「${version.name}」`);
@@ -189,6 +260,7 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 				if (deleted) {
 					notifyEpubAnnotationVersionChanged(this.options.bookId, {
 						reason: "delete",
+						filePath: this.options.filePath,
 						versionId: version.versionId,
 					});
 					await this.notifyVersionChanged("已删除标注版本");

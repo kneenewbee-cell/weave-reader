@@ -8,16 +8,15 @@
                 getEpubBacklinkHighlightService,
                 EPUB_RUNTIME,
                 canUseEpubReadingProgress,
-                findEpubPortableBookIdByIdentity,
-                findEpubPortableBookIdByPath,
-                getEpubStorageService,
                 createEpubAnnotatedBookPackage,
                 downloadEpubAnnotatedBookPackage,
+                findEpubPortableBookIdByPath,
+                getEpubStorageService,
                 importEpubAnnotatedBookPackage,
                 notifyEpubAnnotationVersionChanged,
+                pickEpubAnnotatedBookPackageArrayBuffer,
                 resolveEpubPortableBookDataLocation,
                 resolveEpubHost,
-                switchEpubAnnotationVersion,
                 warmEpubAnnotationIndexForPaths,
                 type EpubPortableBookDataLocation,
         } from '../../services/epub';
@@ -81,7 +80,6 @@
         import { isVaultImageFile, resolveVaultImageResourceUrl } from '../../utils/vault-image-cover';
         import { copyTextToClipboard } from '../../utils/clipboard-copy';
         import { DirectoryUtils } from '../../utils/directory-utils';
-        import { EpubAnnotationVersionManagerModal } from './EpubAnnotationVersionManagerModal';
 
         interface EpubFileInfo {
                 path: string;
@@ -1354,16 +1352,9 @@
                 requestedPath?: string
         ): Promise<EpubPortableBookDataLocation | null> {
                 const bookId =
-                        await findEpubPortableBookIdByIdentity(app, {
-                                bookId: storedBook?.id,
-                                sourceId: storedBook?.sourceId,
-                                sourceFingerprint: storedBook?.sourceFingerprint,
-                                filePath: targetPath,
-                                knownPaths: requestedPath ? [requestedPath] : [],
-                        })
+                        String(storedBook?.id || '').trim()
                         || await findEpubPortableBookIdByPath(app, targetPath)
-                        || (requestedPath ? await findEpubPortableBookIdByPath(app, requestedPath) : '')
-                        || String(storedBook?.id || '').trim();
+                        || (requestedPath ? await findEpubPortableBookIdByPath(app, requestedPath) : '');
 
                 return bookId ? resolveEpubPortableBookDataLocation(bookId) : null;
         }
@@ -1415,75 +1406,6 @@
                         return electron?.shell || null;
                 } catch {
                         return null;
-                }
-        }
-
-        function getElectronSaveDialog(): {
-                showSaveDialog?: (options: {
-                        title?: string;
-                        defaultPath?: string;
-                        filters?: { name: string; extensions: string[] }[];
-                }) => Promise<{ canceled?: boolean; filePath?: string }>;
-        } | null {
-                try {
-                        const requireFn = (window as unknown as { require?: (id: string) => unknown }).require;
-                        if (typeof requireFn !== 'function') {
-                                return null;
-                        }
-                        const remote = (() => {
-                                try {
-                                        return requireFn('@electron/remote') as {
-                                                dialog?: {
-                                                        showSaveDialog?: (options: {
-                                                                title?: string;
-                                                                defaultPath?: string;
-                                                                filters?: { name: string; extensions: string[] }[];
-                                                        }) => Promise<{ canceled?: boolean; filePath?: string }>;
-                                                };
-                                        };
-                                } catch {
-                                        return null;
-                                }
-                        })();
-                        if (remote?.dialog?.showSaveDialog) {
-                                return remote.dialog;
-                        }
-                        const electron = requireFn('electron') as {
-                                remote?: {
-                                        dialog?: {
-                                                showSaveDialog?: (options: {
-                                                        title?: string;
-                                                        defaultPath?: string;
-                                                        filters?: { name: string; extensions: string[] }[];
-                                                }) => Promise<{ canceled?: boolean; filePath?: string }>;
-                                        };
-                                };
-                        };
-                        return electron?.remote?.dialog || null;
-                } catch {
-                        return null;
-                }
-        }
-
-        async function saveArrayBufferToSystemFile(filePath: string, arrayBuffer: ArrayBuffer): Promise<boolean> {
-                try {
-                        const requireFn = (window as unknown as { require?: (id: string) => unknown }).require;
-                        if (typeof requireFn !== 'function') {
-                                return false;
-                        }
-                        const fs = requireFn('fs') as {
-                                promises?: {
-                                        writeFile?: (path: string, data: Uint8Array) => Promise<void>;
-                                };
-                        };
-                        if (typeof fs?.promises?.writeFile !== 'function') {
-                                return false;
-                        }
-                        await fs.promises.writeFile(filePath, new Uint8Array(arrayBuffer));
-                        return true;
-                } catch (error) {
-                        logger.warn('Failed to save annotated EPUB package with Electron fs:', error);
-                        return false;
                 }
         }
 
@@ -1572,143 +1494,72 @@
                 }
         }
 
-        async function openAnnotationVersionManager(filePath: string): Promise<void> {
+        async function exportAnnotatedBookPackageFromShelf(filePath: string): Promise<void> {
                 try {
-                        const resolved = await resolvePortableBookDataContext(filePath);
-                        if (!resolved) {
+                        const context = await resolveBookContext(filePath);
+                        if (!context) {
                                 return;
                         }
-                        const meta = bookMetaByPath.get(filePath);
-                        new EpubAnnotationVersionManagerModal(app, {
-                                bookTitle: meta?.title?.trim() || stripSupportedBookExtension(filePath.split('/').pop() || filePath),
-                                bookId: resolved.location.bookId,
-                                filePath: resolved.targetPath,
-                                bookDataDir: resolved.location.bookDir,
-                                annotationsPath: resolved.location.annotationsPath,
-                                onOpenDataFolder: () => openPortableBookDataFolder(filePath),
-                        }).open();
-                } catch (error) {
-                        logger.error('Failed to open EPUB annotation version manager:', error);
-                        new Notice('打开标注版本管理失败');
-                }
-        }
-
-        async function exportAnnotatedBookPackage(filePath: string): Promise<void> {
-                return await exportAnnotatedBookPackageReal(filePath);
-                try {
-                        const resolved = await resolvePortableBookDataContext(filePath);
-                        if (!resolved) {
+                        const location = await resolvePortableBookDataLocationForBook(
+                                context.storedBook,
+                                context.targetPath,
+                                context.requestedPath
+                        );
+                        if (!location) {
+                                new Notice(t('epub.bookshelf.dataLocationUnavailable'));
                                 return;
                         }
-                        await DirectoryUtils.ensureDirRecursive(app.vault.adapter, resolved.location.bookDir);
-                        new Notice('带标注 ZIP 导出将在下一阶段启用；现在先打开本书数据目录，便于核对当前标注数据。');
-                        await openPortableBookDataFolder(filePath);
-                } catch (error) {
-                        logger.error('Failed to prepare EPUB annotated package export:', error);
-                        new Notice('准备导出带标注书籍包失败');
-                }
-        }
-
-        function importAnnotatedZipPackage(): void {
-                importAnnotatedZipPackageReal();
-                return;
-                new Notice('导入带标注 ZIP 将在下一阶段启用，用于导入 EPUB 文件、标注数据、语义配置和阅读状态。');
-        }
-
-        async function exportAnnotatedBookPackageReal(filePath: string): Promise<void> {
-                try {
-                        const resolved = await resolvePortableBookDataContext(filePath);
-                        if (!resolved) {
-                                return;
-                        }
-                        await DirectoryUtils.ensureDirRecursive(app.vault.adapter, resolved.location.bookDir);
-                        const meta = bookMetaByPath.get(filePath);
                         const result = await createEpubAnnotatedBookPackage(app, {
-                                bookId: resolved.location.bookId,
-                                filePath: resolved.targetPath,
-                                displayName: meta?.title || stripSupportedBookExtension(filePath.split('/').pop() || filePath),
+                                bookId: location.bookId,
+                                filePath: context.targetPath,
+                                displayName: context.metadata.title?.trim() || context.file.basename,
                         });
-                        const dialog = getElectronSaveDialog();
-                        if (dialog?.showSaveDialog) {
-                                const selected = await dialog.showSaveDialog({
-                                        title: '导出带标注书籍包',
-                                        defaultPath: result.fileName,
-                                        filters: [{ name: 'Weave Reader 书籍包', extensions: ['zip'] }],
-                                });
-                                if (selected?.canceled) {
-                                        return;
-                                }
-                                if (selected?.filePath && await saveArrayBufferToSystemFile(selected.filePath, result.arrayBuffer)) {
-                                        new Notice('已导出带标注书籍包');
-                                        return;
-                                }
-                        }
                         downloadEpubAnnotatedBookPackage(result);
-                        new Notice('已生成带标注书籍包');
+                        new Notice(`已导出书籍标注包：${result.fileName}`);
                 } catch (error) {
-                        logger.error('Failed to export annotated EPUB package:', error);
-                        new Notice('导出带标注书籍包失败');
+                        logger.error('Failed to export EPUB annotated book package:', error);
+                        new Notice(`导出书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
                 }
         }
 
-        function importAnnotatedZipPackageReal(): void {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.zip,application/zip,application/x-zip-compressed';
-                input.style.display = 'none';
-                input.addEventListener('change', () => {
-                        const file = input.files?.[0];
-                        input.remove();
-                        if (!file) {
+        async function importAnnotatedBookPackageToShelfBook(filePath: string): Promise<void> {
+                const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
+                if (!arrayBuffer) {
+                        return;
+                }
+                try {
+                        const context = await resolveBookContext(filePath);
+                        if (!context) {
                                 return;
                         }
-                        void (async () => {
-                                try {
-                                        const result = await importEpubAnnotatedBookPackage(app, await file.arrayBuffer(), {
-                                                defaultBookFolder: 'Books',
-                                        });
-                                        await storageService.addBooksToBookshelf([result.bookPath]);
-                                        await refreshBookshelf();
-                                        warmEpubAnnotationIndexForPaths(app, [result.bookPath]);
-                                        if (
-                                                result.matchedExistingBook &&
-                                                result.importedAnnotationCount > 0 &&
-                                                result.importedVersionIds.length > 0
-                                        ) {
-                                                const shouldSwitch = window.confirm(
-                                                        `已导入 ${result.importedAnnotationCount} 条标注为新版本。是否立即切换到导入的标注版本？`
-                                                );
-                                                if (shouldSwitch) {
-                                                        await switchEpubAnnotationVersion(app, result.bookId, result.importedVersionIds[0]);
-                                                        notifyEpubAnnotationVersionChanged(result.bookId, {
-                                                                reason: 'import',
-                                                                filePath: result.bookPath,
-                                                                versionId: result.importedVersionIds[0],
-                                                        });
-                                                        new Notice('已导入并切换到导入的标注版本');
-                                                        return;
-                                                }
-                                                new Notice('已导入带标注书籍包，当前阅读展示保持不变');
-                                                return;
-                                        }
-                                        notifyEpubAnnotationVersionChanged(result.bookId, {
-                                                reason: 'import',
-                                                filePath: result.bookPath,
-                                                versionId: result.activeVersionId,
-                                        });
-                                        new Notice(
-                                                result.importedAnnotationCount > 0
-                                                        ? `已导入带标注书籍包（${result.importedAnnotationCount} 条标注）`
-                                                        : '已导入带标注书籍包'
-                                        );
-                                } catch (error) {
-                                        logger.error('Failed to import annotated EPUB package:', error);
-                                        new Notice('导入带标注 ZIP 失败');
-                                }
-                        })();
-                }, { once: true });
-                document.body.appendChild(input);
-                input.click();
+                        const location = await resolvePortableBookDataLocationForBook(
+                                context.storedBook,
+                                context.targetPath,
+                                context.requestedPath
+                        );
+                        if (!location) {
+                                new Notice(t('epub.bookshelf.dataLocationUnavailable'));
+                                return;
+                        }
+                        const result = await importEpubAnnotatedBookPackage(app, arrayBuffer, {
+                                preferredBookId: location.bookId,
+                                targetBookPath: context.targetPath,
+                                activateImportedAnnotations: true,
+                        });
+                        notifyEpubAnnotationVersionChanged(result.bookId, {
+                                reason: 'import',
+                                filePath: result.bookPath,
+                                versionId: result.activeVersionId,
+                        });
+                        dispatchBookshelfDataChanged();
+                        await refreshBookshelf();
+                        new Notice(
+                                `已导入书籍标注包：${result.importedAnnotationCount} 条标注，当前版本 ${result.activeVersionId}`
+                        );
+                } catch (error) {
+                        logger.error('Failed to import EPUB annotated book package:', error);
+                        new Notice(`导入书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
+                }
         }
 
         async function collectBookNoteStats(filePath: string): Promise<BookNoteStats> {
@@ -2134,18 +1985,17 @@
                                 });
                 });
                 menu.addItem((item) => {
-                        item.setTitle('管理标注版本')
-                                .setIcon('layers-3')
+                        item.setTitle('导出书籍标注包')
+                                .setIcon('download')
                                 .onClick(() => {
-                                        void openAnnotationVersionManager(filePath);
+                                        void exportAnnotatedBookPackageFromShelf(filePath);
                                 });
                 });
-                menu.addSeparator();
                 menu.addItem((item) => {
-                        item.setTitle('导出带标注书籍包')
-                                .setIcon('package')
+                        item.setTitle('导入书籍标注包')
+                                .setIcon('upload')
                                 .onClick(() => {
-                                        void exportAnnotatedBookPackage(filePath);
+                                        void importAnnotatedBookPackageToShelfBook(filePath);
                                 });
                 });
                 menu.addSeparator();
@@ -2520,25 +2370,6 @@
                         logger.error('Failed to scan vault EPUB files:', error);
                         new Notice(t('epub.bookshelf.vaultScanFailed'));
                 }
-        }
-
-        function openBookshelfImportMenu(event: MouseEvent) {
-                const menu = new Menu();
-                menu.addItem((item) => {
-                        item.setTitle(t('epub.bookshelf.menu.scanVault'))
-                                .setIcon('scan-search')
-                                .onClick(() => {
-                                        void scanVaultAndPromptImport();
-                                });
-                });
-                menu.addItem((item) => {
-                        item.setTitle('导入带标注 ZIP')
-                                .setIcon('package-open')
-                                .onClick(() => {
-                                        importAnnotatedZipPackage();
-                                });
-                });
-                menu.showAtMouseEvent(event);
         }
 
 	async function requestBookshelfRefresh() {
@@ -3895,7 +3726,7 @@
                 {searching}
                 backButtonLabel={effectiveBackButtonLabel}
                 {t}
-                onImport={openBookshelfImportMenu}
+                onImport={scanVaultAndPromptImport}
                 onToggleSearch={toggleBookshelfSearch}
                 onBack={handleToolbarBack}
                 onSettings={handleSettingsAction}

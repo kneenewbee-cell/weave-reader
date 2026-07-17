@@ -1,16 +1,3 @@
-# weave-reader 自定义版
-
-这是一个面向 Obsidian 的本地电子书阅读器插件仓库。当前版本以 `zhuzhige123/obsidian-weave-reader` 原始源码为基础，叠加了本地自定义阅读体验、三种阅读模式、语义标注、书籍标注数据结构和后续导入导出规划相关改动。
-
-本仓库保留了两个关键历史点：
-
-- `初始化：保留上游原始 weave-reader 版本`：作为从上游仓库拉取后的原始基线。
-- `更新：覆盖为当前本地自定义版本`：作为当前 Obsidian 插件目录中的可运行版本快照。
-
-当前提交不包含本机授权、设备指纹、运行缓存和依赖目录。需要本地运行时，请重新安装依赖并按 Obsidian 插件目录要求放置构建产物。
-
----
-
 # Weave EPUB Reader
 
 [中文](#中文文档) | [繁體中文](./README.zh-TW.md) | [English](#english-documentation) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Русский](./README.ru.md)

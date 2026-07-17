@@ -353,6 +353,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private highlightAnchorResolutionByKey = new Map<string, Promise<string>>();
 	private savedHighlights: ReaderHighlight[] = [];
 	private renderedAnnotations = new Map<string, RenderedFoliateAnnotation>();
+	private appliedFoliateAnnotations = new Map<string, FoliateAnnotation>();
 	private temporaryHighlightTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 	private sourceLocateFocusByCfiKey = new Map<string, { color: string; cfiRange: string }>();
 	private sourceLocateFocusTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
@@ -6023,6 +6024,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		const view = this.foliateView;
 		if (!view) {
 			this.renderedAnnotations.clear();
+			this.appliedFoliateAnnotations.clear();
 			return;
 		}
 
@@ -6095,15 +6097,24 @@ export class FoliateReaderService implements EpubReaderEngine {
 			})
 		);
 
-		for (const [key, rendered] of Array.from(this.renderedAnnotations.entries())) {
+		const trackedAnnotationKeys = new Set([
+			...this.renderedAnnotations.keys(),
+			...this.appliedFoliateAnnotations.keys(),
+		]);
+		for (const key of trackedAnnotationKeys) {
+			const rendered = this.renderedAnnotations.get(key);
 			const desired = desiredVisible.get(key);
 			if (
 				!desired ||
+				!rendered ||
 				rendered.renderSignature !== desired.renderSignature ||
 				!isSameFoliateAnnotation(rendered.annotation, desired.annotation)
 			) {
 				try {
-					await view.deleteAnnotation(rendered.annotation);
+					const applied = this.appliedFoliateAnnotations.get(key) || rendered?.annotation;
+					if (applied) {
+						await view.deleteAnnotation(applied);
+					}
 				} catch (error) {
 					logger.debugWithTag("FoliateReaderService", "Failed to delete foliate annotation", {
 						key,
@@ -6111,6 +6122,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 					});
 				}
 				this.renderedAnnotations.delete(key);
+				this.appliedFoliateAnnotations.delete(key);
 			}
 		}
 
@@ -6121,6 +6133,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			try {
 				await view.addAnnotation(rendered.annotation);
 				this.renderedAnnotations.set(key, rendered);
+				this.appliedFoliateAnnotations.set(key, rendered.annotation);
 			} catch (error) {
 				logger.warn("[FoliateReaderService] Failed to add foliate annotation:", {
 					key,
@@ -6938,6 +6951,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.foliateView = null;
 		this.renderContainer = null;
 		this.renderedAnnotations.clear();
+		this.appliedFoliateAnnotations.clear();
 		this.resetAnnotationSyncState();
 		this.loadedDocumentSectionIndexes = new WeakMap<Document, number>();
 		this.lastSelectionByDocument = new WeakMap<Document, string>();
@@ -7139,6 +7153,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.highlightAnchorResolutionByKey.clear();
 		this.savedHighlights = [];
 		this.renderedAnnotations.clear();
+		this.appliedFoliateAnnotations.clear();
 		this.resetAnnotationSyncState();
 	}
 
