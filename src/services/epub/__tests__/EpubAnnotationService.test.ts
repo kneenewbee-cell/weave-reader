@@ -557,6 +557,69 @@ describe('EpubAnnotationService', () => {
 		expect(backlinkService.collectHighlights).toHaveBeenCalledTimes(2);
 	});
 
+	it('collects highlights from a requested annotation version without reading the active version', async () => {
+		const bookId = 'epub-book-compare';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: 'weave-reader-active-annotation-version/v1',
+				version: 1,
+				bookId,
+				activeVersionId: 'default',
+				updatedAt: 10,
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				updatedAt: 10,
+				authoritative: true,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2)',
+						semanticId: 'active-note',
+						text: 'Active note',
+					},
+				],
+			},
+			[`weave/epub-data/books/${bookId}/versions/readonly/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				updatedAt: 20,
+				authoritative: true,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/4)',
+						semanticId: 'readonly-note',
+						text: 'Readonly note',
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			loadConcealedTexts: vi.fn(async () => []),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const backlinkService = {
+			collectHighlights: vi.fn(async () => []),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		await expect(
+			service.collectAllHighlights(bookId, 'Books/demo.epub', backlinkService, {
+				annotationVersionId: 'readonly',
+			} as any)
+		).resolves.toEqual([
+			expect.objectContaining({
+				cfiRange: 'epubcfi(/6/4)',
+				semanticId: 'readonly-note',
+				text: 'Readonly note',
+			}),
+		]);
+	});
+
 	it('loads portable annotations from the only legacy book folder when the current runtime book id is empty', async () => {
 		const currentBookId = 'epub-book-rv441q';
 		const legacyBookId = 'epub-book-i6zqes';

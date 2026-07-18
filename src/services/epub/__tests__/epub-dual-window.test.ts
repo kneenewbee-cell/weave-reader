@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
+	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
+	createEpubAnnotationCompareContexts,
 	createEpubDualWindowAnnotationDetail,
 	dispatchEpubDualWindowAnnotationEvent,
+	dispatchEpubDualWindowReaderDisplayEvent,
+	normalizeEpubDualWindowReaderDisplayDetail,
+	normalizeEpubAnnotationCompareContext,
+	resolveEpubAnnotationCompareExitPlan,
+	shouldShowEpubReaderPrimaryToolbar,
 } from "../epub-dual-window";
 import {
 	getEpubDualWindowSession,
@@ -13,6 +20,157 @@ import {
 } from "../epub-dual-window-workspace";
 
 describe("epub-dual-window", () => {
+	it("creates paired annotation compare contexts with editable and readonly roles", () => {
+		const contexts = createEpubAnnotationCompareContexts({
+			sessionId: "session-1",
+			bookId: " epub-book-demo ",
+			filePath: " Books/demo.epub ",
+			editableVersionId: " active ",
+			editableVersionName: " 当前版本 ",
+			readonlyVersionId: " draft ",
+			readonlyVersionName: " 草稿版本 ",
+		});
+
+		expect(contexts?.editable).toEqual({
+			mode: "annotation-compare",
+			sessionId: "session-1",
+			bookId: "epub-book-demo",
+			filePath: "Books/demo.epub",
+			versionId: "active",
+			versionName: "当前版本",
+			counterpartVersionId: "draft",
+			counterpartVersionName: "草稿版本",
+			paneRole: "editable",
+			syncPosition: true,
+		});
+		expect(contexts?.readonly).toMatchObject({
+			versionId: "draft",
+			versionName: "草稿版本",
+			counterpartVersionId: "active",
+			counterpartVersionName: "当前版本",
+			paneRole: "readonly",
+			syncPosition: true,
+		});
+	});
+
+	it("normalizes annotation compare contexts and rejects incomplete values", () => {
+		expect(
+			normalizeEpubAnnotationCompareContext({
+				mode: "annotation-compare",
+				sessionId: " session-1 ",
+				bookId: " book-1 ",
+				filePath: " demo.epub ",
+				versionId: " version-a ",
+				paneRole: "readonly",
+				syncPosition: false,
+			})
+		).toMatchObject({
+			sessionId: "session-1",
+			bookId: "book-1",
+			filePath: "demo.epub",
+			versionId: "version-a",
+			paneRole: "readonly",
+			syncPosition: false,
+		});
+		expect(normalizeEpubAnnotationCompareContext({ mode: "annotation-compare" })).toBeNull();
+	});
+
+	it("hides the primary reader toolbar for readonly annotation compare panes", () => {
+		const readonlyContext = createEpubAnnotationCompareContexts({
+			sessionId: "session-1",
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			editableVersionId: "left",
+			readonlyVersionId: "right",
+		})?.readonly;
+
+		expect(
+			shouldShowEpubReaderPrimaryToolbar({
+				filePath: "Books/demo.epub",
+				isMobile: false,
+				annotationCompare: readonlyContext,
+			})
+		).toBe(false);
+		expect(
+			shouldShowEpubReaderPrimaryToolbar({
+				filePath: "Books/demo.epub",
+				isMobile: false,
+				annotationCompare: { ...readonlyContext, paneRole: "editable" },
+			})
+		).toBe(true);
+	});
+
+	it("normalizes and dispatches annotation compare reader display sync events", () => {
+		expect(
+			normalizeEpubDualWindowReaderDisplayDetail({
+				mode: "annotation-compare",
+				sessionId: " session-1 ",
+				filePath: " Books/demo.epub ",
+				sourceId: " view-a ",
+				flowMode: "scrolled",
+				layoutMode: "paginated",
+			})
+		).toEqual({
+			mode: "annotation-compare",
+			sessionId: "session-1",
+			filePath: "Books/demo.epub",
+			sourceId: "view-a",
+			flowMode: "scrolled",
+			layoutMode: "paginated",
+		});
+		expect(
+			normalizeEpubDualWindowReaderDisplayDetail({
+				mode: "annotation-compare",
+				sessionId: "session-1",
+				filePath: "Books/demo.epub",
+				flowMode: "invalid",
+			})
+		).toBeNull();
+
+		const events: Event[] = [];
+		const targetWindow = {
+			dispatchEvent: vi.fn((event: Event) => {
+				events.push(event);
+				return true;
+			}),
+		} as unknown as Window;
+
+		expect(
+			dispatchEpubDualWindowReaderDisplayEvent(targetWindow, {
+				sessionId: "session-1",
+				filePath: "Books/demo.epub",
+				flowMode: "paginated",
+				layoutMode: "double",
+			})
+		).toBe(true);
+		expect(events[0]?.type).toBe(EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT);
+		expect((events[0] as CustomEvent).detail).toMatchObject({
+			sessionId: "session-1",
+			flowMode: "paginated",
+			layoutMode: "double",
+		});
+	});
+
+	it("plans annotation compare exit by keeping editable panes and closing readonly panes", () => {
+		const contexts = createEpubAnnotationCompareContexts({
+			sessionId: "session-1",
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			editableVersionId: "default",
+			readonlyVersionId: "imported",
+		});
+		const entries = [
+			{ id: "main", context: contexts?.editable },
+			{ id: "side", context: contexts?.readonly },
+			{ id: "ignored", context: null },
+		];
+
+		const plan = resolveEpubAnnotationCompareExitPlan(entries, (entry) => entry.context);
+
+		expect(plan.keepEntries.map((entry) => entry.id)).toEqual(["main"]);
+		expect(plan.closeEntries.map((entry) => entry.id)).toEqual(["side"]);
+	});
+
 	it("normalizes annotation hover details", () => {
 		expect(
 			createEpubDualWindowAnnotationDetail({

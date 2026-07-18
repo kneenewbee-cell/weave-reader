@@ -372,6 +372,20 @@ export async function readActiveEpubAnnotationVersionAnnotations(
 	return createEmptyAnnotationsPayload(safeId, 0);
 }
 
+export async function readEpubAnnotationVersionAnnotations(
+	app: App,
+	bookId: unknown,
+	versionId: unknown
+): Promise<PortableAnnotationsPayload> {
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
+	const safeVersionId = safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
+	const payload = await readVersionAnnotations(app, safeId, safeVersionId);
+	if (payload) {
+		return { ...payload, bookId: safeId };
+	}
+	return createEmptyAnnotationsPayload(safeId, 0);
+}
+
 export async function readActiveEpubAnnotationVersionAnnotationsOrNull(
 	app: App,
 	bookId: unknown

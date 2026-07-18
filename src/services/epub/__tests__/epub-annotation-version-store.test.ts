@@ -13,6 +13,7 @@ import {
 	listEpubAnnotationVersions,
 	notifyEpubAnnotationVersionChanged,
 	readActiveEpubAnnotationVersionAnnotations,
+	readEpubAnnotationVersionAnnotations,
 	renameEpubAnnotationVersion,
 	switchEpubAnnotationVersion,
 	writeActiveEpubAnnotationVersionAnnotations,
@@ -243,6 +244,39 @@ describe("epub-annotation-version-store", () => {
 		});
 		await expect(readActiveEpubAnnotationVersionAnnotations(app, bookId)).resolves.toMatchObject({
 			annotations: [{ semanticId: "important" }],
+		});
+	});
+
+	it("reads a specific non-active version without changing the active mirror", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files } = createAppHarness({
+			[`${root}/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 10,
+				authoritative: true,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "active-note" }],
+			},
+		});
+		const readonlyVersion = await createEpubAnnotationVersion(app, bookId, "readonly-version", {
+			setActive: true,
+			initialAnnotations: [{ cfiRange: "epubcfi(/6/4)", semanticId: "readonly-note" }],
+		});
+		await switchEpubAnnotationVersion(app, bookId, "default");
+
+		await expect(
+			readEpubAnnotationVersionAnnotations(app, bookId, readonlyVersion.versionId)
+		).resolves.toMatchObject({
+			bookId,
+			annotations: [{ semanticId: "readonly-note" }],
+		});
+		expect(readJson(files, `${root}/active-version.json`)).toMatchObject({
+			activeVersionId: "default",
+		});
+		expect(readJson(files, `${root}/annotations.json`)).toMatchObject({
+			annotations: [{ semanticId: "active-note" }],
 		});
 	});
 

@@ -17,6 +17,7 @@ import { resolveDisplayProgress } from "./book-progress";
 import {
 	loadEffectiveEpubSemanticProfile,
 	readEffectiveEpubPortableAnnotations,
+	readEpubPortableAnnotationsForVersion,
 	writeBookEpubPortableAnnotations,
 } from "./semantic/semantic-store";
 import {
@@ -43,6 +44,12 @@ export type EpubPortableHighlightSaveResult =
 	| {
 			kind: "noop";
 	  };
+
+export interface EpubCollectAllHighlightsOptions {
+	additionalSourcePaths?: string[];
+	diskIncremental?: boolean;
+	annotationVersionId?: string;
+}
 
 export class EpubAnnotationService {
 	private storageService: EpubStorageService;
@@ -206,12 +213,14 @@ export class EpubAnnotationService {
 	private buildCollectedHighlightsCacheKey(
 		bookId: string,
 		filePath: string,
-		boundCanvasPath?: string | null
+		boundCanvasPath?: string | null,
+		annotationVersionId?: string | null
 	): string {
 		return [
 			String(bookId || "").trim(),
 			String(filePath || "").trim(),
 			String(boundCanvasPath || "").trim(),
+			String(annotationVersionId || "").trim(),
 		].join("::");
 	}
 
@@ -365,20 +374,29 @@ export class EpubAnnotationService {
 
 	private async loadPortableHighlights(
 		bookId: string,
-		effectiveProfile?: unknown | null
+		effectiveProfile?: unknown | null,
+		annotationVersionId?: string | null
 	): Promise<ReaderHighlight[]> {
 		const app = this.getApp();
 		if (!app) {
 			return [];
 		}
 		try {
+			const requestedVersionId = String(annotationVersionId || "").trim();
 			const [resolvedProfile, payload] =
 				effectiveProfile === undefined
 					? await Promise.all([
 							this.loadEffectiveSemanticProfile(bookId),
-							readEffectiveEpubPortableAnnotations(app, bookId),
+							requestedVersionId
+								? readEpubPortableAnnotationsForVersion(app, bookId, requestedVersionId)
+								: readEffectiveEpubPortableAnnotations(app, bookId),
 						])
-					: [effectiveProfile, await readEffectiveEpubPortableAnnotations(app, bookId)];
+					: [
+							effectiveProfile,
+							requestedVersionId
+								? await readEpubPortableAnnotationsForVersion(app, bookId, requestedVersionId)
+								: await readEffectiveEpubPortableAnnotations(app, bookId),
+						];
 			return payload.annotations
 				.map((annotation) => this.normalizePortableAnnotation(annotation, resolvedProfile))
 				.filter((highlight): highlight is ReaderHighlight => Boolean(highlight));
@@ -675,15 +693,21 @@ export class EpubAnnotationService {
 		bookId: string,
 		filePath: string,
 		backlinkService: EpubBacklinkHighlightService,
-		options?: { additionalSourcePaths?: string[]; diskIncremental?: boolean }
+		options?: EpubCollectAllHighlightsOptions
 	): Promise<ReaderHighlight[]> {
 		const boundCanvasPath = await this.storageService.getCanvasBinding(bookId);
+		const annotationVersionId = String(options?.annotationVersionId || "").trim();
 		const hasAdditionalSourcePaths =
 			Array.isArray(options?.additionalSourcePaths) && options.additionalSourcePaths.length > 0;
 		const additionalSourcePaths = options?.additionalSourcePaths || [];
 		const useDiskIncremental =
 			options?.diskIncremental === true && additionalSourcePaths.length > 0;
-		const cacheKey = this.buildCollectedHighlightsCacheKey(bookId, filePath, boundCanvasPath);
+		const cacheKey = this.buildCollectedHighlightsCacheKey(
+			bookId,
+			filePath,
+			boundCanvasPath,
+			annotationVersionId
+		);
 		if (!hasAdditionalSourcePaths) {
 			const cached = this.collectedHighlightsCache.get(cacheKey);
 			if (cached) {
@@ -703,7 +727,11 @@ export class EpubAnnotationService {
 			await this.clearLegacyHighlightCache(bookId);
 
 			const effectiveSemanticProfile = await this.loadEffectiveSemanticProfile(bookId);
-			const portableHighlights = await this.loadPortableHighlights(bookId, effectiveSemanticProfile);
+			const portableHighlights = await this.loadPortableHighlights(
+				bookId,
+				effectiveSemanticProfile,
+				annotationVersionId
+			);
 			for (const portableHighlight of portableHighlights) {
 				const identity = getReaderHighlightIdentityKey(portableHighlight);
 				if (identity) {

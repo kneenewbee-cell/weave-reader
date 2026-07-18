@@ -25,11 +25,18 @@ import { stripSupportedBookExtension } from "../services/epub/book-format";
 import {
 	EPUB_DUAL_WINDOW_SESSION_EVENT,
 	EPUB_RUNTIME,
+	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
+	dispatchEpubDualWindowReaderDisplayEvent,
 	getEpubDualWindowLeafContainerEl,
+	normalizeEpubDualWindowReaderDisplayDetail,
+	normalizeEpubAnnotationCompareContext,
 	resolveEpubDualWindowBoundaryPosition,
 	resolveEpubDualWindowPanes,
+	shouldShowEpubReaderPrimaryToolbar,
 	swapEpubDualWindowPanes,
+	type EpubAnnotationCompareContext,
 	type EpubDualWindowPanes,
+	type EpubDualWindowReaderDisplayDetail,
 	type EpubDualWindowSessionDetail,
 } from "../services/epub";
 import type { EpubCanvasService } from "../services/epub/EpubCanvasService";
@@ -62,6 +69,7 @@ export class EpubView extends ItemView {
 	private lockedFormatPreviewComponent: unknown = null;
 	private plugin: EpubViewHost;
 	private filePath = "";
+	private annotationCompare: EpubAnnotationCompareContext | null = null;
 	private bookTitle = "";
 	private chapterTitle = "";
 	private isOpen = false;
@@ -119,7 +127,11 @@ export class EpubView extends ItemView {
 	private bookmarkBtn: HTMLElement | null = null;
 	private readingPositionAutoSaveEnabled = false;
 	private toolbarHandlersReady = false;
+	private readonly readerDisplaySyncSourceId = `epub-view-${Date.now().toString(36)}-${Math.random()
+		.toString(36)
+		.slice(2, 8)}`;
 	private dualWindowSessionHandler: ((event: Event) => void) | null = null;
+	private dualWindowReaderDisplayHandler: ((event: Event) => void) | null = null;
 	private readerKeymapHandlers: KeymapEventHandler[] = [];
 	private actionHandlers: {
 		setAutoInsert?: (enabled: boolean) => void;
@@ -157,6 +169,7 @@ export class EpubView extends ItemView {
 		exportBookHighlightsToMarkdown?: (event?: MouseEvent) => Promise<void>;
 		openAnnotationNote?: () => Promise<void>;
 		openAnnotationDualWindow?: () => Promise<void>;
+		openAnnotationCompareDualWindow?: () => Promise<void>;
 		getExcerptSettings?: () => EpubExcerptSettings;
 		updateExcerptSettings?: (patch: Partial<EpubExcerptSettings>) => Promise<void>;
 		prevPage?: () => void | Promise<void>;
@@ -464,6 +477,7 @@ export class EpubView extends ItemView {
 			);
 			this.positionFlowBtn();
 		}
+		this.refreshHeaderToolbarVisibility();
 	}
 
 	private syncToolbarAfterActionsReady(): void {
@@ -562,11 +576,10 @@ export class EpubView extends ItemView {
 				});
 			});
 			dualWindowMenu.addItem((subItem) => {
-				subItem.setTitle("两种标注对比（暂未开放）");
+				subItem.setTitle("\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4");
 				subItem.setIcon("git-compare");
-				(subItem as { setDisabled?: (disabled: boolean) => void }).setDisabled?.(true);
 				subItem.onClick(() => {
-					new Notice("两种标注对比将在后续版本开放");
+					void this.actionHandlers.openAnnotationCompareDualWindow?.();
 				});
 			});
 			dualWindowMenu.addItem((subItem) => {
@@ -589,11 +602,7 @@ export class EpubView extends ItemView {
 				if (this.flowMode === "scrolled") {
 					return;
 				}
-				this.flowMode = "scrolled";
-				this.layoutMode = "paginated";
-				this.updateFlowBtn();
-				this.updateLayoutBtn();
-				this.actionHandlers.setFlowMode?.("scrolled");
+				this.applyReaderDisplayModes({ flowMode: "scrolled" }, { broadcast: true });
 			});
 		});
 		subMenu.addItem((item) => {
@@ -604,10 +613,7 @@ export class EpubView extends ItemView {
 				if (this.flowMode === "paginated") {
 					return;
 				}
-				this.flowMode = "paginated";
-				this.updateFlowBtn();
-				this.updateLayoutBtn();
-				this.actionHandlers.setFlowMode?.("paginated");
+				this.applyReaderDisplayModes({ flowMode: "paginated" }, { broadcast: true });
 			});
 		});
 	}
@@ -1087,7 +1093,11 @@ export class EpubView extends ItemView {
 	}
 
 	getState(): unknown {
-		return { filePath: this.filePath, file: this.filePath };
+		return {
+			filePath: this.filePath,
+			file: this.filePath,
+			...(this.annotationCompare ? { annotationCompare: this.annotationCompare } : {}),
+		};
 	}
 
 	async setState(state: unknown, result: unknown): Promise<void> {
@@ -1098,6 +1108,9 @@ export class EpubView extends ItemView {
 				? (state as Record<string, unknown>)
 				: {};
 		const incomingPath = unknownPlainText(viewState.filePath || viewState.file).trim();
+		const incomingAnnotationCompare = normalizeEpubAnnotationCompareContext(viewState.annotationCompare);
+		const annotationCompareChanged =
+			JSON.stringify(incomingAnnotationCompare) !== JSON.stringify(this.annotationCompare);
 
 		const incomingPending = pendingLocateFromLegacyState({
 			pendingLocate:
@@ -1113,8 +1126,9 @@ export class EpubView extends ItemView {
 			this.pendingText = incomingPending.text || "";
 		}
 
-		if (incomingPath && incomingPath !== this.filePath) {
+		if (incomingPath && (incomingPath !== this.filePath || annotationCompareChanged)) {
 			this.filePath = incomingPath;
+			this.annotationCompare = incomingAnnotationCompare;
 			this.bookTitle = "";
 			this.chapterTitle = "";
 			this.hasReadingReferencePoint = false;
@@ -1126,6 +1140,7 @@ export class EpubView extends ItemView {
 			}
 		} else if (incomingPath && !this.component && this.isOpen) {
 			this.filePath = incomingPath;
+			this.annotationCompare = incomingAnnotationCompare;
 			this.refreshInlineToolbarVisibility();
 			this.refreshViewTitle();
 			await this.mountComponent();
@@ -1140,6 +1155,7 @@ export class EpubView extends ItemView {
 		this.toolbarHandlersReady = false;
 		this.contentEl.empty();
 		this.contentEl.addClass("weave-epub-view-content");
+		this.refreshAnnotationCompareChromeState();
 		this.ensureViewShell();
 		this.refreshViewTitle();
 		this.registerReaderKeyboardShortcuts();
@@ -1439,8 +1455,28 @@ export class EpubView extends ItemView {
 		if (!this.inlineToolbarEl) {
 			return;
 		}
-		const shouldShow = !Platform.isMobile && Boolean(this.filePath);
+		const shouldShow = this.shouldShowPrimaryReaderToolbar();
 		this.inlineToolbarEl.toggleClass("is-hidden", !shouldShow);
+	}
+
+	private refreshAnnotationCompareChromeState(): void {
+		const annotationCompare = normalizeEpubAnnotationCompareContext(this.annotationCompare);
+		const isCompare = Boolean(annotationCompare);
+		const isReadonly = annotationCompare?.paneRole === "readonly";
+		const targets = Array.from(
+			new Set(
+				[this.containerEl, this.contentEl, this.leaf?.view?.containerEl].filter(Boolean) as HTMLElement[]
+			)
+		);
+		for (const target of targets) {
+			target.toggleClass("weave-epub-annotation-compare-view", isCompare);
+			target.toggleClass("weave-epub-annotation-compare-readonly", isReadonly);
+			if (annotationCompare?.paneRole) {
+				target.dataset.weaveEpubAnnotationCompareRole = annotationCompare.paneRole;
+			} else {
+				delete target.dataset.weaveEpubAnnotationCompareRole;
+			}
+		}
 	}
 
 	private refreshAllActionButtons(): void {
@@ -1456,6 +1492,39 @@ export class EpubView extends ItemView {
 		this.updateCanvasBtn();
 		this.updateDirectionBtn();
 		this.updateDualWindowSwapBtn();
+		this.refreshHeaderToolbarVisibility();
+	}
+
+	private shouldShowPrimaryReaderToolbar(): boolean {
+		return shouldShowEpubReaderPrimaryToolbar({
+			filePath: this.filePath,
+			isMobile: Platform.isMobile,
+			annotationCompare: this.annotationCompare,
+		});
+	}
+
+	private refreshHeaderToolbarVisibility(): void {
+		this.refreshAnnotationCompareChromeState();
+		const shouldShow = this.shouldShowPrimaryReaderToolbar();
+		const buttons = [
+			this.sidebarBtn,
+			this.saveAsImageBtn,
+			this.screenshotBtn,
+			this.autoInsertBtn,
+			this.annotationNoteBtn,
+			this.annotationVersionsBtn,
+			this.bookmarkBtn,
+			this.readingReferenceBtn,
+			this.flowBtn,
+			this.layoutBtn,
+			this.paragraphModeBtn,
+			this.canvasDirBtn,
+			this.canvasBtn,
+			this.tutorialBtn,
+		];
+		for (const button of buttons) {
+			button?.toggleClass("epub-view-action-hidden", !shouldShow);
+		}
 	}
 
 	private applyActionButtonState(
@@ -1662,6 +1731,7 @@ export class EpubView extends ItemView {
 		return {
 			app: this.app,
 			filePath: this.filePath,
+			annotationCompare: this.annotationCompare,
 			onTitleChange: (title: string) => {
 				this.bookTitle = title;
 				this.refreshViewTitle();
@@ -1756,6 +1826,13 @@ export class EpubView extends ItemView {
 			window.removeEventListener(EPUB_DUAL_WINDOW_SESSION_EVENT, this.dualWindowSessionHandler);
 			this.dualWindowSessionHandler = null;
 		}
+		if (this.dualWindowReaderDisplayHandler) {
+			window.removeEventListener(
+				EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
+				this.dualWindowReaderDisplayHandler
+			);
+			this.dualWindowReaderDisplayHandler = null;
+		}
 		if (this.component) {
 			const { unmount } = await import("svelte");
 			try {
@@ -1809,19 +1886,30 @@ export class EpubView extends ItemView {
 	}
 
 	private setupDualWindowSessionTracking(): void {
-		if (this.dualWindowSessionHandler) {
+		if (!this.dualWindowSessionHandler) {
+			this.dualWindowSessionHandler = (event: Event) => {
+				const detail = (event as CustomEvent<EpubDualWindowSessionDetail>).detail || null;
+				const eventPath = normalizePath(String(detail?.filePath || "").trim());
+				const currentPath = normalizePath(String(this.filePath || "").trim());
+				if (!eventPath || !currentPath || eventPath !== currentPath) {
+					return;
+				}
+				this.updateDualWindowSwapBtn();
+			};
+			window.addEventListener(EPUB_DUAL_WINDOW_SESSION_EVENT, this.dualWindowSessionHandler);
+		}
+
+		if (this.dualWindowReaderDisplayHandler) {
 			return;
 		}
-		this.dualWindowSessionHandler = (event: Event) => {
-			const detail = (event as CustomEvent<EpubDualWindowSessionDetail>).detail || null;
-			const eventPath = normalizePath(String(detail?.filePath || "").trim());
-			const currentPath = normalizePath(String(this.filePath || "").trim());
-			if (!eventPath || !currentPath || eventPath !== currentPath) {
+		this.dualWindowReaderDisplayHandler = (event: Event) => {
+			const detail = normalizeEpubDualWindowReaderDisplayDetail((event as CustomEvent).detail);
+			if (!detail || detail.sourceId === this.readerDisplaySyncSourceId) {
 				return;
 			}
-			this.updateDualWindowSwapBtn();
+			this.applyDualWindowReaderDisplaySync(detail);
 		};
-		window.addEventListener(EPUB_DUAL_WINDOW_SESSION_EVENT, this.dualWindowSessionHandler);
+		window.addEventListener(EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT, this.dualWindowReaderDisplayHandler);
 	}
 
 	private checkLinkedCanvasTab(): void {
@@ -1952,31 +2040,124 @@ export class EpubView extends ItemView {
 		this.refreshViewTitle();
 	}
 
-	private toggleFlowMode(): void {
-		this.flowMode = this.flowMode === "scrolled" ? "paginated" : "scrolled";
-		if (this.flowMode === "scrolled") {
-			this.layoutMode = "paginated";
+	private applyReaderDisplayModes(
+		modes: {
+			flowMode?: EpubFlowMode;
+			layoutMode?: EpubLayoutMode;
+		},
+		options: { broadcast?: boolean } = {}
+	): void {
+		let nextFlowMode = modes.flowMode || this.flowMode;
+		let nextLayoutMode = modes.layoutMode || this.layoutMode;
+
+		if (Platform.isMobile) {
+			nextLayoutMode = "paginated";
 		}
+		if (nextFlowMode === "scrolled") {
+			nextLayoutMode = "paginated";
+		} else if (nextLayoutMode === "double") {
+			nextFlowMode = "paginated";
+		}
+
+		const patch: Partial<EpubReaderSettings> = {};
+		if (nextFlowMode !== this.flowMode) {
+			patch.flowMode = nextFlowMode;
+		}
+		if (nextLayoutMode !== this.layoutMode) {
+			patch.layoutMode = nextLayoutMode;
+			if (nextLayoutMode === "double") {
+				patch.widthMode = "fit";
+			}
+		}
+
+		this.flowMode = nextFlowMode;
+		this.layoutMode = nextLayoutMode;
 		this.updateFlowBtn();
 		this.updateLayoutBtn();
-		this.actionHandlers.setFlowMode?.(this.flowMode);
+
+		if (Object.keys(patch).length > 0) {
+			if (this.actionHandlers.updateReaderSettings) {
+				void this.actionHandlers.updateReaderSettings(patch);
+			} else {
+				if (patch.flowMode) {
+					this.actionHandlers.setFlowMode?.(nextFlowMode);
+				}
+				if (patch.layoutMode) {
+					this.actionHandlers.setLayoutMode?.(nextLayoutMode);
+				}
+			}
+		}
+
+		if (options.broadcast) {
+			this.broadcastDualWindowReaderDisplayModes({
+				flowMode: nextFlowMode,
+				layoutMode: nextLayoutMode,
+			});
+		}
+	}
+
+	private broadcastDualWindowReaderDisplayModes(modes: {
+		flowMode?: EpubFlowMode;
+		layoutMode?: EpubLayoutMode;
+	}): void {
+		const annotationCompare = normalizeEpubAnnotationCompareContext(this.annotationCompare);
+		if (!annotationCompare) {
+			return;
+		}
+		dispatchEpubDualWindowReaderDisplayEvent(window, {
+			sessionId: annotationCompare.sessionId,
+			filePath: this.filePath,
+			sourceId: this.readerDisplaySyncSourceId,
+			flowMode: modes.flowMode,
+			layoutMode: modes.layoutMode,
+		});
+	}
+
+	private applyDualWindowReaderDisplaySync(detail: EpubDualWindowReaderDisplayDetail): void {
+		const annotationCompare = normalizeEpubAnnotationCompareContext(this.annotationCompare);
+		const eventPath = normalizePath(String(detail.filePath || "").trim());
+		const currentPath = normalizePath(String(this.filePath || "").trim());
+		if (
+			!annotationCompare ||
+			annotationCompare.sessionId !== detail.sessionId ||
+			!eventPath ||
+			!currentPath ||
+			eventPath !== currentPath
+		) {
+			return;
+		}
+		this.applyReaderDisplayModes(
+			{
+				flowMode: detail.flowMode,
+				layoutMode: detail.layoutMode,
+			},
+			{ broadcast: false }
+		);
+	}
+
+	private toggleFlowMode(): void {
+		this.applyReaderDisplayModes(
+			{
+				flowMode: this.flowMode === "scrolled" ? "paginated" : "scrolled",
+			},
+			{ broadcast: true }
+		);
 	}
 
 	private cycleLayoutMode(): void {
 		if (Platform.isMobile) {
-			this.layoutMode = "paginated";
-			this.actionHandlers.setLayoutMode?.("paginated");
+			this.applyReaderDisplayModes({ layoutMode: "paginated" }, { broadcast: true });
 			return;
-		}
-		if (this.flowMode === "scrolled") {
-			this.flowMode = "paginated";
-			this.updateFlowBtn();
 		}
 		const modes: EpubLayoutMode[] = ["paginated", "double"];
 		const idx = modes.indexOf(this.layoutMode);
-		this.layoutMode = modes[(idx + 1) % modes.length];
-		this.updateLayoutBtn();
-		this.actionHandlers.setLayoutMode?.(this.layoutMode);
+		this.applyReaderDisplayModes(
+			{
+				flowMode: this.flowMode === "scrolled" ? "paginated" : this.flowMode,
+				layoutMode: modes[(idx + 1) % modes.length],
+			},
+			{ broadcast: true }
+		);
 	}
 
 	private toggleParagraphMode(): void {

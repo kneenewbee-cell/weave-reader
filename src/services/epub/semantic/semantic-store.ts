@@ -3,6 +3,7 @@ import { normalizePath } from "obsidian";
 import { DirectoryUtils } from "../../../utils/directory-utils";
 import {
 	readActiveEpubAnnotationVersionAnnotationsOrNull,
+	readEpubAnnotationVersionAnnotations,
 	writeActiveEpubAnnotationVersionAnnotations,
 } from "../epub-annotation-version-store";
 import * as semanticProfiles from "./profiles";
@@ -278,6 +279,22 @@ export async function readEffectiveEpubPortableAnnotations(
 		: current
 			? { ...current, bookId: safeBookId }
 			: emptyPayload;
+}
+
+export async function readEpubPortableAnnotationsForVersion(
+	app: App,
+	bookId: unknown,
+	versionId: unknown
+): Promise<EpubPortableAnnotationsPayload> {
+	const safeBookId = safeEpubSemanticBookId(bookId);
+	const payload = await readEpubAnnotationVersionAnnotations(app, safeBookId, versionId);
+	return normalizePortableAnnotationsPayload(payload, safeBookId) || {
+		format: "weave-reader-annotations/v1",
+		version: 1,
+		bookId: safeBookId,
+		updatedAt: 0,
+		annotations: [],
+	};
 }
 
 export async function readAndMaterializeEffectiveEpubPortableAnnotations(
