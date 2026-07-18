@@ -19,6 +19,7 @@
                 resolveEpubHost,
                 warmEpubAnnotationIndexForPaths,
                 type EpubPortableBookDataLocation,
+                type ImportEpubAnnotatedBookPackageResult,
         } from '../../services/epub';
         import { PremiumFeatureGuard } from '../../services/premium/PremiumFeatureGuard';
         import { getBookFormatDisplayLabel, isSupportedBookFile, stripSupportedBookExtension } from '../../services/epub/book-format';
@@ -80,6 +81,11 @@
         import { isVaultImageFile, resolveVaultImageResourceUrl } from '../../utils/vault-image-cover';
         import { copyTextToClipboard } from '../../utils/clipboard-copy';
         import { DirectoryUtils } from '../../utils/directory-utils';
+        import { shouldOfferOpenImportedBookAction } from '../modals/epub-annotated-book-package-import-result-options';
+        import {
+                appendEpubImportDiagnostic,
+                summarizeEpubImportResult,
+        } from '../../services/epub/epub-import-diagnostics';
 
         interface EpubFileInfo {
                 path: string;
@@ -1204,6 +1210,64 @@
                 return stripSupportedBookExtension(filePath.split('/').pop() || '') || t('epub.bookshelf.currentBook');
         }
 
+        async function showAnnotatedBookPackageImportResultModal(
+                result: ImportEpubAnnotatedBookPackageResult,
+                requestedContext?: ResolvedBookContext
+        ): Promise<void> {
+                const targetPath = normalizePath(result.bookPath || '');
+                const activePath = normalizePath(epubActiveDocumentStore.getActiveDocument() || '');
+                const shouldOfferOpenBook = shouldOfferOpenImportedBookAction({
+                        activeBookPath: activePath,
+                        targetBookPath: targetPath,
+                });
+                const requestedPath = requestedContext ? normalizePath(requestedContext.targetPath || '') : '';
+                const requestedTitle = requestedContext
+                        ? (requestedContext.metadata.title || getBookDisplayName(requestedPath))
+                        : '';
+                await appendEpubImportDiagnostic(app, 'bookshelf.modal.before-open', {
+                        activePath,
+                        targetPath,
+                        requestedPath,
+                        requestedTitle,
+                        shouldOfferOpenBook,
+                        result: summarizeEpubImportResult(result),
+                });
+                try {
+                        const { EpubAnnotatedBookPackageImportResultModal } = await import(
+                                '../modals/EpubAnnotatedBookPackageImportResultModal'
+                        );
+                        await appendEpubImportDiagnostic(app, 'bookshelf.modal.component-loaded', {
+                                targetPath,
+                        });
+                        new EpubAnnotatedBookPackageImportResultModal(app, {
+                                targetBookTitle: getBookDisplayName(targetPath),
+                                targetBookPath: targetPath,
+                                requestedBookTitle: requestedTitle,
+                                requestedBookPath: requestedPath,
+                                importedAnnotationCount: result.importedAnnotationCount,
+                                importedAnnotationVersionCount: result.importedAnnotationVersionCount,
+                                activeVersionId: result.activeVersionId,
+                                activatedImportedVersion: result.activatedImportedVersion,
+                                matchedExistingBook: result.matchedExistingBook,
+                                matchKind: result.matchKind,
+                                usedPreferredTarget: result.usedPreferredTarget,
+                                onOpenBook: shouldOfferOpenBook
+                                        ? () => openImportedBookFromModal(targetPath)
+                                        : undefined,
+                        }).open();
+                        await appendEpubImportDiagnostic(app, 'bookshelf.modal.opened', {
+                                targetPath,
+                                activeVersionId: result.activeVersionId,
+                        });
+                } catch (error) {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.modal.open-error', {
+                                targetPath,
+                                error,
+                        });
+                        throw error;
+                }
+        }
+
         async function resolveActiveBookPath(filePath: string): Promise<string | null> {
                 const normalizedPath = normalizePath(filePath || '');
                 if (!normalizedPath) {
@@ -1306,6 +1370,21 @@
                 } catch (error) {
                         logger.error('Failed to open EPUB:', error);
                 }
+        }
+
+        async function openImportedBookFromModal(filePath: string): Promise<void> {
+                const normalizedPath = normalizePath(filePath || '');
+                if (!normalizedPath) {
+                        return;
+                }
+
+                if (onSwitchBook) {
+                        await Promise.resolve(onClose?.());
+                        await Promise.resolve(onSwitchBook(normalizedPath));
+                        return;
+                }
+
+                await openBookInNewTab(normalizedPath);
         }
 
         async function removeBookFromShelf(filePath: string) {
@@ -1556,15 +1635,29 @@
         async function importAnnotatedBookPackageToShelf(
                 kind: BookshelfPackageImportKind
         ): Promise<void> {
+                await appendEpubImportDiagnostic(app, 'bookshelf.import-top.start', {
+                        kind,
+                });
                 const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
                 if (!arrayBuffer) {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-top.cancelled', {
+                                kind,
+                        });
                         return;
                 }
                 try {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-top.picked', {
+                                kind,
+                                arrayBufferBytes: arrayBuffer.byteLength,
+                        });
                         const result = await importEpubAnnotatedBookPackage(app, arrayBuffer, {
-                                defaultBookFolder: 'Books',
+                                defaultBookFolder: '/',
                                 requireBook: kind === 'annotated-book-package',
                                 activateImportedAnnotations: true,
+                        });
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-top.success', {
+                                kind,
+                                result: summarizeEpubImportResult(result),
                         });
                         await storageService.addBooksToBookshelf([result.bookPath]);
                         notifyEpubAnnotationVersionChanged(result.bookId, {
@@ -1574,11 +1667,16 @@
                         });
                         dispatchBookshelfDataChanged();
                         await refreshBookshelf();
-                        new Notice(t('epub.bookshelf.annotatedBookPackageImportSuccess', {
-                                count: result.importedAnnotationCount,
-                                version: result.activeVersionId,
-                        }));
+                        await showAnnotatedBookPackageImportResultModal(result);
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-top.modal-complete', {
+                                kind,
+                                result: summarizeEpubImportResult(result),
+                        });
                 } catch (error) {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-top.error', {
+                                kind,
+                                error,
+                        });
                         logger.error('Failed to import EPUB annotated book package:', error);
                         new Notice(t('epub.bookshelf.annotatedBookPackageImportFailed', {
                                 message: getPackageImportErrorMessage(error),
@@ -1590,13 +1688,30 @@
                 filePath: string,
                 kind: BookshelfPackageImportKind
         ): Promise<void> {
+                await appendEpubImportDiagnostic(app, 'bookshelf.import-book.start', {
+                        kind,
+                        requestedFilePath: normalizePath(filePath || ''),
+                });
                 const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
                 if (!arrayBuffer) {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-book.cancelled', {
+                                kind,
+                                requestedFilePath: normalizePath(filePath || ''),
+                        });
                         return;
                 }
                 try {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-book.picked', {
+                                kind,
+                                requestedFilePath: normalizePath(filePath || ''),
+                                arrayBufferBytes: arrayBuffer.byteLength,
+                        });
                         const context = await resolveBookContext(filePath);
                         if (!context) {
+                                await appendEpubImportDiagnostic(app, 'bookshelf.import-book.no-context', {
+                                        kind,
+                                        requestedFilePath: normalizePath(filePath || ''),
+                                });
                                 return;
                         }
                         const location = await resolvePortableBookDataLocationForBook(
@@ -1605,15 +1720,27 @@
                                 context.requestedPath
                         );
                         if (!location) {
+                                await appendEpubImportDiagnostic(app, 'bookshelf.import-book.no-data-location', {
+                                        kind,
+                                        requestedFilePath: normalizePath(filePath || ''),
+                                        targetPath: context.targetPath,
+                                });
                                 new Notice(t('epub.bookshelf.dataLocationUnavailable'));
                                 return;
                         }
                         const result = await importEpubAnnotatedBookPackage(app, arrayBuffer, {
                                 preferredBookId: location.bookId,
                                 targetBookPath: context.targetPath,
-                                defaultBookFolder: 'Books',
+                                defaultBookFolder: '/',
                                 requireBook: kind === 'annotated-book-package',
                                 activateImportedAnnotations: true,
+                        });
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-book.success', {
+                                kind,
+                                requestedFilePath: normalizePath(filePath || ''),
+                                targetPath: context.targetPath,
+                                preferredBookId: location.bookId,
+                                result: summarizeEpubImportResult(result),
                         });
                         await storageService.addBooksToBookshelf([result.bookPath]);
                         notifyEpubAnnotationVersionChanged(result.bookId, {
@@ -1623,11 +1750,17 @@
                         });
                         dispatchBookshelfDataChanged();
                         await refreshBookshelf();
-                        new Notice(t('epub.bookshelf.annotatedBookPackageImportSuccess', {
-                                count: result.importedAnnotationCount,
-                                version: result.activeVersionId,
-                        }));
+                        await showAnnotatedBookPackageImportResultModal(result, context);
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-book.modal-complete', {
+                                kind,
+                                result: summarizeEpubImportResult(result),
+                        });
                 } catch (error) {
+                        await appendEpubImportDiagnostic(app, 'bookshelf.import-book.error', {
+                                kind,
+                                requestedFilePath: normalizePath(filePath || ''),
+                                error,
+                        });
                         logger.error('Failed to import EPUB annotated book package:', error);
                         new Notice(t('epub.bookshelf.annotatedBookPackageImportFailed', {
                                 message: getPackageImportErrorMessage(error),

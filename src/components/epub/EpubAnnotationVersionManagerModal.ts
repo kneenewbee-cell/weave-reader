@@ -1,4 +1,4 @@
-import { App, Modal, Notice, setIcon } from "obsidian";
+import { App, Modal, Notice, normalizePath, setIcon } from "obsidian";
 import { copyTextToClipboard } from "../../utils/clipboard-copy";
 import {
 	createEpubAnnotatedBookPackage,
@@ -10,9 +10,18 @@ import {
 	notifyEpubAnnotationVersionChanged,
 	pickEpubAnnotatedBookPackageArrayBuffer,
 	renameEpubAnnotationVersion,
+	resolveEpubHost,
 	switchEpubAnnotationVersion,
 	type EpubAnnotationVersionSummary,
+	type ImportEpubAnnotatedBookPackageResult,
 } from "../../services/epub";
+import { stripSupportedBookExtension } from "../../services/epub/book-format";
+import {
+	appendEpubImportDiagnostic,
+	summarizeEpubImportResult,
+} from "../../services/epub/epub-import-diagnostics";
+import { epubActiveDocumentStore } from "../../stores/epub-active-document-store";
+import { shouldOfferOpenImportedBookAction } from "../modals/epub-annotated-book-package-import-result-options";
 
 export interface EpubAnnotationVersionManagerModalOptions {
 	bookTitle?: string;
@@ -183,31 +192,126 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 		}
 	}
 
+	private getImportResultBookTitle(filePath: string): string {
+		const normalizedPath = normalizePath(String(filePath || "").trim());
+		return (
+			stripSupportedBookExtension(normalizedPath.split("/").pop() || "") ||
+			normalizedPath ||
+			this.options.bookTitle ||
+			"当前书籍"
+		);
+	}
+
+	private async showAnnotatedBookPackageImportResultModal(
+		result: ImportEpubAnnotatedBookPackageResult,
+		requested: { title?: string; path?: string }
+	): Promise<void> {
+		const targetPath = normalizePath(String(result.bookPath || "").trim());
+		const activePath = normalizePath(String(epubActiveDocumentStore.getActiveDocument() || "").trim());
+		const shouldOfferOpenBook = shouldOfferOpenImportedBookAction({
+			activeBookPath: activePath,
+			targetBookPath: targetPath,
+		});
+		const host = resolveEpubHost(this.app);
+		const canOpenBook = shouldOfferOpenBook && typeof host?.openEpubReader === "function";
+		await appendEpubImportDiagnostic(this.app, "version-manager.modal.before-open", {
+			activePath,
+			targetPath,
+			requested,
+			shouldOfferOpenBook,
+			canOpenBook,
+			result: summarizeEpubImportResult(result),
+		});
+		try {
+			const { EpubAnnotatedBookPackageImportResultModal } = await import(
+				"../modals/EpubAnnotatedBookPackageImportResultModal"
+			);
+			await appendEpubImportDiagnostic(this.app, "version-manager.modal.component-loaded", {
+				targetPath,
+			});
+			new EpubAnnotatedBookPackageImportResultModal(this.app, {
+				targetBookTitle: this.getImportResultBookTitle(targetPath),
+				targetBookPath: targetPath,
+				requestedBookTitle: requested.title,
+				requestedBookPath: requested.path,
+				importedAnnotationCount: result.importedAnnotationCount,
+				importedAnnotationVersionCount: result.importedAnnotationVersionCount,
+				activeVersionId: result.activeVersionId,
+				activatedImportedVersion: result.activatedImportedVersion,
+				matchedExistingBook: result.matchedExistingBook,
+				matchKind: result.matchKind,
+				usedPreferredTarget: result.usedPreferredTarget,
+				onOpenBook: canOpenBook ? () => host?.openEpubReader?.(targetPath) : undefined,
+			}).open();
+			await appendEpubImportDiagnostic(this.app, "version-manager.modal.opened", {
+				targetPath,
+				activeVersionId: result.activeVersionId,
+			});
+		} catch (error) {
+			await appendEpubImportDiagnostic(this.app, "version-manager.modal.open-error", {
+				targetPath,
+				error,
+			});
+			throw error;
+		}
+	}
+
 	private async importAnnotatedBookPackage(bookId: string, filePath: string): Promise<void> {
+		await appendEpubImportDiagnostic(this.app, "version-manager.import.start", {
+			bookId,
+			filePath: normalizePath(String(filePath || "").trim()),
+		});
 		if (!bookId || !filePath) {
 			new Notice("当前书籍数据还没有准备好");
 			return;
 		}
 		const arrayBuffer = await pickEpubAnnotatedBookPackageArrayBuffer();
 		if (!arrayBuffer) {
+			await appendEpubImportDiagnostic(this.app, "version-manager.import.cancelled", {
+				bookId,
+				filePath: normalizePath(String(filePath || "").trim()),
+			});
 			return;
 		}
 		try {
+			await appendEpubImportDiagnostic(this.app, "version-manager.import.picked", {
+				bookId,
+				filePath: normalizePath(String(filePath || "").trim()),
+				arrayBufferBytes: arrayBuffer.byteLength,
+			});
 			const result = await importEpubAnnotatedBookPackage(this.app, arrayBuffer, {
 				preferredBookId: bookId,
 				targetBookPath: filePath,
 				activateImportedAnnotations: true,
+			});
+			await appendEpubImportDiagnostic(this.app, "version-manager.import.success", {
+				bookId,
+				filePath: normalizePath(String(filePath || "").trim()),
+				result: summarizeEpubImportResult(result),
 			});
 			notifyEpubAnnotationVersionChanged(result.bookId, {
 				reason: "import",
 				filePath: result.bookPath,
 				versionId: result.activeVersionId,
 			});
-			await this.notifyVersionChanged(
-				`已导入书籍标注包：${result.importedAnnotationCount} 条标注，当前版本 ${result.activeVersionId}`
-			);
+			await this.showAnnotatedBookPackageImportResultModal(result, {
+				title: this.options.bookTitle || filePath,
+				path: filePath,
+			});
+			if (this.options.onVersionChanged) {
+				await this.options.onVersionChanged();
+			}
 			await this.render();
+			await appendEpubImportDiagnostic(this.app, "version-manager.import.modal-complete", {
+				bookId,
+				result: summarizeEpubImportResult(result),
+			});
 		} catch (error) {
+			await appendEpubImportDiagnostic(this.app, "version-manager.import.error", {
+				bookId,
+				filePath: normalizePath(String(filePath || "").trim()),
+				error,
+			});
 			new Notice(`导入书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
 		}
 	}

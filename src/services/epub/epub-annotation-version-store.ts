@@ -120,6 +120,33 @@ async function readJson(app: App, filePath: string): Promise<unknown | null> {
 	}
 }
 
+async function resolveCanonicalEpubAnnotationBookId(app: App, bookId: unknown): Promise<string> {
+	const safeId = safeBookId(bookId);
+	const index = await readJson(app, normalizePath(`${EPUB_ANNOTATION_VERSION_DATA_ROOT}/index.json`));
+	if (!isRecord(index) || !isRecord(index.books)) {
+		return safeId;
+	}
+
+	for (const [rawBookId, rawBook] of Object.entries(index.books)) {
+		if (!isRecord(rawBook)) {
+			continue;
+		}
+		const canonicalId = safeBookId(rawBook.bookId || rawBookId);
+		const indexedId = safeBookId(rawBookId);
+		if (safeId === canonicalId || safeId === indexedId) {
+			return canonicalId;
+		}
+		const legacyBookIds = Array.isArray(rawBook.legacyBookIds)
+			? rawBook.legacyBookIds.map((value) => safeBookId(value))
+			: [];
+		if (legacyBookIds.includes(safeId)) {
+			return canonicalId;
+		}
+	}
+
+	return safeId;
+}
+
 async function writeJson(app: App, filePath: string, value: unknown): Promise<void> {
 	const adapter = getAdapter(app);
 	if (!adapter || typeof adapter.write !== "function") {
@@ -293,7 +320,7 @@ export async function ensureActiveEpubAnnotationVersion(
 	app: App,
 	bookId: unknown
 ): Promise<ActiveAnnotationVersionPayload> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const activePath = bookPath(safeId, "active-version.json");
 	const existingActive = normalizeActiveVersionPayload(await readJson(app, activePath), safeId);
 	const activeVersionId = existingActive?.activeVersionId || DEFAULT_VERSION_ID;
@@ -327,7 +354,7 @@ export async function readActiveEpubAnnotationVersionAnnotations(
 	app: App,
 	bookId: unknown
 ): Promise<PortableAnnotationsPayload> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const active = normalizeActiveVersionPayload(
 		await readJson(app, bookPath(safeId, "active-version.json")),
 		safeId
@@ -349,7 +376,7 @@ export async function readActiveEpubAnnotationVersionAnnotationsOrNull(
 	app: App,
 	bookId: unknown
 ): Promise<PortableAnnotationsPayload | null> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const active = normalizeActiveVersionPayload(
 		await readJson(app, bookPath(safeId, "active-version.json")),
 		safeId
@@ -372,7 +399,7 @@ export async function writeActiveEpubAnnotationVersionAnnotations(
 	bookId: unknown,
 	payload: PortableAnnotationsPayload
 ): Promise<PortableAnnotationsPayload> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const active = await ensureActiveEpubAnnotationVersion(app, safeId);
 	const next: PortableAnnotationsPayload = {
 		format: ANNOTATIONS_FORMAT,
@@ -439,7 +466,7 @@ export async function createEpubAnnotationVersion(
 		source?: string;
 	} = {}
 ): Promise<EpubAnnotationVersionSummary> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	await ensureActiveEpubAnnotationVersion(app, safeId);
 	const versionId = await getUniqueVersionId(app, safeId, name || "version");
 	const timestamp = now();
@@ -485,7 +512,7 @@ export async function switchEpubAnnotationVersion(
 	bookId: unknown,
 	versionId: unknown
 ): Promise<ActiveAnnotationVersionPayload> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const safeVersionId = safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
 	await ensureVersionMetadata(app, safeId, safeVersionId);
 	let payload = await readVersionAnnotations(app, safeId, safeVersionId);
@@ -509,7 +536,7 @@ export async function listEpubAnnotationVersions(
 	app: App,
 	bookId: unknown
 ): Promise<EpubAnnotationVersionSummary[]> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const active = await ensureActiveEpubAnnotationVersion(app, safeId);
 	const versions: EpubAnnotationVersionSummary[] = [];
 	for (const versionId of await listVersionIds(app, safeId)) {
@@ -541,7 +568,7 @@ export async function renameEpubAnnotationVersion(
 	versionId: unknown,
 	name: string
 ): Promise<boolean> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const safeVersionId = safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
 	const metadata = await readVersionMetadata(app, safeId, safeVersionId);
 	if (!metadata) {
@@ -560,7 +587,7 @@ export async function deleteEpubAnnotationVersion(
 	bookId: unknown,
 	versionId: unknown
 ): Promise<boolean> {
-	const safeId = safeBookId(bookId);
+	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const safeVersionId = safeEpubAnnotationVersionId(versionId);
 	if (!safeVersionId || safeVersionId === DEFAULT_VERSION_ID) {
 		return false;

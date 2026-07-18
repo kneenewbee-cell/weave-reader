@@ -97,6 +97,7 @@ export {
 	downloadEpubAnnotatedBookPackage,
 	importEpubAnnotatedBookPackage,
 	pickEpubAnnotatedBookPackageArrayBuffer,
+	type EpubAnnotatedBookPackageMatchKind,
 	type EpubAnnotatedBookPackageResult,
 	type ImportEpubAnnotatedBookPackageResult,
 } from "./epub-portable-book-package";

@@ -6,7 +6,14 @@ import { domInstanceOf } from "./utils/dom-instance-of";
 import { EpubDataManagementModalObsidian } from "./components/epub/EpubDataManagementModalObsidian";
 import { DEFAULT_EPUB_BOOKMARK_FOLDER } from "./config/epub-user-vault-folders";
 import { DirectoryUtils } from "./utils/directory-utils";
-import { isSupportedBookFile, isSupportedBookPath } from "./services/epub/book-format";
+import { isSupportedBookFile, isSupportedBookPath, stripSupportedBookExtension } from "./services/epub/book-format";
+import { epubActiveDocumentStore } from "./stores/epub-active-document-store";
+import { shouldOfferOpenImportedBookAction } from "./components/modals/epub-annotated-book-package-import-result-options";
+import {
+	appendEpubImportDiagnostic,
+	registerEpubImportNoticeDiagnostics,
+	summarizeEpubImportResult,
+} from "./services/epub/epub-import-diagnostics";
 import {
 	dispatchEpubBookshelfDataChanged,
 	dispatchEpubBookshelfFullRefresh,
@@ -320,7 +327,13 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		input: EpubAnnotatedBookPackageImportInput
 	): Promise<ImportEpubAnnotatedBookPackageResult> {
 		const { arrayBuffer, notify = true, ...options } = input;
+		await appendEpubImportDiagnostic(this.app, "main.host-import.start", {
+			arrayBufferBytes: arrayBuffer.byteLength,
+			notify,
+			options,
+		});
 		const result = await importPortableEpubAnnotatedBookPackage(this.app, arrayBuffer, options);
+		await this.getEpubStorageService().addBooksToBookshelf([result.bookPath]);
 		dispatchEpubBookshelfDataChanged(undefined, { bookPaths: [result.bookPath] });
 		dispatchEpubBookshelfFullRefresh(undefined, { showNotice: false });
 		if (notify) {
@@ -330,6 +343,10 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 				versionId: result.activeVersionId,
 			});
 		}
+		await appendEpubImportDiagnostic(this.app, "main.host-import.result", {
+			notify,
+			result: summarizeEpubImportResult(result),
+		});
 		return result;
 	}
 
@@ -802,8 +819,18 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 	}
 
 	async onload(): Promise<void> {
+		await appendEpubImportDiagnostic(this.app, "plugin.onload", {
+			id: this.manifest.id,
+			version: this.manifest.version,
+			phase: "start",
+		});
 		await this.loadSettings();
 		await vaultStorage.initialize(this.app);
+		await appendEpubImportDiagnostic(this.app, "plugin.onload.after-storage", {
+			id: this.manifest.id,
+			version: this.manifest.version,
+		});
+		registerEpubImportNoticeDiagnostics(this.app, (cleanup) => this.register(cleanup));
 		initI18n(this.settings.interfaceLanguage);
 		licenseManager.initializeCloud(this.app);
 		registerEpubHost(this.app, this);
@@ -935,6 +962,68 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 		);
 	}
 
+	private getEpubImportResultBookTitle(filePath: string): string {
+		const normalizedPath = normalizePath(String(filePath || "").trim());
+		const file = normalizedPath ? this.app.vault.getAbstractFileByPath(normalizedPath) : null;
+		if (file instanceof TFile) {
+			return file.basename || normalizedPath;
+		}
+		return stripSupportedBookExtension(normalizedPath.split("/").pop() || "") || normalizedPath || "当前书籍";
+	}
+
+	private async showEpubAnnotatedBookPackageImportResultModal(
+		result: ImportEpubAnnotatedBookPackageResult,
+		requested?: { title?: string; path?: string }
+	): Promise<void> {
+		const targetPath = normalizePath(String(result.bookPath || "").trim());
+		const activePath = normalizePath(String(epubActiveDocumentStore.getActiveDocument() || "").trim());
+		const shouldOfferOpenBook = shouldOfferOpenImportedBookAction({
+			activeBookPath: activePath,
+			targetBookPath: targetPath,
+		});
+		await appendEpubImportDiagnostic(this.app, "main.modal.before-open", {
+			activePath,
+			targetPath,
+			shouldOfferOpenBook,
+			requested,
+			result: summarizeEpubImportResult(result),
+		});
+		try {
+			const { EpubAnnotatedBookPackageImportResultModal } = await import(
+				"./components/modals/EpubAnnotatedBookPackageImportResultModal"
+			);
+			await appendEpubImportDiagnostic(this.app, "main.modal.component-loaded", {
+				targetPath,
+			});
+			new EpubAnnotatedBookPackageImportResultModal(this.app, {
+				targetBookTitle: this.getEpubImportResultBookTitle(targetPath),
+				targetBookPath: targetPath,
+				requestedBookTitle: requested?.title,
+				requestedBookPath: requested?.path,
+				importedAnnotationCount: result.importedAnnotationCount,
+				importedAnnotationVersionCount: result.importedAnnotationVersionCount,
+				activeVersionId: result.activeVersionId,
+				activatedImportedVersion: result.activatedImportedVersion,
+				matchedExistingBook: result.matchedExistingBook,
+				matchKind: result.matchKind,
+				usedPreferredTarget: result.usedPreferredTarget,
+				onOpenBook: shouldOfferOpenBook
+					? () => this.openEpubReader(targetPath)
+					: undefined,
+			}).open();
+			await appendEpubImportDiagnostic(this.app, "main.modal.opened", {
+				targetPath,
+				activeVersionId: result.activeVersionId,
+			});
+		} catch (error) {
+			await appendEpubImportDiagnostic(this.app, "main.modal.open-error", {
+				targetPath,
+				error,
+			});
+			throw error;
+		}
+	}
+
 	private async resolveAnnotatedBookPackageBookId(
 		input: EpubAnnotatedBookPackageExportInput
 	): Promise<string> {
@@ -969,18 +1058,26 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 	private async importEpubAnnotatedBookPackageFromPicker(): Promise<void> {
 		const arrayBuffer = await pickPortableEpubAnnotatedBookPackageArrayBuffer();
 		if (!arrayBuffer) {
+			await appendEpubImportDiagnostic(this.app, "main.import-picker.cancelled");
 			return;
 		}
 		try {
+			await appendEpubImportDiagnostic(this.app, "main.import-picker.picked", {
+				arrayBufferBytes: arrayBuffer.byteLength,
+			});
 			const result = await this.importEpubAnnotatedBookPackage({
 				arrayBuffer,
-				defaultBookFolder: "Books",
+				defaultBookFolder: "/",
 				activateImportedAnnotations: true,
 			});
-			new Notice(
-				`已导入书籍标注包：${result.importedAnnotationCount} 条标注，当前版本 ${result.activeVersionId}`
-			);
+			await appendEpubImportDiagnostic(this.app, "main.import-picker.success", {
+				result: summarizeEpubImportResult(result),
+			});
+			await this.showEpubAnnotatedBookPackageImportResultModal(result);
 		} catch (error) {
+			await appendEpubImportDiagnostic(this.app, "main.import-picker.error", {
+				error,
+			});
 			logger.error("[StandaloneEpubPlugin] Failed to import annotated book package:", error);
 			new Notice(`导入书籍标注包失败：${error instanceof Error ? error.message : String(error)}`);
 		}

@@ -17,6 +17,7 @@ const PLUGIN_ID = resolveHotReloadPluginId(process.env);
 function resolveTargetDirs() {
 	const targets = new Set();
 	targets.add(DIST_DIR);
+	targets.add(PROJECT_ROOT);
 
 	const pluginDir = resolvePluginDir(PLUGIN_ID, process.env);
 	if (pluginDir) {

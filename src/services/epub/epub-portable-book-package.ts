@@ -19,6 +19,11 @@ import {
 	computeAvailableEpubFingerprints,
 	type PartialEpubFingerprints,
 } from "./epub-fingerprints";
+import { getBookExtensionFromPath, isSupportedBookPath } from "./book-format";
+import {
+	appendEpubImportDiagnostic,
+	summarizeEpubImportResult,
+} from "./epub-import-diagnostics";
 
 export const EPUB_ANNOTATED_BOOK_PACKAGE_FORMAT =
 	"weave-reader-annotated-book-package/v1";
@@ -50,6 +55,8 @@ export interface ImportEpubAnnotatedBookPackageResult {
 	bookPath: string;
 	importedDataDir: string;
 	matchedExistingBook: boolean;
+	matchKind: EpubAnnotatedBookPackageMatchKind;
+	usedPreferredTarget: boolean;
 	importedAnnotationVersionCount: number;
 	importedAnnotationCount: number;
 	importedVersionIds: string[];
@@ -71,11 +78,21 @@ interface EpubAnnotatedBookPackageManifest {
 	title?: string;
 }
 
+type EpubFingerprintMatchKind =
+	| "fileFingerprint"
+	| "packageFingerprint"
+	| "contentFingerprint";
+
+export type EpubAnnotatedBookPackageMatchKind =
+	| EpubFingerprintMatchKind
+	| "preferred-fallback"
+	| "new-book";
+
 interface ExistingPortableBookMatch {
 	bookId: string;
 	filePath?: string;
 	fingerprints: PartialEpubFingerprints;
-	matchKind: EpubFingerprintMatchKind | "preferred-fallback";
+	matchKind: EpubAnnotatedBookPackageMatchKind;
 }
 
 interface PortableBookCandidate {
@@ -83,11 +100,6 @@ interface PortableBookCandidate {
 	filePath?: string;
 	fingerprints: PartialEpubFingerprints;
 }
-
-type EpubFingerprintMatchKind =
-	| "fileFingerprint"
-	| "packageFingerprint"
-	| "contentFingerprint";
 
 const FINGERPRINT_MATCH_ORDER: EpubFingerprintMatchKind[] = [
 	"fileFingerprint",
@@ -199,11 +211,70 @@ function applyFingerprintsToRecord(
 
 function sanitizeFileName(value: unknown, fallback: string): string {
 	const raw = cleanString(value) || fallback;
-	return raw
+	const sanitized = raw
 		.replace(/[\\/:*?"<>|\r\n\t]+/g, "-")
 		.replace(/\s+/g, " ")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 120) || fallback;
+		.replace(/^-+|-+$/g, "") || fallback;
+	if (sanitized.length <= 120) {
+		return sanitized;
+	}
+	const extension = getFileNameExtensionToPreserve(sanitized);
+	if (!extension) {
+		return sanitized.slice(0, 120) || fallback;
+	}
+	const maxBaseLength = Math.max(1, 120 - extension.length);
+	const baseName =
+		sanitized
+			.slice(0, -extension.length)
+			.slice(0, maxBaseLength)
+			.replace(/[-.\s]+$/g, "") || "book";
+	return `${baseName}${extension}`;
+}
+
+function getFileNameExtensionToPreserve(fileName: string): string {
+	const normalized = String(fileName || "").trim();
+	if (/\.fb2\.zip$/i.test(normalized)) {
+		return normalized.slice(-".fb2.zip".length);
+	}
+	const match = normalized.match(/\.[A-Za-z0-9]{1,12}$/);
+	return match?.[0] || "";
+}
+
+function getSupportedBookExtensionSuffixFromPath(filePath: unknown): string {
+	const normalized = cleanString(filePath);
+	if (!isSupportedBookPath(normalized)) {
+		return "";
+	}
+	if (/\.fb2\.zip$/i.test(normalized)) {
+		return ".fb2.zip";
+	}
+	const extension = getBookExtensionFromPath(normalized);
+	return extension ? `.${extension}` : "";
+}
+
+function ensureBookFileNameExtension(fileName: string, ...extensionHints: unknown[]): string {
+	const normalized = cleanString(fileName);
+	if (!normalized || isSupportedBookPath(normalized)) {
+		return normalized;
+	}
+	const extension = extensionHints
+		.map((hint) => getSupportedBookExtensionSuffixFromPath(hint))
+		.find(Boolean);
+	return extension ? `${normalized}${extension}` : normalized;
+}
+
+function getReusableExistingBookPath(
+	existingMatch: ExistingPortableBookMatch | null,
+	hasEmbeddedBook: boolean
+): string {
+	const existingPath = existingMatch?.filePath ? normalizePath(existingMatch.filePath) : "";
+	if (!existingPath) {
+		return "";
+	}
+	if (!hasEmbeddedBook || isSupportedBookPath(existingPath)) {
+		return existingPath;
+	}
+	return "";
 }
 
 function getFileNameFromPath(filePath: string): string {
@@ -683,6 +754,16 @@ export async function importEpubAnnotatedBookPackage(
 	arrayBuffer: ArrayBuffer,
 	options: ImportEpubAnnotatedBookPackageOptions = {}
 ): Promise<ImportEpubAnnotatedBookPackageResult> {
+	await appendEpubImportDiagnostic(app, "service.import.start", {
+		arrayBufferBytes: arrayBuffer.byteLength,
+		options: {
+			defaultBookFolder: options.defaultBookFolder,
+			targetBookPath: options.targetBookPath ? normalizePath(options.targetBookPath) : options.targetBookPath,
+			preferredBookId: options.preferredBookId,
+			requireBook: options.requireBook,
+			activateImportedAnnotations: options.activateImportedAnnotations,
+		},
+	});
 	const zip = await JSZip.loadAsync(arrayBuffer);
 	const manifest = normalizeManifest(parseJsonText(await zip.file("manifest.json")?.async("string") || null));
 	if (!manifest) {
@@ -725,18 +806,28 @@ export async function importEpubAnnotatedBookPackage(
 			manifest.bookId
 	);
 	const matchedExistingBook = Boolean(existingMatch?.bookId || fallbackToPreferredBook);
-	const bookFileName = sanitizeFileName(
+	const rawBookFileName = sanitizeFileName(
 		bookEntry ? normalizePath(bookEntry.name).split("/").pop() : manifest.bookFileName,
 		manifest.bookFileName || "book.epub"
+	);
+	const packageBookFilePath = isRecord(packageBookJson) ? packageBookJson.filePath : "";
+	const bookFileName = ensureBookFileNameExtension(
+		rawBookFileName,
+		bookEntry ? normalizePath(bookEntry.name).split("/").pop() : "",
+		manifest.bookPath,
+		packageBookFilePath,
+		manifest.bookFileName
 	);
 	const preferredTargetPath =
 		canUsePreferredTarget && targetBookId === preferredBookId
 			? normalizePath(options.targetBookPath || "")
 			: "";
+	const usedPreferredTarget = Boolean(preferredTargetPath);
+	const reusableExistingBookPath = getReusableExistingBookPath(existingMatch, Boolean(bookEntry));
 	const bookPath =
 		preferredTargetPath ||
-		(matchedExistingBook && existingMatch?.filePath ? normalizePath(existingMatch.filePath) : "") ||
-		(await generateUniqueVaultFilePath(app, options.defaultBookFolder || "Books", bookFileName));
+		(matchedExistingBook ? reusableExistingBookPath : "") ||
+		(await generateUniqueVaultFilePath(app, options.defaultBookFolder || "/", bookFileName));
 	const targetFingerprints =
 		matchedExistingBook && existingMatch
 			? mergeFingerprints(existingMatch.fingerprints, packageFingerprints)
@@ -868,11 +959,13 @@ export async function importEpubAnnotatedBookPackage(
 		await ensureActiveEpubAnnotationVersion(app, targetBookId);
 	}
 	const active = await ensureActiveEpubAnnotationVersion(app, targetBookId);
-	return {
+	const result = {
 		bookId: targetBookId,
 		bookPath,
 		importedDataDir: bookDir,
 		matchedExistingBook,
+		matchKind: existingMatch?.matchKind || (fallbackToPreferredBook ? "preferred-fallback" : "new-book"),
+		usedPreferredTarget,
 		importedAnnotationVersionCount: importedVersionIds.length,
 		importedAnnotationCount,
 		importedVersionIds,
@@ -882,6 +975,8 @@ export async function importEpubAnnotatedBookPackage(
 			Boolean(mappedActiveVersionId) &&
 			active.activeVersionId === mappedActiveVersionId,
 	};
+	await appendEpubImportDiagnostic(app, "service.import.result", summarizeEpubImportResult(result));
+	return result;
 }
 
 export function downloadEpubAnnotatedBookPackage(result: EpubAnnotatedBookPackageResult): void {

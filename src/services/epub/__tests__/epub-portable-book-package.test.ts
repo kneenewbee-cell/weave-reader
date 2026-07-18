@@ -178,6 +178,38 @@ describe("epub-portable-book-package", () => {
 		expect(result.fileName).toMatch(/^Demo.*\.zip$/);
 	});
 
+	it("preserves the EPUB extension when exporting a package for a long book filename", async () => {
+		const bookId = "epub-book-long-export";
+		const longBookFileName = `${"Long Practical LaTeX Cookbook ".repeat(8)}Second Edition.epub`;
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app } = createAppHarness({
+			binaries: {
+				[longBookFileName]: toArrayBuffer("long-export-epub"),
+			},
+			files: {
+				[`${root}/book.json`]: JSON.stringify({
+					format: "weave-reader-book/v1",
+					version: 1,
+					bookId,
+					filePath: longBookFileName,
+					title: "Long Export",
+				}),
+			},
+		});
+
+		const result = await createEpubAnnotatedBookPackage(app, {
+			bookId,
+			filePath: longBookFileName,
+		});
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const bookEntryName = Object.keys(zip.files).find((path) => normalizePath(path).startsWith("book/"));
+		const manifest = JSON.parse((await zip.file("manifest.json")?.async("string")) || "{}");
+
+		expect(bookEntryName).toMatch(/\.epub$/);
+		expect(manifest.bookFileName).toMatch(/\.epub$/);
+		await expect(zip.file(bookEntryName || "")?.async("string")).resolves.toBe("long-export-epub");
+	});
+
 	it("exports computed file, package, and content fingerprints into the package manifest and book metadata", async () => {
 		const bookId = "epub-book-fingerprinted";
 		const root = `weave/epub-data/books/${bookId}`;
@@ -350,6 +382,164 @@ describe("epub-portable-book-package", () => {
 					sourceFingerprint: "fingerprint-imported",
 				},
 			},
+		});
+	});
+
+	it("imports an embedded book package into the vault root by default and preserves the extension", async () => {
+		const bookId = "epub-book-root-import";
+		const longBookFileName = `${"Long Practical LaTeX Cookbook ".repeat(8)}Second Edition.epub`;
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId,
+				bookFileName: longBookFileName,
+				exportedAt: 1,
+				fileFingerprint: "root-import-file",
+			}),
+		);
+		zip.file(`book/${longBookFileName}`, "root-import-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId,
+				filePath: `Books/${longBookFileName}`,
+				title: "Root Import",
+				fileFingerprint: "root-import-file",
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app, files, binaries } = createAppHarness({});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			requireBook: true,
+		});
+
+		expect(result.bookPath).not.toMatch(/^Books\//);
+		expect(result.bookPath).toMatch(/\.epub$/);
+		expect(result.bookPath).not.toContain("/");
+		expect(new TextDecoder().decode(binaries.get(result.bookPath))).toBe("root-import-epub");
+		expect(readJson(files, `weave/epub-data/books/${bookId}/book.json`)).toMatchObject({
+			bookId,
+			filePath: result.bookPath,
+		});
+		expect(readJson(files, "weave/epub-data/index.json").books[bookId]).toMatchObject({
+			bookId,
+			filePath: result.bookPath,
+		});
+	});
+
+	it("infers the embedded book extension from manifest paths when the zip entry name was truncated", async () => {
+		const bookId = "epub-book-truncated-entry";
+		const truncatedBookFileName = "LaTeX Cookbook _ Over 100 Practical, Ready-to-use LaTeX -- Packt Pub";
+		const originalBookPath = `${truncatedBookFileName}lishing Limited.epub`;
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId,
+				bookFileName: truncatedBookFileName,
+				bookPath: originalBookPath,
+				exportedAt: 1,
+				fileFingerprint: "truncated-entry-file",
+			}),
+		);
+		zip.file(`book/${truncatedBookFileName}`, "truncated-entry-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId,
+				filePath: originalBookPath,
+				title: "Truncated Entry",
+				fileFingerprint: "truncated-entry-file",
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app, files, binaries } = createAppHarness({});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			requireBook: true,
+		});
+
+		expect(result.bookPath).toBe(`${truncatedBookFileName}.epub`);
+		expect(new TextDecoder().decode(binaries.get(result.bookPath))).toBe("truncated-entry-epub");
+		expect(readJson(files, `weave/epub-data/books/${bookId}/book.json`)).toMatchObject({
+			bookId,
+			filePath: result.bookPath,
+		});
+	});
+
+	it("replaces a stale extensionless Books path when importing an embedded book package", async () => {
+		const bookId = "epub-book-stale-path";
+		const badPath = "Books/Long Practical LaTeX Cookbook Without Extension";
+		const longBookFileName = `${"Long Practical LaTeX Cookbook ".repeat(8)}Second Edition.epub`;
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId,
+				bookFileName: longBookFileName,
+				exportedAt: 1,
+				fileFingerprint: "same-stale-file",
+			}),
+		);
+		zip.file(`book/${longBookFileName}`, "stale-path-epub");
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId,
+				filePath: badPath,
+				title: "Stale Path",
+				fileFingerprint: "same-stale-file",
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app, files, binaries } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[bookId]: {
+							bookId,
+							filePath: badPath,
+							knownPaths: [badPath],
+							fileFingerprint: "same-stale-file",
+						},
+					},
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			requireBook: true,
+		});
+
+		expect(result.bookId).toBe(bookId);
+		expect(result.matchedExistingBook).toBe(true);
+		expect(result.bookPath).not.toBe(badPath);
+		expect(result.bookPath).not.toMatch(/^Books\//);
+		expect(result.bookPath).toMatch(/\.epub$/);
+		expect(new TextDecoder().decode(binaries.get(result.bookPath))).toBe("stale-path-epub");
+		expect(readJson(files, `weave/epub-data/books/${bookId}/book.json`)).toMatchObject({
+			bookId,
+			filePath: result.bookPath,
+		});
+		expect(readJson(files, "weave/epub-data/index.json").books[bookId]).toMatchObject({
+			bookId,
+			filePath: result.bookPath,
 		});
 	});
 
@@ -662,6 +852,8 @@ describe("epub-portable-book-package", () => {
 		expect(result.bookId).toBe(preferredBookId);
 		expect(result.bookPath).toBe("Books/Preferred.epub");
 		expect(result.matchedExistingBook).toBe(true);
+		expect(result.matchKind).toBe("contentFingerprint");
+		expect(result.usedPreferredTarget).toBe(true);
 	});
 
 	it("does not attach a mismatched right-clicked path to a fingerprint-matched book", async () => {
@@ -742,6 +934,8 @@ describe("epub-portable-book-package", () => {
 
 		expect(result.bookId).toBe(preferredBookId);
 		expect(result.bookPath).toBe("Books/Imported.epub");
+		expect(result.matchKind).toBe("fileFingerprint");
+		expect(result.usedPreferredTarget).toBe(false);
 		expect(readJson(files, "weave/epub-data/index.json").books[preferredBookId]).toMatchObject({
 			filePath: "Books/Imported.epub",
 			knownPaths: ["Books/Imported.epub"],
@@ -832,6 +1026,8 @@ describe("epub-portable-book-package", () => {
 		expect(result.bookId).toBe(fileBookId);
 		expect(result.bookPath).toBe("Books/File.epub");
 		expect(result.matchedExistingBook).toBe(true);
+		expect(result.matchKind).toBe("fileFingerprint");
+		expect(result.usedPreferredTarget).toBe(false);
 	});
 
 	it("imports annotations for an existing same-fingerprint book as a new version without clobbering current annotations", async () => {

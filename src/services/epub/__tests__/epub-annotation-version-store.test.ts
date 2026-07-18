@@ -153,6 +153,51 @@ describe("epub-annotation-version-store", () => {
 		});
 	});
 
+	it("redirects legacy book ids to the canonical indexed book id before materializing versions", async () => {
+		const canonicalBookId = "epub-book-rv441q";
+		const legacyBookId = "epub-book-i6zqes";
+		const canonicalRoot = `weave/epub-data/books/${canonicalBookId}`;
+		const legacyRoot = `weave/epub-data/books/${legacyBookId}`;
+		const { app, files } = createAppHarness({
+			"weave/epub-data/index.json": {
+				format: "weave-reader-epub-data-index/v1",
+				version: 1,
+				books: {
+					[canonicalBookId]: {
+						bookId: canonicalBookId,
+						title: "LaTeX Beginner's Guide",
+						legacyBookIds: [legacyBookId],
+					},
+				},
+			},
+			[`${canonicalRoot}/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: canonicalBookId,
+				updatedAt: 10,
+				authoritative: true,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "canonical-note" }],
+			},
+		});
+
+		await expect(ensureActiveEpubAnnotationVersion(app, legacyBookId)).resolves.toMatchObject({
+			bookId: canonicalBookId,
+			activeVersionId: "default",
+		});
+
+		expect(readJson(files, `${canonicalRoot}/active-version.json`)).toMatchObject({
+			bookId: canonicalBookId,
+			activeVersionId: "default",
+		});
+		expect(readJson(files, `${canonicalRoot}/versions/default/annotations.json`)).toMatchObject({
+			bookId: canonicalBookId,
+			annotations: [{ semanticId: "canonical-note" }],
+		});
+		expect(files.has(`${legacyRoot}/active-version.json`)).toBe(false);
+		expect(files.has(`${legacyRoot}/annotations.json`)).toBe(false);
+		expect(files.has(`${legacyRoot}/versions/default/annotations.json`)).toBe(false);
+	});
+
 	it("switches active versions and mirrors the active annotations to the legacy root file", async () => {
 		const bookId = "epub-book-demo";
 		const root = `weave/epub-data/books/${bookId}`;

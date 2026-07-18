@@ -24,7 +24,7 @@ const DEFAULT_RUNTIME_ASSET_EXTENSIONS = new Set([
 	".woff2",
 ]);
 const DEFAULT_RUNTIME_ASSET_DIRS = new Set(["assets"]);
-const DEFAULT_PRUNABLE_RUNTIME_DIRS = new Set(["assets", "src"]);
+const DEFAULT_PRUNABLE_RUNTIME_DIRS = new Set(["assets"]);
 const DEFAULT_PRUNABLE_RUNTIME_FILES = new Set([
 	"main.js",
 	"main.js.map",
