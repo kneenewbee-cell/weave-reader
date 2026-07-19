@@ -4,6 +4,12 @@ vi.mock('obsidian', async () => {
   return await vi.importActual<typeof import('../../tests/mocks/obsidian')>('../../tests/mocks/obsidian');
 });
 
+vi.mock('../../views/EpubView', () => ({ VIEW_TYPE_EPUB: 'epub' }));
+vi.mock('../../views/EpubSidebarView', () => ({ VIEW_TYPE_EPUB_SIDEBAR: 'epub-sidebar' }));
+vi.mock('../../views/EpubBookshelfSidebarView', () => ({
+  VIEW_TYPE_EPUB_BOOKSHELF_SIDEBAR: 'epub-bookshelf-sidebar',
+}));
+
 import EpubHighlightToolbar from './EpubHighlightToolbar.svelte';
 import type { EpubReaderEngine, EpubSemanticSettings, HighlightClickInfo } from '../../services/epub';
 
@@ -56,6 +62,15 @@ function createSemanticSettings(): EpubSemanticSettings {
         style: 'highlight',
         group: 'study',
         description: '定义',
+        active: true,
+      },
+      {
+        id: 'method',
+        label: 'method',
+        color: 'green',
+        style: 'wavy',
+        group: 'study',
+        description: 'method',
         active: true,
       },
     ],
@@ -147,10 +162,16 @@ describe('EpubHighlightToolbar', () => {
     expect(semanticRow?.closest('.highlight-actions-shell')).toBeNull();
     const definitionButton = container.querySelector('[data-semantic-id="definition"]') as HTMLButtonElement;
     expect(definitionButton).toHaveClass('weave-epub-semantic-chip');
+    expect(definitionButton).toHaveAttribute('data-semantic-style', 'highlight');
     expect(definitionButton).toHaveAttribute(
       'style',
       expect.stringContaining('--weave-semantic-color:')
     );
+    expect(definitionButton.querySelector('.weave-epub-semantic-dot')).toBeInTheDocument();
+    expect(definitionButton.querySelector('.weave-epub-semantic-label')).toHaveTextContent('定义');
+
+    const methodButton = container.querySelector('[data-semantic-id="method"]') as HTMLButtonElement;
+    expect(methodButton).toHaveAttribute('data-semantic-style', 'wavy');
 
     await fireEvent.click(definitionButton);
 

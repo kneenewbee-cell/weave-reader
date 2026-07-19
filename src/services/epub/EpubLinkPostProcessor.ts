@@ -284,6 +284,7 @@ function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void
 			bookId,
 			filePath,
 			cfiRange: line.dataset.cfiRange,
+			chapterIndex: line.dataset.chapterIndex,
 			annotationId: line.dataset.annotationId,
 			semanticId: line.dataset.semanticId,
 			text: line.dataset.annotationText,

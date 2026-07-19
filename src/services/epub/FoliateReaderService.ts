@@ -9,6 +9,7 @@ import type {
 	ReaderAppearanceOptions,
 	ReaderFootnotePreviewInfo,
 	ReaderFrame,
+	ReaderHighlightFocusPreviewOptions,
 	ReaderHighlight,
 	ReaderHighlightInput,
 	ReaderHighlightSegment,
@@ -357,6 +358,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private temporaryHighlightTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 	private sourceLocateFocusByCfiKey = new Map<string, { color: string; cfiRange: string }>();
 	private sourceLocateFocusTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
+	private sourceLocateFocusEpoch = 0;
 	private temporarilyRevealedConcealmentTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 	private documentFootnoteCleanups = new Map<Document, () => void>();
 	private documentSelectionCleanups = new Map<Document, () => void>();
@@ -1699,9 +1701,35 @@ export class FoliateReaderService implements EpubReaderEngine {
 		void this.addResolvedHighlight({ ...highlight, temporary: true }, durationMs);
 	}
 
-	previewHighlightFocus(cfiRange: string, color = "cyan", durationMs = 1200): void {
-		this.setSourceLocateFocus(cfiRange, color, durationMs);
+	previewHighlightFocus(
+		cfiRange: string,
+		color = "cyan",
+		durationMs = 1200,
+		options?: string | ReaderHighlightFocusPreviewOptions
+	): void {
+		const trimmedCfiRange = String(cfiRange || "").trim();
+		if (!trimmedCfiRange) {
+			return;
+		}
+		const previewOptions = this.normalizeHighlightFocusPreviewOptions(options);
+		const focusEpoch = this.sourceLocateFocusEpoch;
+		this.setSourceLocateFocus(trimmedCfiRange, color, durationMs);
 		void this.refreshHighlights();
+		void this.resolveSourceLocateFocusAnchorCfi(
+			trimmedCfiRange,
+			previewOptions
+		).then((resolvedCfiRange) => {
+			if (
+				!resolvedCfiRange ||
+				this.sourceLocateFocusEpoch !== focusEpoch ||
+				this.normalizeSourceLocateFocusCfiKey(resolvedCfiRange) ===
+					this.normalizeSourceLocateFocusCfiKey(trimmedCfiRange)
+			) {
+				return;
+			}
+			this.setSourceLocateFocus(resolvedCfiRange, color, durationMs);
+			void this.refreshHighlights();
+		});
 	}
 
 	clearHighlightFocus(cfiRange?: string): void {
@@ -7003,6 +7031,41 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.temporaryHighlightTimers.clear();
 	}
 
+	private normalizeHighlightFocusPreviewOptions(
+		options?: string | ReaderHighlightFocusPreviewOptions
+	): ReaderHighlightFocusPreviewOptions {
+		if (typeof options === "string") {
+			return { textHint: options.trim() };
+		}
+		const chapterIndex =
+			typeof options?.chapterIndex === "number" && Number.isFinite(options.chapterIndex)
+				? options.chapterIndex
+				: undefined;
+		return {
+			textHint: String(options?.textHint || "").trim(),
+			...(chapterIndex !== undefined ? { chapterIndex } : {}),
+		};
+	}
+
+	private async resolveSourceLocateFocusAnchorCfi(
+		cfiRange: string,
+		options: ReaderHighlightFocusPreviewOptions
+	): Promise<string | null> {
+		try {
+			const textHint = String(options.textHint || "").trim();
+			return await this.resolveHighlightAnchorCfiSafe({
+				cfiRange,
+				color: "cyan",
+				text: textHint,
+				...(typeof options.chapterIndex === "number"
+					? { chapterIndex: options.chapterIndex }
+					: {}),
+			} as ReaderHighlight);
+		} catch {
+			return null;
+		}
+	}
+
 	private resetSourceLocateFocusTimers(): void {
 		for (const timer of this.sourceLocateFocusTimers.values()) {
 			window.clearTimeout(timer);
@@ -7015,6 +7078,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	}
 
 	private clearSourceLocateFocus(): boolean {
+		this.sourceLocateFocusEpoch += 1;
 		if (this.sourceLocateFocusByCfiKey.size === 0) {
 			return false;
 		}
@@ -7024,6 +7088,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	}
 
 	private clearSourceLocateFocusForCfi(cfiRange: string): boolean {
+		this.sourceLocateFocusEpoch += 1;
 		const cfiKey = this.normalizeSourceLocateFocusCfiKey(cfiRange);
 		if (!cfiKey) {
 			return false;

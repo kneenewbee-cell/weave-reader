@@ -1738,6 +1738,35 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("anchors annotation-note hover previews to the canonical text range", async () => {
+		vi.useFakeTimers();
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const noteCfiRange = "epubcfi(/6/2!/4/2,/1:0,/1:9)";
+			const canonicalCfiRange = "epubcfi(/6/2!/4/2/1:0,/1:18)";
+			vi.spyOn((service as any).parser, "canonicalizeLocation").mockResolvedValue(
+				canonicalCfiRange
+			);
+
+			(service as any).previewHighlightFocus(
+				noteCfiRange,
+				"cyan",
+				1200,
+				"Saved excerpt quote"
+			);
+
+			await vi.waitFor(() => {
+				expect((service as any).collectSourceLocateOverlayAnchorCfis()).toEqual([
+					noteCfiRange,
+					canonicalCfiRange,
+				]);
+			});
+		} finally {
+			vi.useRealTimers();
+			service.destroy();
+		}
+	});
+
 	it("still flashes a temporary highlight when navigating to a location without a saved excerpt", async () => {
 		vi.useFakeTimers();
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);

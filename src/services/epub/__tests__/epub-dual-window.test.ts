@@ -334,6 +334,15 @@ describe("epub-dual-window", () => {
 			semanticId: "important",
 			text: "Demo text",
 		});
+		expect(
+			createEpubDualWindowAnnotationDetail({
+				phase: "enter",
+				bookId: "epub-book-demo",
+				filePath: "Books/demo.epub",
+				cfiRange: "epubcfi(/6/2)",
+				chapterIndex: "4" as unknown as number,
+			})?.chapterIndex
+		).toBe(4);
 	});
 
 	it("does not dispatch incomplete annotation events", () => {

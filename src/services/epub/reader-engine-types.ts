@@ -47,6 +47,11 @@ export interface ReaderNavigationRectOptions extends ReaderNavigateOptions {
 	allowFallback?: boolean;
 }
 
+export interface ReaderHighlightFocusPreviewOptions {
+	textHint?: string;
+	chapterIndex?: number;
+}
+
 export interface ReaderViewportRect {
 	top: number;
 	left: number;
@@ -362,7 +367,12 @@ export interface EpubReaderEngine {
 	refreshHighlights?(): Promise<void>;
 	addHighlight(highlight: ReaderHighlight): void;
 	addTemporaryHighlight(highlight: ReaderHighlightInput, durationMs?: number): void;
-	previewHighlightFocus(cfiRange: string, color?: string, durationMs?: number): void;
+	previewHighlightFocus(
+		cfiRange: string,
+		color?: string,
+		durationMs?: number,
+		options?: string | ReaderHighlightFocusPreviewOptions
+	): void;
 	clearHighlightFocus(cfiRange?: string): void;
 	temporarilyRevealConcealedText?(cfiRange: string, durationMs?: number): void;
 	removeHighlight(cfiRange: string): void;

@@ -191,9 +191,9 @@
 .epub-highlight-toolbar .highlight-semantic-picker-row {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 3px;
+	gap: 1px;
 	justify-content: flex-start;
-	width: 100%;
+	width: max-content;
 	max-width: min(520px, calc(100vw - 24px));
 	padding: 0;
 	overflow: visible;
@@ -270,29 +270,34 @@
 	white-space: nowrap;
 	vertical-align: middle;
 	background: transparent;
-	color: var(--weave-semantic-color, var(--text-normal));
+	color: var(--text-normal);
 	cursor: pointer;
+	position: relative;
 }
 
 .epub-highlight-toolbar .action-item.weave-epub-semantic-chip:hover,
 .epub-highlight-toolbar .action-item.weave-epub-semantic-chip:focus-visible,
 .epub-highlight-toolbar .action-item.weave-epub-semantic-chip:active {
-	color: var(--weave-semantic-color, var(--text-normal));
+	color: var(--text-normal);
 	background: var(--background-modifier-hover);
 }
 
 .epub-highlight-toolbar .action-item.weave-epub-semantic-chip.accent {
-	color: var(--weave-semantic-color, var(--text-normal));
+	color: var(--text-normal);
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--weave-semantic-color, var(--interactive-accent)) 72%, transparent);
 }
 
-.epub-highlight-toolbar .weave-epub-semantic-chip .action-label {
-	display: inline-flex;
-	align-items: center;
-	line-height: 1;
+.epub-highlight-toolbar .weave-epub-semantic-chip .weave-epub-semantic-label {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	color: var(--weave-semantic-color, currentColor);
+	clip: rect(0, 0, 0, 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
 }
 
 .epub-highlight-toolbar .weave-epub-semantic-dot {
@@ -300,35 +305,101 @@
 	align-items: center;
 	justify-content: center;
 	position: relative;
-	width: 16px;
-	height: 16px;
-	flex: 0 0 16px;
+	width: 24px;
+	height: 18px;
+	flex: 0 0 24px;
 	background: transparent;
 	box-shadow: none;
+	transition: transform 0.12s ease, filter 0.12s ease;
 }
 
 .epub-highlight-toolbar .weave-epub-semantic-dot::before {
 	content: "";
 	display: block;
-	width: 12px;
+	width: 20px;
 	height: 12px;
-	border-radius: 999px;
+	border-radius: 4px;
 	background: var(--weave-semantic-color, #ffe58a);
 	box-shadow:
 		0 0 0 1px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 65%, var(--background-modifier-border)),
 		0 2px 6px rgba(0, 0, 0, 0.16);
+	transition: box-shadow 0.12s ease;
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-dot::after {
+	content: "";
+	display: none;
+	position: absolute;
+	left: 1px;
+	right: 1px;
+	top: 50%;
+	height: 3px;
+	border-radius: 999px;
+	background: var(--weave-semantic-color, #ffe58a);
+	transform: translateY(-50%);
+	transition: box-shadow 0.12s ease;
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip:hover .weave-epub-semantic-dot,
+.epub-highlight-toolbar .weave-epub-semantic-chip:focus-visible .weave-epub-semantic-dot {
+	filter: drop-shadow(0 0 7px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 74%, transparent));
+	transform: scale(1.14);
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip:hover .weave-epub-semantic-dot::before,
+.epub-highlight-toolbar .weave-epub-semantic-chip:focus-visible .weave-epub-semantic-dot::before {
+	box-shadow:
+		0 0 0 1px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 82%, var(--background-modifier-border)),
+		0 0 10px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 48%, transparent);
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="underline"]:hover .weave-epub-semantic-dot::after,
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="underline"]:focus-visible .weave-epub-semantic-dot::after,
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="strikethrough"]:hover .weave-epub-semantic-dot::after,
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="strikethrough"]:focus-visible .weave-epub-semantic-dot::after {
+	box-shadow: 0 0 10px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 68%, transparent);
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="underline"] .weave-epub-semantic-dot::before,
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="strikethrough"] .weave-epub-semantic-dot::before {
+	width: 24px;
+	height: 12px;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="underline"] .weave-epub-semantic-dot::after,
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="strikethrough"] .weave-epub-semantic-dot::after {
+	display: block;
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="underline"] .weave-epub-semantic-dot::after {
+	top: auto;
+	bottom: 4px;
+	transform: none;
+}
+
+.epub-highlight-toolbar .weave-epub-semantic-chip[data-semantic-style="wavy"] .weave-epub-semantic-dot::before {
+	width: 24px;
+	height: 10px;
+	border-radius: 0;
+	background: var(--weave-semantic-color, #ffe58a);
+	box-shadow: none;
+	-webkit-mask: url("data:image/svg+xml,%3Csvg width='24' height='10' viewBox='0 0 24 10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 6 C3 2 5 2 7 6 S11 10 13 6 S17 2 19 6 S22 10 23 6' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+	mask: url("data:image/svg+xml,%3Csvg width='24' height='10' viewBox='0 0 24 10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 6 C3 2 5 2 7 6 S11 10 13 6 S17 2 19 6 S22 10 23 6' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .epub-reader-root[data-reader-ui-mode="standard"] .epub-highlight-toolbar .weave-epub-standard-semantic-btn {
 	height: 40px;
 	min-width: auto;
-	padding-inline: 7px;
-	gap: 3px;
+	padding-inline: 5px;
+	gap: 0;
 }
 
 .epub-reader-root[data-reader-ui-mode="expert"] .epub-highlight-toolbar .weave-epub-expert-semantic-row .weave-epub-semantic-chip {
 	min-width: auto;
-	padding-inline: 8px;
+	padding-inline: 4px;
 }
 
 .epub-annotation-disambiguation-menu {

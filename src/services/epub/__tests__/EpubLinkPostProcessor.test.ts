@@ -426,6 +426,7 @@ describe('EpubLinkPostProcessor', () => {
 			lateLine.className = 'weave-annotation-note-line';
 			lateLine.dataset.annotationId = 'anno-late';
 			lateLine.dataset.cfiRange = 'epubcfi(/6/4)';
+			lateLine.dataset.chapterIndex = '3';
 			lateLine.dataset.semanticId = 'method';
 			lateLine.dataset.annotationText = 'late annotation';
 			lateLine.textContent = 'late';
@@ -438,6 +439,7 @@ describe('EpubLinkPostProcessor', () => {
 				bookId: 'book-1',
 				filePath: 'Books/demo.epub',
 				cfiRange: 'epubcfi(/6/4)',
+				chapterIndex: 3,
 				annotationId: 'anno-late',
 				semanticId: 'method',
 				text: 'late annotation',

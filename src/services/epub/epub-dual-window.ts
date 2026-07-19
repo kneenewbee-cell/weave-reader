@@ -57,6 +57,7 @@ export interface EpubDualWindowAnnotationDetail {
 	bookId: string;
 	filePath: string;
 	cfiRange: string;
+	chapterIndex?: number;
 	annotationId?: string;
 	semanticId?: string;
 	text?: string;
@@ -86,6 +87,18 @@ export interface EpubAnnotationCompareExitPlan<T> {
 
 function cleanString(value: unknown): string {
 	return String(value || "").trim();
+}
+
+function cleanFiniteNumber(value: unknown): number | null {
+	if (typeof value === "number") {
+		return Number.isFinite(value) ? value : null;
+	}
+	const stringValue = cleanString(value);
+	if (!stringValue) {
+		return null;
+	}
+	const numberValue = Number(stringValue);
+	return Number.isFinite(numberValue) ? numberValue : null;
 }
 
 export function shouldRemountEpubReaderForStateChange(
@@ -292,6 +305,7 @@ export function createEpubDualWindowAnnotationDetail(
 	const filePath = cleanString(input.filePath);
 	const cfiRange = cleanString(input.cfiRange);
 	const phase = cleanString(input.phase) as EpubDualWindowAnnotationPhase;
+	const chapterIndex = cleanFiniteNumber(input.chapterIndex);
 	if (!bookId || !filePath || !cfiRange || !["enter", "leave", "click"].includes(phase)) {
 		return null;
 	}
@@ -301,6 +315,7 @@ export function createEpubDualWindowAnnotationDetail(
 		bookId,
 		filePath,
 		cfiRange,
+		...(chapterIndex !== null ? { chapterIndex } : {}),
 		...(cleanString(input.annotationId) ? { annotationId: cleanString(input.annotationId) } : {}),
 		...(cleanString(input.semanticId) ? { semanticId: cleanString(input.semanticId) } : {}),
 		...(cleanString(input.text) ? { text: cleanString(input.text) } : {}),

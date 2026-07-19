@@ -7029,17 +7029,26 @@
 			if (!cfiRange || !readerReady) {
 				return;
 			}
+			const annotationText = String(detail.text || '').trim();
+			const chapterIndex =
+				typeof detail.chapterIndex === 'number' && Number.isFinite(detail.chapterIndex)
+					? detail.chapterIndex
+					: undefined;
 			if (detail.phase === 'leave') {
-				readerService.clearHighlightFocus(cfiRange);
+				readerService.clearHighlightFocus();
 				return;
 			}
 			readerService.previewHighlightFocus(
 				cfiRange,
 				'cyan',
-				detail.phase === 'click' ? 2400 : 10000
+				detail.phase === 'click' ? 2400 : 10000,
+				{
+					textHint: annotationText,
+					...(chapterIndex !== undefined ? { chapterIndex } : {}),
+				}
 			);
 			if (detail.phase === 'click') {
-				navigateToCfi(cfiRange, String(detail.text || '').trim());
+				navigateToCfi(cfiRange, annotationText);
 			}
 		};
 		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, handleDualWindowAnnotation);

@@ -360,6 +360,16 @@
 		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow;
 	}
 
+	function getSemanticPreviewStyle(semantic: EpubAnnotationSemantic): string {
+		return normalizeAnnotationStyle(semantic.style);
+	}
+
+	function getSemanticTitle(semantic: EpubAnnotationSemantic): string {
+		const label = String(semantic.label || semantic.id || '').trim();
+		const description = String(semantic.description || '').trim();
+		return description && description !== label ? `${label} - ${description}` : label || description;
+	}
+
 	function buildSemanticFields(semantic?: EpubAnnotationSemantic) {
 		if (!semantic?.id) {
 			return {};
@@ -961,50 +971,26 @@
 	bind:this={toolbarEl}
 >
 	<div class="selection-main-row">
-		{#if showExpertControls && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
-			<div class="selection-top-row">
-				{#if expertSemantics.length > 0}
-					<div class="toolbar-row weave-epub-expert-semantic-row">
-						{#each expertSemantics as semantic (semantic.id)}
-							<button
-								class="clickable-icon action-item weave-epub-semantic-chip"
-								data-semantic-id={semantic.id}
-								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
-								onclick={() => handleSemanticHighlight(semantic)}
-								title={semantic.description || semantic.label}
-								aria-label={semantic.label}
-							>
-								<span class="action-icon weave-epub-semantic-dot"></span>
-								<span class="action-label">{semantic.label}</span>
-							</button>
-						{/each}
-					</div>
-				{/if}
-				<div class="toolbar-row colors-row selection-color-row selection-primary-row">
-					<button class="color-btn yellow" onclick={() => handleHighlight('yellow')} aria-label={t('epub.selectionToolbar.highlightYellow')} title={t('epub.selectionToolbar.highlightYellow')}><span class="color-btn-core"></span></button>
-					<button class="color-btn blue" onclick={() => handleHighlight('blue')} aria-label={t('epub.selectionToolbar.highlightBlue')} title={t('epub.selectionToolbar.highlightBlue')}><span class="color-btn-core"></span></button>
-					<button class="color-btn red" onclick={() => handleHighlight('red')} aria-label={t('epub.selectionToolbar.highlightRed')} title={t('epub.selectionToolbar.highlightRed')}><span class="color-btn-core"></span></button>
-					<button class="color-btn purple" onclick={() => handleHighlight('purple')} aria-label={t('epub.selectionToolbar.highlightPurple')} title={t('epub.selectionToolbar.highlightPurple')}><span class="color-btn-core"></span></button>
-					<button class="color-btn green" onclick={() => handleHighlight('green')} aria-label={t('epub.selectionToolbar.highlightGreen')} title={t('epub.selectionToolbar.highlightGreen')}><span class="color-btn-core"></span></button>
-				</div>
-
-					<div class="selection-style-shell">
-						<div class="toolbar-row selection-style-row">
-							<button class="clickable-icon action-item icon-only style-action-item" onclick={() => handleHighlight('yellow', 'underline')} title={t('epub.selectionToolbar.underline')} aria-label={t('epub.selectionToolbar.underline')}>
-								<span class="action-icon style-icon underline-style-icon" use:icon={'underline'}></span>
-							</button>
-							<button class="clickable-icon action-item icon-only style-action-item" onclick={() => handleHighlight('yellow', 'strikethrough')} title={t('epub.selectionToolbar.strikethrough')} aria-label={t('epub.selectionToolbar.strikethrough')}>
-								<span class="action-icon style-icon strikethrough-style-icon" use:icon={'strikethrough'}></span>
-							</button>
-							<button class="clickable-icon action-item icon-only style-action-item" onclick={() => handleHighlight('yellow', 'wavy')} title={t('epub.selectionToolbar.wavy')} aria-label={t('epub.selectionToolbar.wavy')}>
-								<span class="action-icon style-icon wavy-style-icon" use:icon={'pen-tool'}></span>
-							</button>
-						</div>
-					</div>
-			</div>
-		{/if}
-
 		<div class="selection-actions-shell">
+			{#if showExpertControls && (canUseExcerptNotes || canPreviewLockedExcerptFeature()) && expertSemantics.length > 0}
+				<div class="toolbar-row weave-epub-expert-semantic-row" aria-label="Semantic annotations">
+					{#each expertSemantics as semantic (semantic.id)}
+						<button
+							class="clickable-icon action-item weave-epub-semantic-chip"
+							data-semantic-id={semantic.id}
+							data-semantic-style={getSemanticPreviewStyle(semantic)}
+							style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
+							onclick={() => handleSemanticHighlight(semantic)}
+							title={getSemanticTitle(semantic)}
+							aria-label={semantic.label || semantic.id}
+						>
+							<span class="action-icon weave-epub-semantic-dot"></span>
+							<span class="action-label weave-epub-semantic-label">{semantic.label}</span>
+						</button>
+					{/each}
+				</div>
+				<div class="selection-actions-divider"></div>
+			{/if}
 			<div class="toolbar-row actions-row selection-actions-row">
 				{#if showStandardHighlight && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
 					<button class="clickable-icon action-item weave-epub-standard-highlight-btn" onclick={() => handleHighlight('yellow')} title={t('epub.selectionToolbar.highlight')} aria-label={t('epub.selectionToolbar.highlight')}>
@@ -1015,13 +1001,14 @@
 						<button
 							class="clickable-icon action-item weave-epub-standard-semantic-btn weave-epub-semantic-chip"
 							data-semantic-id={semantic.id}
+							data-semantic-style={getSemanticPreviewStyle(semantic)}
 							style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
 							onclick={() => handleSemanticHighlight(semantic)}
-							title={semantic.description || semantic.label}
-							aria-label={semantic.label}
+							title={getSemanticTitle(semantic)}
+							aria-label={semantic.label || semantic.id}
 						>
 							<span class="action-icon weave-epub-semantic-dot"></span>
-							<span class="action-label">{semantic.label}</span>
+							<span class="action-label weave-epub-semantic-label">{semantic.label}</span>
 						</button>
 					{/each}
 				{/if}

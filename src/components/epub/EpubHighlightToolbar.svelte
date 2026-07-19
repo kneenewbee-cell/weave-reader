@@ -4,6 +4,7 @@
 	import { tr } from '../../utils/i18n';
 	import {
 		activeSemanticEntries,
+		normalizeAnnotationStyle,
 		SEMANTIC_COLOR_HEX,
 	} from '../../services/epub';
 	import type {
@@ -193,6 +194,16 @@
 		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}
 
+	function getSemanticPreviewStyle(semantic: EpubAnnotationSemantic): string {
+		return normalizeAnnotationStyle(semantic.style);
+	}
+
+	function getSemanticTitle(semantic: EpubAnnotationSemantic): string {
+		const label = String(semantic.label || semantic.id || '').trim();
+		const description = String(semantic.description || '').trim();
+		return description && description !== label ? `${label} - ${description}` : label || description;
+	}
+
 	function handleSemanticClick(targetInfo: HighlightClickInfo, semantic: EpubAnnotationSemantic) {
 		semanticPickerOpen = false;
 		onChangeSemantic(targetInfo, semantic);
@@ -279,13 +290,14 @@
 								class:weave-epub-standard-semantic-btn={readerUiMode !== 'expert'}
 								class:accent={semantic.id === info.semanticId}
 								data-semantic-id={semantic.id}
+								data-semantic-style={getSemanticPreviewStyle(semantic)}
 								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
-								title={semantic.description || semantic.label}
-								aria-label={semantic.label}
+								title={getSemanticTitle(semantic)}
+								aria-label={semantic.label || semantic.id}
 								onclick={() => handleSemanticClick(info, semantic)}
 							>
 								<span class="action-icon weave-epub-semantic-dot"></span>
-								<span class="action-label">{semantic.label}</span>
+								<span class="action-label weave-epub-semantic-label">{semantic.label}</span>
 							</button>
 						{/each}
 					</div>
