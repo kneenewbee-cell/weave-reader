@@ -43,6 +43,7 @@
 		onChapterChange?: (title: string) => void;
 		onReaderReady?: () => void;
 		onRenderError?: (message: string) => void;
+		highlightRefreshKey?: number;
 		renderKey?: number;
 	}
 
@@ -70,6 +71,7 @@
 		onChapterChange,
 		onReaderReady: onReaderReadyProp,
 		onRenderError: onRenderErrorProp,
+		highlightRefreshKey = 0,
 		renderKey = 0,
 	}: Props = $props();
 
@@ -367,6 +369,19 @@
 		await loadSavedHighlights();
 	}
 
+	function getHighlightCollectionKey(): string {
+		return [
+			canUseExcerptNotes ? 'notes' : 'none',
+			String(annotationBookId || book?.id || '').trim(),
+			String(annotationVersionId || '').trim(),
+			String(highlightRefreshKey || 0),
+		].join('\0');
+	}
+
+	function isStaleHighlightCollection(expectedKey: string): boolean {
+		return viewDisposed || expectedKey !== getHighlightCollectionKey();
+	}
+
 	interface ContainerRect {
 		width: number;
 		height: number;
@@ -541,7 +556,8 @@
 
 		try {
 			// Start collecting highlights in parallel with rendering
-			const highlightPromise = collectAllHighlights();
+			const highlightCollectionKey = getHighlightCollectionKey();
+			const highlightPromise = collectAllHighlights(highlightCollectionKey);
 			const stableRect = await waitForStableContainer();
 			if (isStaleRender(renderToken)) {
 				return;
@@ -606,6 +622,8 @@
 			}
 			if (!canUseExcerptNotes) {
 				await readerService.applyHighlights([]);
+			} else if (allHighlights === null) {
+				logger.debug('[EpubReaderView] Skipped stale pre-collected highlights after external refresh.');
 			} else if (allHighlights.length > 0) {
 				await readerService.applyHighlights(allHighlights);
 			} else {
@@ -679,7 +697,7 @@
 		});
 	}
 
-	async function collectAllHighlights(): Promise<ReaderHighlight[]> {
+	async function collectAllHighlights(expectedKey = getHighlightCollectionKey()): Promise<ReaderHighlight[] | null> {
 		if (!canUseExcerptNotes) return [];
 		if (!book) return [];
 		try {
@@ -693,6 +711,9 @@
 					{ annotationVersionId: requestedVersionId }
 				)
 				: await annotationService.collectAllHighlights(targetBookId, filePath, backlinkService);
+			if (isStaleHighlightCollection(expectedKey)) {
+				return null;
+			}
 			logger.debug('[EpubReaderView] total highlights to apply:', allHighlights.length);
 			return allHighlights;
 		} catch (e) {
@@ -718,7 +739,7 @@
 		retryTimer = window.setTimeout(async () => {
 			retryTimer = null;
 			const retried = await collectAllHighlights();
-			if (retried.length > 0) {
+			if (retried && retried.length > 0) {
 				await readerService.applyHighlights(retried);
 			}
 		}, 1200);
@@ -758,6 +779,9 @@
 
 	async function loadSavedHighlights() {
 		const allHighlights = await collectAllHighlights();
+		if (allHighlights === null) {
+			return;
+		}
 		await readerService.applyHighlights(allHighlights);
 	}
 

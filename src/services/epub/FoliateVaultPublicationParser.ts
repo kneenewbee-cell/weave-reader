@@ -268,6 +268,8 @@ type MarkdownExportContext = {
 export interface FoliatePublicationLoadOptions {
 	/** IR 导入等场景只需目录，跳过章节正文扫描与封面提取。 */
 	tocOnly?: boolean;
+	/** Reader first-paint can defer cover extraction because covers are not needed to render text. */
+	skipCoverImage?: boolean;
 }
 
 export class FoliateVaultPublicationParser {
@@ -412,10 +414,16 @@ export class FoliateVaultPublicationParser {
 			fileName: this.fileName,
 			book: this.currentBook,
 			tocItems: this.tocItems,
-			coverImage: (await this.extractCoverDataUrl()) || undefined,
+			coverImage: options?.skipCoverImage
+				? undefined
+				: (await this.extractCoverDataUrl()) || undefined,
 			metadata: this.metadata,
 			totalPositions: this.totalPositions,
 		};
+	}
+
+	async loadCoverImage(): Promise<string | null> {
+		return this.extractCoverDataUrl();
 	}
 
 	getBook(): FoliateBook {
@@ -427,6 +435,10 @@ export class FoliateVaultPublicationParser {
 
 	getTocItems(): TocItem[] {
 		return this.tocItems;
+	}
+
+	async hydrateTocPageNumbersForCurrentBook(): Promise<void> {
+		await this.hydrateTocPageNumbers();
 	}
 
 	getMetadata(): FoliateLoadedPublication["metadata"] {
@@ -1422,6 +1434,17 @@ export class FoliateVaultPublicationParser {
 			: null;
 		if (!range && doc && root && normalizedTextHint) {
 			range = this.findRangeByTextQuote(root, { highlight: normalizedTextHint });
+		}
+		const normalizedCfiTarget = this.stripCfiAssertions(this.normalizeLocationString(cfi));
+		const isSectionEntryTarget = !normalizedCfiTarget.includes("!");
+		if (!range && !normalizedTextHint && !isSectionEntryTarget) {
+			return {
+				cfi: this.getSectionEntryCfi(resolved.index),
+				index: resolved.index,
+				href: this.getSectionHrefByIndex(resolved.index),
+				doc,
+				range: null,
+			};
 		}
 		if (!range && doc) {
 			range = this.createDocumentStartRange(doc);

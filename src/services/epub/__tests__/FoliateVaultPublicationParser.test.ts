@@ -202,6 +202,51 @@ describe("FoliateVaultPublicationParser", () => {
     }
   });
 
+  it("can skip cover extraction during first-paint publication loading", async () => {
+    const binary = await createSampleCbzBuffer();
+    const parser = new FoliateVaultPublicationParser(
+      createMockApp(binary, "Books/sample.cbz") as any
+    );
+    const parserAny = parser as any;
+    const fakeBook = {
+      metadata: {
+        title: "Sample CBZ",
+        author: "",
+      },
+      toc: [],
+      sections: [],
+    };
+
+    makeBookMock.mockResolvedValue(fakeBook);
+    vi.spyOn(parserAny, "attachHtmlTransformPipeline").mockImplementation(() => {});
+    vi.spyOn(parserAny, "buildMetadata").mockImplementation(() => {
+      parserAny.metadata = {
+        title: "Sample CBZ",
+        author: "",
+        chapterCount: 0,
+        isFixedLayout: true,
+      };
+    });
+    vi.spyOn(parserAny, "buildTocItems").mockImplementation(() => {
+      parserAny.tocItems = [];
+    });
+    vi.spyOn(parserAny, "buildSectionDescriptors").mockResolvedValue(undefined);
+    vi.spyOn(parserAny, "hydrateTocPageNumbers").mockResolvedValue(undefined);
+    const coverSpy = vi
+      .spyOn(parserAny, "extractCoverDataUrl")
+      .mockRejectedValue(new Error("cover extraction should be skipped"));
+
+    try {
+      const loaded = await parser.load("Books/sample.cbz", { skipCoverImage: true } as any);
+
+      expect(coverSpy).not.toHaveBeenCalled();
+      expect(loaded.coverImage).toBeUndefined();
+      expect(loaded.metadata.title).toBe("Sample CBZ");
+    } finally {
+      parser.dispose();
+    }
+  });
+
   it("loads generic MOBI sections through section.load so locator DOM matches the reader", async () => {
     const parser = new FoliateVaultPublicationParser({} as any);
     const parserAny = parser as any;

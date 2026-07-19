@@ -54,6 +54,7 @@ export interface ReaderHighlightFocusPreviewOptions {
 
 export interface ReaderApplyHighlightsOptions {
 	preserveAnchorCache?: boolean;
+	forceRepaint?: boolean;
 }
 
 export interface ReaderViewportRect {
@@ -256,11 +257,27 @@ export interface EpubBookFootnotesDraft {
 	footnotes: EpubBookFootnoteEntry[];
 }
 
+export interface ReaderLoadEpubOptions {
+	skipCoverImage?: boolean;
+}
+
+export interface ReaderSetRestoredPositionOptions {
+	deferResolution?: boolean;
+}
+
 export interface EpubReaderEngine {
 	readonly engineType: EpubReaderEngineType;
-	loadEpub(filePath: string, existingBookId?: string): Promise<EpubBook>;
+	loadEpub(
+		filePath: string,
+		existingBookId?: string,
+		options?: ReaderLoadEpubOptions
+	): Promise<EpubBook>;
+	loadCoverImage?(): Promise<string | null>;
 	renderTo(container: HTMLElement, options?: ReaderRenderOptions): Promise<void>;
-	setRestoredPosition?(position: ReadingPosition): Promise<void> | void;
+	setRestoredPosition?(
+		position: ReadingPosition,
+		options?: ReaderSetRestoredPositionOptions
+	): Promise<void> | void;
 	setFootnoteClickAction?(action: EpubFootnoteClickAction): void;
 	goToLocation(cfi: string): Promise<void>;
 	/** Paragraph-mode anchor sync; suppresses duplicate reading-progress persistence while in flight. */

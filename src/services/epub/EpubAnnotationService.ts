@@ -56,6 +56,7 @@ export class EpubAnnotationService {
 	private clearedLegacyHighlightBooks = new Set<string>();
 	private collectedHighlightsCache = new Map<string, ReaderHighlight[]>();
 	private inflightCollectedHighlights = new Map<string, Promise<ReaderHighlight[]>>();
+	private collectedHighlightsCacheEpoch = 0;
 
 	constructor(storageService: EpubStorageService) {
 		this.storageService = storageService;
@@ -64,6 +65,7 @@ export class EpubAnnotationService {
 	invalidateCollectedHighlightsCache(bookId?: string, filePath?: string): void {
 		const normalizedBookId = String(bookId || "").trim();
 		const normalizedFilePath = String(filePath || "").trim();
+		this.collectedHighlightsCacheEpoch += 1;
 		if (!normalizedBookId && !normalizedFilePath) {
 			this.collectedHighlightsCache.clear();
 			this.inflightCollectedHighlights.clear();
@@ -720,6 +722,7 @@ export class EpubAnnotationService {
 			}
 		}
 
+		const loadEpoch = this.collectedHighlightsCacheEpoch;
 		const loadPromise = (async () => {
 			const allHighlightsByKey = new Map<string, ReaderHighlight>();
 			// 历史版本会把 EPUB 高亮重复写入本地 highlights.json，导致源摘录删除后界面仍残留。
@@ -852,7 +855,11 @@ export class EpubAnnotationService {
 			}
 
 			const snapshot = this.cloneCollectedHighlights(allHighlights);
-			if (!hasAdditionalSourcePaths) {
+			if (
+				!hasAdditionalSourcePaths &&
+				loadEpoch === this.collectedHighlightsCacheEpoch &&
+				this.inflightCollectedHighlights.get(cacheKey) === loadPromise
+			) {
 				this.collectedHighlightsCache.set(cacheKey, snapshot);
 			}
 			return snapshot;

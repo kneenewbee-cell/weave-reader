@@ -14,6 +14,7 @@ import type {
 	ReaderHighlight,
 	ReaderHighlightInput,
 	ReaderHighlightSegment,
+	ReaderLoadEpubOptions,
 	ReaderNavigationRectOptions,
 	ReaderNavigateOptions,
 	ReaderParagraph,
@@ -23,6 +24,7 @@ import type {
 	ReaderRemainingTimeEstimate,
 	ReaderRenderOptions,
 	ReaderSelectionChange,
+	ReaderSetRestoredPositionOptions,
 	ReaderViewportGeometry,
 } from "./reader-engine-types";
 import type { EpubChapterLocationFormat } from "./epub-excerpt-settings";
@@ -394,6 +396,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private annotationSyncInFlight: Promise<void> | null = null;
 	private annotationSyncQueued = false;
 	private annotationSyncForceNext = false;
+	private annotationSyncEpoch = 0;
 	private static readonly PACE_HEARTBEAT_MS = PACE_HEARTBEAT_MS;
 	private static readonly PACE_IDLE_CUTOFF_MS = PACE_IDLE_CUTOFF_MS;
 
@@ -453,16 +456,19 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}
 	}
 
-	async loadEpub(filePath: string, existingBookId?: string): Promise<EpubBook> {
+	async loadEpub(
+		filePath: string,
+		existingBookId?: string,
+		options?: ReaderLoadEpubOptions
+	): Promise<EpubBook> {
 		await this.destroyViewOnly();
 		this.resetHighlightState();
 		this.resetParagraphState();
 		this.resetReaderState();
 
 		try {
-			const loaded = await this.parser.load(filePath);
-			const initialCfi =
-				(await this.parser.canonicalizeLocation(this.parser.getSectionHrefByIndex(0))) || "";
+			const loaded = await this.parser.load(filePath, options);
+			const initialCfi = this.parser.getSectionEntryCfi(0);
 			this.currentBook = {
 				id: existingBookId || this.buildFallbackBookId(filePath),
 				filePath,
@@ -497,7 +503,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			};
 			this.currentPosition = { ...this.currentBook.currentPosition };
 			this.currentPaginationInfo = {
-				currentPage: initialCfi ? (await this.parser.resolvePageNumber(initialCfi)) || 1 : 0,
+				currentPage: initialCfi ? 1 : 0,
 				totalPages: loaded.totalPositions,
 			};
 			this.currentChapterTitle = this.parser.getSectionTitleByIndex(0);
@@ -507,6 +513,13 @@ export class FoliateReaderService implements EpubReaderEngine {
 			this.resetReaderState();
 			throw error;
 		}
+	}
+
+	async loadCoverImage(): Promise<string | null> {
+		if (!this.currentBook) {
+			throw this.createNotReadyError("loadCoverImage");
+		}
+		return this.parser.loadCoverImage();
 	}
 
 	private buildFallbackBookId(filePath: string): string {
@@ -601,8 +614,16 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.currentFootnoteClickAction = action === "navigate" ? "navigate" : "preview";
 	}
 
-	async setRestoredPosition(position: ReadingPosition): Promise<void> {
+	async setRestoredPosition(
+		position: ReadingPosition,
+		options?: ReaderSetRestoredPositionOptions
+	): Promise<void> {
 		if (!this.currentBook || !position?.cfi) {
+			return;
+		}
+
+		if (options?.deferResolution) {
+			this.setDeferredRestoredPosition(position);
 			return;
 		}
 
@@ -626,6 +647,44 @@ export class FoliateReaderService implements EpubReaderEngine {
 					? position.chapterIndex
 					: this.currentPosition.chapterIndex,
 			cfi: canonical,
+			percent,
+		};
+		this.currentBook.currentPosition = { ...this.currentPosition };
+		this.currentPaginationInfo = {
+			currentPage,
+			totalPages,
+		};
+	}
+
+	private setDeferredRestoredPosition(position: ReadingPosition): void {
+		if (!this.currentBook) {
+			return;
+		}
+		const cfi = String(position.cfi || "").trim();
+		if (!cfi) {
+			return;
+		}
+		const totalPages = this.parser.getTotalPositions();
+		const percent = Number.isFinite(position.percent)
+			? this.clamp(position.percent, 0, 100)
+			: this.currentPosition.percent || 0;
+		const chapterCount = Math.max(this.parser.getMetadata().chapterCount || 0, 1);
+		const chapterIndex =
+			typeof position.chapterIndex === "number" && Number.isFinite(position.chapterIndex)
+				? Math.round(this.clamp(position.chapterIndex, 0, Math.max(chapterCount - 1, 0)))
+				: this.currentPosition.chapterIndex;
+		const currentPage =
+			totalPages > 1
+				? Math.round(this.clamp((percent / 100) * (totalPages - 1) + 1, 1, totalPages))
+				: totalPages > 0
+				? 1
+				: 0;
+
+		this.currentChapterTitle = this.parser.getSectionTitleByIndex(chapterIndex);
+		this.currentChapterHref = this.parser.getSectionHrefByIndex(chapterIndex);
+		this.currentPosition = {
+			chapterIndex,
+			cfi,
 			percent,
 		};
 		this.currentBook.currentPosition = { ...this.currentPosition };
@@ -847,8 +906,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 		return this.parser.search(query);
 	}
 
-	getTableOfContents(): Promise<TocItem[]> {
-		return Promise.resolve(this.parser.getTocItems());
+	async getTableOfContents(): Promise<TocItem[]> {
+		await this.parser.hydrateTocPageNumbersForCurrentBook();
+		return this.parser.getTocItems();
 	}
 
 	async navigateTo(options: ReaderNavigateOptions): Promise<void> {
@@ -1678,6 +1738,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		highlights: ReaderHighlight[],
 		options?: ReaderApplyHighlightsOptions
 	): Promise<void> {
+		this.annotationSyncEpoch += 1;
 		const deduped = new Map<string, ReaderHighlight>();
 		this.highlightDataMap.clear();
 		if (!options?.preserveAnchorCache) {
@@ -1702,6 +1763,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 					this.highlightAnchorResolutionByKey.delete(key);
 				}
 			}
+		}
+		if (options?.forceRepaint) {
+			await this.clearAppliedFoliateAnnotations();
 		}
 		await this.refreshHighlights();
 	}
@@ -6033,11 +6097,11 @@ export class FoliateReaderService implements EpubReaderEngine {
 			this.annotationSyncQueued = true;
 			return this.annotationSyncInFlight;
 		}
-		this.annotationSyncInFlight = this.runQueuedAnnotationSync().finally(() => {
+		this.annotationSyncInFlight = this.runQueuedAnnotationSync().finally(async () => {
 			this.annotationSyncInFlight = null;
 			if (this.annotationSyncQueued) {
 				this.annotationSyncQueued = false;
-				void this.queueAnnotationSync(false);
+				await this.queueAnnotationSync(false);
 			}
 		});
 		return this.annotationSyncInFlight;
@@ -6063,6 +6127,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 	private async syncAnnotationsWithView(): Promise<void> {
 		const view = this.foliateView;
+		const syncEpoch = this.annotationSyncEpoch;
 		if (!view) {
 			this.renderedAnnotations.clear();
 			this.appliedFoliateAnnotations.clear();
@@ -6137,6 +6202,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 				});
 			})
 		);
+		if (syncEpoch !== this.annotationSyncEpoch) {
+			return;
+		}
 
 		const trackedAnnotationKeys = new Set([
 			...this.renderedAnnotations.keys(),
@@ -7218,7 +7286,37 @@ export class FoliateReaderService implements EpubReaderEngine {
 		await this.refreshHighlights();
 	}
 
+	private async clearAppliedFoliateAnnotations(): Promise<void> {
+		const view = this.foliateView;
+		const annotations = new Set<FoliateAnnotation>();
+		for (const annotation of this.appliedFoliateAnnotations.values()) {
+			annotations.add(annotation);
+		}
+		for (const rendered of this.renderedAnnotations.values()) {
+			annotations.add(rendered.annotation);
+		}
+
+		if (view) {
+			for (const annotation of annotations) {
+				try {
+					await view.deleteAnnotation(annotation);
+				} catch (error) {
+					logger.debugWithTag(
+						"FoliateReaderService",
+						"Failed to delete foliate annotation during forced repaint",
+						{ error }
+					);
+				}
+			}
+		}
+
+		this.renderedAnnotations.clear();
+		this.appliedFoliateAnnotations.clear();
+		this.lastSyncedVisibleSectionKey = "";
+	}
+
 	private resetHighlightState(): void {
+		this.annotationSyncEpoch += 1;
 		this.resetTemporaryHighlightTimers();
 		this.resetSourceLocateFocusTimers();
 		this.sourceLocateFocusByCfiKey.clear();

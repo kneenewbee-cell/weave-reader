@@ -356,9 +356,11 @@
 	let pendingLoadedHighlights: ReaderHighlight[] | null = null;
 	const annotationUndoStack = new EpubAnnotationUndoStack();
 	let annotationMutationQueue: Promise<void> = Promise.resolve();
+	let annotationVersionRefreshPromise: Promise<void> | null = null;
 	let annotationNoteRefreshQueue: Promise<void> = Promise.resolve();
 	let activeAnnotationPreviewCfiRange: string | null = null;
 	let highlightReloadToken = 0;
+	let highlightRefreshKey = $state(0);
 	let highlightReloading = $state(false);
 	let annotationRevision = $state(0);
 	let bookmarkRevision = $state(0);
@@ -3317,6 +3319,7 @@
 			filePath,
 			bookDataDir: location.bookDir,
 			annotationsPath: location.annotationsPath,
+			onVersionChanged: () => refreshAfterAnnotationVersionChanged(),
 		}).open();
 	}
 
@@ -3492,10 +3495,24 @@
 	});
 
 	async function refreshAfterAnnotationVersionChanged() {
+		if (annotationVersionRefreshPromise) {
+			await annotationVersionRefreshPromise;
+			return;
+		}
+		annotationVersionRefreshPromise = runAnnotationVersionRefresh();
+		try {
+			await annotationVersionRefreshPromise;
+		} finally {
+			annotationVersionRefreshPromise = null;
+		}
+	}
+
+	async function runAnnotationVersionRefresh() {
 		if (!book?.id) {
 			return;
 		}
 		const annotationBookId = await syncPortableBookIdForCurrentBook() || getCurrentAnnotationBookId();
+		highlightRefreshKey += 1;
 		highlightReloadToken += 1;
 		pendingCollectedHighlights = null;
 		pendingLoadedHighlights = null;
@@ -3514,7 +3531,18 @@
 		} catch (error) {
 			logger.warn('[EpubReaderApp] Failed to invalidate annotation version caches:', error);
 		}
-		await reloadHighlights({ invalidateCache: true, forceReaderReplace: true });
+		if (readerReady) {
+			try {
+				await persistCurrentReadingProgress();
+			} catch (error) {
+				logger.warn('[EpubReaderApp] Failed to persist progress before annotation version reader restart:', error);
+			}
+			highlightReloading = false;
+			readerReady = false;
+			readerRenderKey += 1;
+		} else {
+			await reloadHighlights({ invalidateCache: true, forceReaderReplace: true });
+		}
 		queueOpenAnnotationNoteRefresh(annotationBookId);
 	}
 
@@ -3590,6 +3618,59 @@
 			prefetchAnnotationIndexForBook(loadedBook, targetFilePath, { priority: 'immediate' });
 		} catch (error) {
 			logger.warn('[EpubReaderApp] Deferred book persistence failed:', error);
+		}
+	}
+
+	function scheduleDeferredBookCoverHydration(loadToken: number, loadedBook: EpubBook): void {
+		if (isStaleBookLoad(loadToken) || loadedBook.metadata.coverImage || typeof readerService.loadCoverImage !== 'function') {
+			return;
+		}
+		const run = () => void hydrateBookCoverAfterFirstPaint(loadToken, loadedBook);
+		const idleCallback = (window as unknown as {
+			requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+		}).requestIdleCallback;
+		if (typeof idleCallback === 'function') {
+			idleCallback(run, { timeout: 2000 });
+			return;
+		}
+		window.setTimeout(run, 500);
+	}
+
+	async function hydrateBookCoverAfterFirstPaint(
+		loadToken: number,
+		loadedBook: EpubBook
+	): Promise<void> {
+		if (
+			isStaleBookLoad(loadToken)
+			|| loadedBook.metadata.coverImage
+			|| typeof readerService.loadCoverImage !== 'function'
+		) {
+			return;
+		}
+		try {
+			const coverImage = await readerService.loadCoverImage();
+			if (isStaleBookLoad(loadToken) || !coverImage) {
+				return;
+			}
+			const nextBook: EpubBook = {
+				...loadedBook,
+				metadata: {
+					...loadedBook.metadata,
+					coverImage,
+				},
+			};
+			loadedBook.metadata = nextBook.metadata;
+			if (book?.id === loadedBook.id) {
+				book = nextBook;
+				if (isActiveEpubReaderInstance()) {
+					epubActiveDocumentStore.setSharedState({ book: nextBook });
+				}
+			}
+			await storageService.saveBook(nextBook);
+		} catch (error) {
+			if (!isStaleBookLoad(loadToken)) {
+				logger.warn('[EpubReaderApp] Failed to hydrate deferred book cover:', error);
+			}
 		}
 	}
 
@@ -3672,7 +3753,9 @@
 			const loadedBook = await runBookLoadSession({
 				filePath: canonicalFilePath,
 				fileSizeBytes: vaultFile.stat.size,
-				loadPromise: readerService.loadEpub(canonicalFilePath, reusableBook?.id),
+				loadPromise: readerService.loadEpub(canonicalFilePath, reusableBook?.id, {
+					skipCoverImage: true,
+				}),
 				onSlowLoad: () => {
 					if (!isStaleBookLoad(loadToken)) {
 						bookLoadSlowWarning = true;
@@ -3692,6 +3775,13 @@
 					loadedBook.metadata = {
 						...loadedBook.metadata,
 						title: storedTitle,
+					};
+				}
+				const storedCoverImage = reusableBook.metadata?.coverImage?.trim();
+				if (storedCoverImage && !loadedBook.metadata.coverImage) {
+					loadedBook.metadata = {
+						...loadedBook.metadata,
+						coverImage: storedCoverImage,
 					};
 				}
 			}
@@ -3726,7 +3816,7 @@
 			}
 			if (hasReadingProgressCapability() && restoredPosition?.cfi) {
 				loadedBook.currentPosition = restoredPosition;
-				await readerService.setRestoredPosition?.(restoredPosition);
+				await readerService.setRestoredPosition?.(restoredPosition, { deferResolution: true });
 			}
 
 			book = loadedBook;
@@ -3748,6 +3838,7 @@
 
 			// Unblock the reader shell as soon as the engine can render.
 			loading = false;
+			scheduleDeferredBookCoverHydration(loadToken, loadedBook);
 			void maybeShowTutorialOnBookOpen();
 			void finalizeBookLoad(loadToken, loadedBook, targetFilePath, reusableBook);
 		} catch (error) {
@@ -6831,10 +6922,12 @@
 								(previous) => getReaderHighlightIdentityKey(previous) === key
 							)
 						);
-					});
+				});
 
 				if (shouldReplaceAllHighlights) {
-					await readerService.applyHighlights(highlightsWithStats);
+					await readerService.applyHighlights(highlightsWithStats, {
+						forceRepaint: forceReaderReplace,
+					});
 				} else {
 					syncReaderHighlightsFromCollection(highlightsWithStats, previousHighlights);
 				}
@@ -7627,6 +7720,7 @@
 					renderKey={readerRenderKey}
 					canUseReadingProgress={hasReadingProgressCapability() && !annotationCompareReadOnly}
 					canUseExcerptNotes={canReadAnnotationsInPane}
+					{highlightRefreshKey}
 					getReadingPositionAutoSaveConfig={getContinuousReadingPositionAutoSaveConfig}
 					isParagraphModeActive={() => settings.paragraphModeEnabled}
 					isParagraphModeProgressDetached={() => paragraphModeDetachedSession}

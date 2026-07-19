@@ -557,6 +557,54 @@ describe('EpubAnnotationService', () => {
 		expect(backlinkService.collectHighlights).toHaveBeenCalledTimes(2);
 	});
 
+	it('does not let an invalidated in-flight collection repopulate the highlight cache', async () => {
+		const storageService = {
+			removeLegacyHighlights: vi.fn(async () => {}),
+			loadConcealedTexts: vi.fn(async () => []),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const pendingResolvers: Array<(value: any[]) => void> = [];
+		const backlinkService = {
+			collectHighlights: vi.fn(
+				() => new Promise<any[]>((resolve) => {
+					pendingResolvers.push(resolve);
+				})
+			),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+		const oldHighlight = {
+			cfiRange: 'epubcfi(/6/2)',
+			color: 'yellow',
+			text: 'Old version highlight',
+			sourceFile: 'Notes/old.md',
+			createdTime: 1,
+		};
+		const newHighlight = {
+			cfiRange: 'epubcfi(/6/4)',
+			color: 'green',
+			text: 'New version highlight',
+			sourceFile: 'Notes/new.md',
+			createdTime: 2,
+		};
+
+		const firstCollect = service.collectAllHighlights('book-1', 'Books/demo.epub', backlinkService);
+		await vi.waitFor(() => expect(backlinkService.collectHighlights).toHaveBeenCalledTimes(1));
+
+		service.invalidateCollectedHighlightsCache('book-1', 'Books/demo.epub');
+		pendingResolvers.shift()?.([oldHighlight]);
+		await expect(firstCollect).resolves.toEqual([
+			expect.objectContaining({ text: 'Old version highlight' }),
+		]);
+
+		const secondCollect = service.collectAllHighlights('book-1', 'Books/demo.epub', backlinkService);
+		await vi.waitFor(() => expect(backlinkService.collectHighlights).toHaveBeenCalledTimes(2));
+		pendingResolvers.shift()?.([newHighlight]);
+
+		await expect(secondCollect).resolves.toEqual([
+			expect.objectContaining({ text: 'New version highlight' }),
+		]);
+	});
+
 	it('collects highlights from a requested annotation version without reading the active version', async () => {
 		const bookId = 'epub-book-compare';
 		const app = createPortableMockApp({

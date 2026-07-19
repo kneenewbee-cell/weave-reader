@@ -389,6 +389,102 @@ describe("FoliateReaderService", () => {
 			service.destroy();
 		}
 	});
+
+	it("does not resolve the initial section into a document-backed page before first render", async () => {
+		const binary = await createSampleEpubBuffer();
+		const service = new FoliateReaderService(createMockApp(binary) as any);
+		const parserAny = (service as any).parser;
+		const canonicalizeSpy = vi.spyOn(parserAny, "canonicalizeLocation");
+		const pageSpy = vi.spyOn(parserAny, "resolvePageNumber");
+
+		try {
+			await service.loadEpub("Books/foliate-sample.epub", "foliate-book", {
+				skipCoverImage: true,
+			} as any);
+
+			expect(canonicalizeSpy).not.toHaveBeenCalled();
+			expect(pageSpy).not.toHaveBeenCalled();
+			expect(service.getCurrentPosition().cfi).toMatch(/^epubcfi\(/);
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 1,
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("can defer restored position canonicalization and page lookup until render", async () => {
+		const binary = await createSampleEpubBuffer();
+		const service = new FoliateReaderService(createMockApp(binary) as any);
+
+		try {
+			await service.loadEpub("Books/foliate-sample.epub", "foliate-book", {
+				skipCoverImage: true,
+			} as any);
+			const parserAny = (service as any).parser;
+			const canonicalizeSpy = vi.spyOn(parserAny, "canonicalizeLocation");
+			const pageSpy = vi.spyOn(parserAny, "resolvePageNumber");
+			const restoredCfi = "epubcfi(/6/2!/4/2/6,/1:0,/1:8)";
+
+			await service.setRestoredPosition?.(
+				{
+					chapterIndex: 0,
+					cfi: restoredCfi,
+					percent: 50,
+				},
+				{ deferResolution: true } as any
+			);
+
+			expect(canonicalizeSpy).not.toHaveBeenCalled();
+			expect(pageSpy).not.toHaveBeenCalled();
+			expect(service.getCurrentPosition()).toMatchObject({
+				chapterIndex: 0,
+				cfi: restoredCfi,
+				percent: 50,
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("passes first-paint cover skip requests to the publication parser", async () => {
+		const binary = await createSampleEpubBuffer();
+		const service = new FoliateReaderService(createMockApp(binary) as any);
+		const parserLoadSpy = vi.spyOn((service as any).parser, "load");
+
+		try {
+			await service.loadEpub("Books/foliate-sample.epub", "foliate-book", {
+				skipCoverImage: true,
+			} as any);
+
+			expect(parserLoadSpy).toHaveBeenCalledWith("Books/foliate-sample.epub", {
+				skipCoverImage: true,
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("can load a skipped cover image after the publication is ready", async () => {
+		const binary = await createSampleEpubBuffer();
+		const service = new FoliateReaderService(createMockApp(binary) as any);
+
+		try {
+			await service.loadEpub("Books/foliate-sample.epub", "foliate-book", {
+				skipCoverImage: true,
+			} as any);
+			const coverSpy = vi
+				.spyOn((service as any).parser, "extractCoverDataUrl")
+				.mockResolvedValue("data:image/png;base64,AAA=");
+
+			await expect((service as any).loadCoverImage()).resolves.toBe(
+				"data:image/png;base64,AAA="
+			);
+			expect(coverSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			service.destroy();
+		}
+	});
 });
 
 class FakeFoliateViewElement extends HTMLElement {
@@ -1617,6 +1713,154 @@ describe("FoliateReaderService", () => {
 				value: nextHighlight.cfiRange,
 				text: nextHighlight.text,
 			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("clears all applied foliate annotations before a forced highlight repaint", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const firstHighlight = {
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Annotation only in the previous version",
+				presentation: "highlight" as const,
+			};
+			const sharedHighlight = {
+				cfiRange: "epubcfi(/6/4!/4/2,/1:0,/1:8)",
+				color: "green",
+				text: "Annotation shared across versions",
+				presentation: "highlight" as const,
+			};
+			const view = {
+				addAnnotation: vi.fn(async () => undefined),
+				deleteAnnotation: vi.fn(async () => undefined),
+				removeEventListener: vi.fn(),
+				close: vi.fn(),
+				remove: vi.fn(),
+			};
+
+			(service as any).foliateView = view;
+			vi.spyOn(service as any, "resolveHighlightAnchorCfi").mockImplementation(
+				(async (...args: any[]) => {
+					const [highlight] = args as [{ cfiRange: string }];
+					return highlight.cfiRange;
+				}) as any
+			);
+			vi.spyOn((service as any).parser, "getSectionIndexForCfi").mockReturnValue(0);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{ index: 0 },
+			]);
+
+			await service.applyHighlights([firstHighlight, sharedHighlight]);
+			const firstAnnotation = view.addAnnotation.mock.calls[0]?.[0];
+			const sharedAnnotation = view.addAnnotation.mock.calls[1]?.[0];
+
+			view.addAnnotation.mockClear();
+			view.deleteAnnotation.mockClear();
+
+			await service.applyHighlights([sharedHighlight], { forceRepaint: true });
+
+			expect(view.deleteAnnotation).toHaveBeenCalledTimes(2);
+			expect(view.deleteAnnotation).toHaveBeenCalledWith(firstAnnotation);
+			expect(view.deleteAnnotation).toHaveBeenCalledWith(sharedAnnotation);
+			expect(view.addAnnotation).toHaveBeenCalledTimes(1);
+			expect(view.addAnnotation.mock.calls[0]?.[0]).toMatchObject({
+				value: sharedHighlight.cfiRange,
+				text: sharedHighlight.text,
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("waits for a queued forced highlight repaint before applyHighlights resolves", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const firstHighlight = {
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Annotation from the previous version",
+				presentation: "highlight" as const,
+			};
+			const nextHighlight = {
+				cfiRange: "epubcfi(/6/4!/4/2,/1:0,/1:8)",
+				color: "green",
+				text: "Annotation from the next version",
+				presentation: "highlight" as const,
+			};
+			const view = {
+				addAnnotation: vi.fn(async () => undefined),
+				deleteAnnotation: vi.fn(async () => undefined),
+				removeEventListener: vi.fn(),
+				close: vi.fn(),
+				remove: vi.fn(),
+			};
+			let releaseFirstResolution: (() => void) | null = null;
+			let releaseNextResolution: (() => void) | null = null;
+
+			(service as any).foliateView = view;
+			vi.spyOn(service as any, "resolveHighlightAnchorCfi").mockImplementation(
+				(async (...args: any[]) => {
+					const [highlight] = args as [{ cfiRange: string; text?: string }];
+					if (highlight.text === firstHighlight.text && !releaseFirstResolution) {
+						await new Promise<void>((resolve) => {
+							releaseFirstResolution = resolve;
+						});
+					}
+					if (highlight.text === nextHighlight.text && !releaseNextResolution) {
+						await new Promise<void>((resolve) => {
+							releaseNextResolution = resolve;
+						});
+					}
+					return highlight.cfiRange;
+				}) as any
+			);
+			vi.spyOn((service as any).parser, "getSectionIndexForCfi").mockReturnValue(0);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{ index: 0 },
+			]);
+
+			const firstApply = service.applyHighlights([firstHighlight]);
+			await vi.waitFor(() => {
+				expect(releaseFirstResolution).toBeTypeOf("function");
+			});
+
+			const nextApply = service.applyHighlights([nextHighlight], { forceRepaint: true });
+			let nextApplyResolved = false;
+			nextApply.then(() => {
+				nextApplyResolved = true;
+			});
+
+			releaseFirstResolution?.();
+			await vi.waitFor(() => {
+				expect(releaseNextResolution).toBeTypeOf("function");
+			});
+			expect(nextApplyResolved).toBe(false);
+			expect(view.addAnnotation).not.toHaveBeenCalledWith(
+				expect.objectContaining({
+					value: firstHighlight.cfiRange,
+					text: firstHighlight.text,
+				})
+			);
+			expect(view.addAnnotation).not.toHaveBeenCalledWith(
+				expect.objectContaining({
+					value: nextHighlight.cfiRange,
+					text: nextHighlight.text,
+				})
+			);
+
+			releaseNextResolution?.();
+			await nextApply;
+			await firstApply;
+
+			expect(view.addAnnotation).toHaveBeenCalledWith(
+				expect.objectContaining({
+					value: nextHighlight.cfiRange,
+					text: nextHighlight.text,
+				})
+			);
 		} finally {
 			service.destroy();
 		}

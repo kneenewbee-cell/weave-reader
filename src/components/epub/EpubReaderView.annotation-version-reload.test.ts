@@ -208,4 +208,54 @@ describe('EpubReaderView annotation version reload', () => {
 			{ annotationVersionId: 'readonly-version' }
 		);
 	});
+
+	it('does not apply stale highlights collected before an external highlight refresh', async () => {
+		vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+			x: 0,
+			y: 0,
+			top: 0,
+			left: 0,
+			right: 800,
+			bottom: 600,
+			width: 800,
+			height: 600,
+			toJSON: () => ({}),
+		} as DOMRect);
+
+		let resolveFirstCollect: ((value: ReaderHighlight[]) => void) | null = null;
+		const oldHighlight = createHighlight('old annotation');
+		const readerService = createReaderService();
+		const annotationService = {
+			collectAllHighlights: vi.fn(
+				() => new Promise<ReaderHighlight[]>((resolve) => {
+					resolveFirstCollect = resolve;
+				})
+			),
+		};
+		const props = {
+			filePath: 'Books/book.epub',
+			book: createBook(),
+			readerService,
+			storageService: {},
+			annotationService,
+			backlinkService: {},
+			settings: createSettings(),
+			excerptSettings: { strikethroughDisplayMode: 'strikethrough' },
+			canUseReadingProgress: false,
+			canUseExcerptNotes: true,
+			annotationBookId: 'portable-book-id',
+			highlightRefreshKey: 0,
+			renderKey: 0,
+		};
+
+		const view = render(EpubReaderView, { props });
+		await waitFor(() => expect(annotationService.collectAllHighlights).toHaveBeenCalledTimes(1));
+
+		await view.rerender({ ...props, highlightRefreshKey: 1 });
+		resolveFirstCollect?.([oldHighlight]);
+
+		await waitFor(() => expect(readerService.renderTo).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => window.setTimeout(resolve, 120));
+		expect(readerService.applyHighlights).not.toHaveBeenCalledWith([oldHighlight]);
+	});
 });
