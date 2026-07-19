@@ -7,6 +7,7 @@ import type {
 	HighlightClickInfo,
 	NavigateAndHighlightOptions,
 	ReaderAppearanceOptions,
+	ReaderApplyHighlightsOptions,
 	ReaderFootnotePreviewInfo,
 	ReaderFrame,
 	ReaderHighlightFocusPreviewOptions,
@@ -1673,10 +1674,15 @@ export class FoliateReaderService implements EpubReaderEngine {
 		await this.queueAnnotationSync(true);
 	}
 
-	async applyHighlights(highlights: ReaderHighlight[]): Promise<void> {
+	async applyHighlights(
+		highlights: ReaderHighlight[],
+		options?: ReaderApplyHighlightsOptions
+	): Promise<void> {
 		const deduped = new Map<string, ReaderHighlight>();
 		this.highlightDataMap.clear();
-		this.highlightAnchorResolutionByKey.clear();
+		if (!options?.preserveAnchorCache) {
+			this.highlightAnchorResolutionByKey.clear();
+		}
 		for (const highlight of highlights) {
 			const normalizedHighlight = this.normalizeHighlightSources(highlight);
 			const key = getReaderHighlightIdentityKey(normalizedHighlight);
@@ -1689,6 +1695,13 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.savedHighlights = Array.from(deduped.values());
 		for (const highlight of this.savedHighlights) {
 			this.highlightDataMap.set(getReaderHighlightIdentityKey(highlight), highlight);
+		}
+		if (options?.preserveAnchorCache) {
+			for (const key of Array.from(this.highlightAnchorResolutionByKey.keys())) {
+				if (!deduped.has(key)) {
+					this.highlightAnchorResolutionByKey.delete(key);
+				}
+			}
 		}
 		await this.refreshHighlights();
 	}

@@ -52,6 +52,10 @@ export interface ReaderHighlightFocusPreviewOptions {
 	chapterIndex?: number;
 }
 
+export interface ReaderApplyHighlightsOptions {
+	preserveAnchorCache?: boolean;
+}
+
 export interface ReaderViewportRect {
 	top: number;
 	left: number;
@@ -363,7 +367,7 @@ export interface EpubReaderEngine {
 	onSelectionChange(callback: (event: ReaderSelectionChange) => void): () => void;
 	onHighlightClick(callback: (info: HighlightClickInfo) => void): () => void;
 	onReferenceBadgeClick?(callback: (info: HighlightClickInfo) => void): () => void;
-	applyHighlights(highlights: ReaderHighlight[]): Promise<void>;
+	applyHighlights(highlights: ReaderHighlight[], options?: ReaderApplyHighlightsOptions): Promise<void>;
 	refreshHighlights?(): Promise<void>;
 	addHighlight(highlight: ReaderHighlight): void;
 	addTemporaryHighlight(highlight: ReaderHighlightInput, durationMs?: number): void;

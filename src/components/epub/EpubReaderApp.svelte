@@ -352,6 +352,7 @@
 	let trackedHighlightSourceFiles = new Set<string>();
 	let bookSession = untrack(() => getBookSessionManager(app).acquire(filePath));
 	let vaultEventRefs: EventRef[] = [];
+	let pendingCollectedHighlights: ReaderHighlight[] | null = null;
 	let pendingLoadedHighlights: ReaderHighlight[] | null = null;
 	const annotationUndoStack = new EpubAnnotationUndoStack();
 	let annotationMutationQueue: Promise<void> = Promise.resolve();
@@ -384,6 +385,7 @@
 	);
 	let transientStatusTimer: ReturnType<typeof setTimeout> | null = null;
 	let deferredHighlightReloadTimer: ReturnType<typeof setTimeout> | null = null;
+	let deferredHighlightReloadOptions: HighlightReloadOptions = {};
 	let componentDisposed = false;
 	let activeBookLoadToken = 0;
 	let readerStoreSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1660,6 +1662,10 @@
 		return trackedPaths;
 	}
 
+	function markCollectedHighlightsStale(): void {
+		pendingCollectedHighlights = null;
+	}
+
 	function getBoundCanvasPath(): string | null {
 		const canvasPath = normalizeTrackedVaultPath(canvasService.getCanvasPath());
 		return canvasPath || null;
@@ -1691,20 +1697,38 @@
 		void reloadHighlights({ incremental: true });
 	}
 
+	function mergeHighlightReloadOptions(
+		current: HighlightReloadOptions,
+		incoming: HighlightReloadOptions
+	): HighlightReloadOptions {
+		return {
+			invalidateCache: current.invalidateCache === true || incoming.invalidateCache === true,
+			incremental: current.incremental === true && incoming.incremental === true,
+			forceReaderReplace:
+				current.forceReaderReplace === true || incoming.forceReaderReplace === true,
+		};
+	}
+
 	function queueHighlightReload(delayMs = 350, options: HighlightReloadOptions = {}) {
 		if (componentDisposed) {
 			return;
 		}
+		deferredHighlightReloadOptions = deferredHighlightReloadTimer
+			? mergeHighlightReloadOptions(deferredHighlightReloadOptions, options)
+			: { ...options };
 		if (deferredHighlightReloadTimer) {
 			clearTimeout(deferredHighlightReloadTimer);
 		}
 		deferredHighlightReloadTimer = setTimeout(() => {
 			deferredHighlightReloadTimer = null;
+			const mergedOptions = deferredHighlightReloadOptions;
+			deferredHighlightReloadOptions = {};
 			if (!componentDisposed) {
-				const incremental = options.incremental === true;
+				const incremental = mergedOptions.incremental === true;
 				void reloadHighlights({
-					invalidateCache: options.invalidateCache === true,
+					invalidateCache: mergedOptions.invalidateCache === true,
 					incremental,
+					forceReaderReplace: mergedOptions.forceReaderReplace === true,
 				});
 			}
 		}, delayMs);
@@ -1745,6 +1769,24 @@
 		});
 		annotationRevision = nextRevision;
 		epubActiveDocumentStore.setSharedState({ annotationRevision });
+	}
+
+	function applyReferenceStatsToHighlights(highlights: ReaderHighlight[]): ReaderHighlight[] {
+		const referenceStats = referenceStatsService.computeReferenceStatsFromHighlights(
+			highlights,
+			filePath,
+			getBoundCanvasPath()
+		);
+
+		return highlights.map((highlight) => {
+			const normalizedCfi = EpubLinkService.normalizeCfi(highlight.cfiRange);
+			const stats = referenceStats.get(normalizedCfi);
+			return {
+				...highlight,
+				referenceCount: stats?.referenceCount || 1,
+				referenceHeat: stats?.referenceHeat || 0,
+			};
+		});
 	}
 
 	function getEpubActionHost() {
@@ -1802,7 +1844,10 @@
 		return portableBookId || String(book?.id || '').trim();
 	}
 
-	async function refreshSemanticSettings(options?: { reloadHighlights?: boolean }): Promise<void> {
+	async function refreshSemanticSettings(options?: {
+		reloadHighlights?: boolean;
+		semanticOnly?: boolean;
+	}): Promise<void> {
 		const token = ++semanticSettingsLoadToken;
 		try {
 			const fallbackSettings = getHostSemanticSettings();
@@ -1815,6 +1860,9 @@
 			}
 			semanticSettings = normalizeEpubSemanticSettings(nextSettings);
 			if (options?.reloadHighlights && readerReady) {
+				if (options.semanticOnly && await refreshSemanticPresentationFromCache()) {
+					return;
+				}
 				void reloadHighlights({ invalidateCache: true });
 			}
 		} catch (error) {
@@ -1883,6 +1931,60 @@
 			return highlights;
 		}
 		return highlights.map((highlight) => applySemanticPresentation(highlight));
+	}
+
+	async function refreshSemanticPresentationFromCache(): Promise<boolean> {
+		if (!book || !readerReady || !pendingCollectedHighlights) {
+			return false;
+		}
+		const reloadToken = ++highlightReloadToken;
+		highlightReloading = true;
+		try {
+			const previousHighlights = pendingLoadedHighlights || [];
+			const highlightsWithStats = applyReferenceStatsToHighlights(
+				applySemanticPresentationToHighlights(pendingCollectedHighlights)
+			);
+			if (componentDisposed || reloadToken !== highlightReloadToken) {
+				return true;
+			}
+			pendingLoadedHighlights = highlightsWithStats;
+			trackedHighlightSourceFiles = collectTrackedHighlightSourceFiles(highlightsWithStats);
+			getExcerptPipeline().syncCollectedHighlights(highlightsWithStats);
+			await readerService.applyHighlights(highlightsWithStats, { preserveAnchorCache: true });
+			if (componentDisposed || reloadToken !== highlightReloadToken) {
+				return true;
+			}
+			publishSidebarHighlights(highlightsWithStats);
+			if (highlightToolbarInfo) {
+				const toolbarKey = getReaderHighlightIdentityKey(
+					buildHighlightIdentityFields(highlightToolbarInfo)
+				);
+				const nextToolbarInfo = highlightsWithStats.find(
+					(highlight) => getReaderHighlightIdentityKey(highlight) === toolbarKey
+				);
+				if (nextToolbarInfo) {
+					highlightToolbarInfo = {
+						...highlightToolbarInfo,
+						color: nextToolbarInfo.color,
+						style: nextToolbarInfo.style,
+						semanticLabel: nextToolbarInfo.semanticLabel,
+						semanticGroup: nextToolbarInfo.semanticGroup,
+						semanticDescription: nextToolbarInfo.semanticDescription,
+						semanticSource: nextToolbarInfo.semanticSource,
+					};
+				} else if (previousHighlights.length !== highlightsWithStats.length) {
+					highlightToolbarInfo = null;
+				}
+			}
+			return true;
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to refresh semantic highlight presentation:', error);
+			return false;
+		} finally {
+			if (reloadToken === highlightReloadToken) {
+				highlightReloading = false;
+			}
+		}
 	}
 
 	function clearReaderSelection(frame?: { window?: Window | null; frameDocument?: Document | null }): void {
@@ -2415,6 +2517,7 @@
 	}
 
 	function removeHighlightFromCurrentView(highlight: ReaderHighlight): void {
+		markCollectedHighlightsStale();
 		const key = getReaderHighlightIdentityKey(highlight);
 		if (key) {
 			readerService.removeHighlightByIdentityKey(key);
@@ -2433,6 +2536,7 @@
 	}
 
 	function addHighlightToCurrentView(highlight: ReaderHighlight): void {
+		markCollectedHighlightsStale();
 		const presentedHighlight = applySemanticPresentation({
 			...highlight,
 			presentation: highlight.presentation || 'highlight',
@@ -2513,6 +2617,7 @@
 	}
 
 	function purgeOrphanHighlightFromReader(info: HighlightClickInfo): void {
+		markCollectedHighlightsStale();
 		const identityKey = getReaderHighlightIdentityKey(buildHighlightIdentityFields(info));
 		if (identityKey) {
 			readerService.removeHighlightByIdentityKey(identityKey);
@@ -2611,6 +2716,7 @@
 		}
 
 		const nextHighlights = applyHighlightSourceOptimisticSyncResult(current, syncResult);
+		markCollectedHighlightsStale();
 		pendingLoadedHighlights = nextHighlights;
 		getExcerptPipeline().syncCollectedHighlights(nextHighlights);
 		publishSidebarHighlights(nextHighlights);
@@ -2685,6 +2791,7 @@
 		}
 		const incomingWithSemanticPresentation = applySemanticPresentationToHighlights(incoming);
 		const previousHighlights = pendingLoadedHighlights || [];
+		markCollectedHighlightsStale();
 		pendingLoadedHighlights = mergeReaderHighlightsByIdentity(previousHighlights, incomingWithSemanticPresentation);
 		syncReaderHighlightsFromCollection(incomingWithSemanticPresentation, previousHighlights);
 		publishSidebarHighlights(pendingLoadedHighlights);
@@ -3390,6 +3497,7 @@
 		}
 		const annotationBookId = await syncPortableBookIdForCurrentBook() || getCurrentAnnotationBookId();
 		highlightReloadToken += 1;
+		pendingCollectedHighlights = null;
 		pendingLoadedHighlights = null;
 		trackedHighlightSourceFiles = new Set<string>();
 		annotationUndoStack.clear();
@@ -3511,6 +3619,7 @@
 		errorMsg = '';
 		readerReady = false;
 		highlightReloading = false;
+		pendingCollectedHighlights = null;
 		pendingLoadedHighlights = null;
 		annotationUndoStack.clear();
 		highlightToolbarInfo = null;
@@ -5784,6 +5893,7 @@
 			presentation: info.presentation,
 		};
 		readerService.addHighlight(refreshedHighlight);
+		markCollectedHighlightsStale();
 		pendingLoadedHighlights = mergeReaderHighlightsByIdentity(
 			pendingLoadedHighlights,
 			[refreshedHighlight]
@@ -6542,6 +6652,7 @@
 			presentation: info.presentation,
 		};
 		readerService.addHighlight(optimisticHighlight);
+		markCollectedHighlightsStale();
 		pendingLoadedHighlights = mergeReaderHighlightsByIdentity(
 			pendingLoadedHighlights,
 			[optimisticHighlight]
@@ -6641,6 +6752,7 @@
 		if (!book || componentDisposed) return;
 		if (!hasExcerptNotesCapability()) {
 			trackedHighlightSourceFiles = new Set<string>();
+			pendingCollectedHighlights = [];
 			pendingLoadedHighlights = [];
 			highlightReloading = false;
 			highlightToolbarInfo = null;
@@ -6685,24 +6797,10 @@
 				return;
 			}
 
-			const allHighlights = applySemanticPresentationToHighlights(collectedHighlights);
-
-			const referenceStats = referenceStatsService.computeReferenceStatsFromHighlights(
-				allHighlights,
-				filePath,
-				getBoundCanvasPath()
+			pendingCollectedHighlights = collectedHighlights;
+			const highlightsWithStats = applyReferenceStatsToHighlights(
+				applySemanticPresentationToHighlights(collectedHighlights)
 			);
-
-			const highlightsWithStats = allHighlights.map((highlight) => {
-				const normalizedCfi = EpubLinkService.normalizeCfi(highlight.cfiRange);
-				const stats = referenceStats.get(normalizedCfi);
-
-				return {
-					...highlight,
-					referenceCount: stats?.referenceCount || 1,
-					referenceHeat: stats?.referenceHeat || 0,
-				};
-			});
 
 			trackedHighlightSourceFiles = collectTrackedHighlightSourceFiles(highlightsWithStats);
 			pendingLoadedHighlights = highlightsWithStats;
@@ -6960,17 +7058,11 @@
 				return;
 			}
 			if (readerReady) {
-				pendingLoadedHighlights = [];
-				trackedHighlightSourceFiles = new Set<string>();
-				annotationUndoStack.clear();
 				highlightToolbarInfo = null;
 				closeAnnotationDisambiguation();
 				commentEditorInfo = null;
-				getExcerptPipeline().syncCollectedHighlights([]);
-				void readerService.applyHighlights([]);
-				publishSidebarHighlights([]);
 			}
-			void refreshSemanticSettings({ reloadHighlights: true });
+			void refreshSemanticSettings({ reloadHighlights: true, semanticOnly: true });
 		};
 		window.addEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
 		const handleAnnotationVersionChanged = (event: Event) => {
@@ -7252,6 +7344,7 @@
 				clearTimeout(deferredHighlightReloadTimer);
 				deferredHighlightReloadTimer = null;
 			}
+			deferredHighlightReloadOptions = {};
 			flushReaderStoreSync();
 			if (rootEl) {
 				rootEl.removeEventListener('pointerdown', syncAsActiveEpubDocument);

@@ -1738,6 +1738,38 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("keeps resolved highlight anchors when reapplying semantic-only presentation changes", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const highlight = {
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Saved excerpt quote",
+				semanticId: "important",
+				presentation: "highlight" as const,
+			};
+			const key = getReaderHighlightIdentityKey(highlight);
+			(service as any).highlightAnchorResolutionByKey.set(
+				key,
+				Promise.resolve(highlight.cfiRange)
+			);
+
+			await service.applyHighlights(
+				[
+					{
+						...highlight,
+						color: "green",
+					},
+				],
+				{ preserveAnchorCache: true }
+			);
+
+			expect((service as any).highlightAnchorResolutionByKey.has(key)).toBe(true);
+		} finally {
+			service.destroy();
+		}
+	});
+
 	it("anchors annotation-note hover previews to the canonical text range", async () => {
 		vi.useFakeTimers();
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
