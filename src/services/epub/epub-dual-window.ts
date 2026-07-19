@@ -1,6 +1,7 @@
 export const EPUB_DUAL_WINDOW_ANNOTATION_EVENT = "weave-epub-dual-window-annotation";
 export const EPUB_DUAL_WINDOW_SESSION_EVENT = "weave-epub-dual-window-session";
 export const EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT = "weave-epub-dual-window-reader-display";
+export const EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT = "weave-epub-annotation-compare-context";
 
 export type EpubDualWindowMode = "book-annotation-note" | "annotation-compare" | "book-translation";
 export type EpubAnnotationComparePaneRole = "editable" | "readonly";
@@ -29,6 +30,17 @@ export interface EpubAnnotationCompareContextInput {
 	readonlyVersionId: unknown;
 	readonlyVersionName?: unknown;
 	syncPosition?: boolean;
+}
+
+export interface EpubAnnotationCompareContextChangeDetail {
+	sourceId: string;
+	filePath: string;
+	annotationCompare: EpubAnnotationCompareContext | null;
+}
+
+export interface EpubReaderStateChangeRemountInput {
+	currentFilePath?: unknown;
+	incomingFilePath?: unknown;
 }
 
 export interface EpubReaderPrimaryToolbarVisibilityInput {
@@ -74,6 +86,14 @@ export interface EpubAnnotationCompareExitPlan<T> {
 
 function cleanString(value: unknown): string {
 	return String(value || "").trim();
+}
+
+export function shouldRemountEpubReaderForStateChange(
+	input: EpubReaderStateChangeRemountInput
+): boolean {
+	const currentFilePath = cleanString(input.currentFilePath);
+	const incomingFilePath = cleanString(input.incomingFilePath);
+	return Boolean(incomingFilePath && incomingFilePath !== currentFilePath);
 }
 
 export function createEpubAnnotationCompareContexts(
@@ -155,6 +175,40 @@ export function normalizeEpubAnnotationCompareContext(
 		paneRole,
 		...(record.syncPosition === false ? { syncPosition: false } : { syncPosition: true }),
 	};
+}
+
+export function normalizeEpubAnnotationCompareContextChangeDetail(
+	value: unknown
+): EpubAnnotationCompareContextChangeDetail | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const sourceId = cleanString(record.sourceId);
+	const filePath = cleanString(record.filePath);
+	if (!sourceId || !filePath) {
+		return null;
+	}
+	return {
+		sourceId,
+		filePath,
+		annotationCompare: normalizeEpubAnnotationCompareContext(record.annotationCompare),
+	};
+}
+
+export function dispatchEpubAnnotationCompareContextEvent(
+	targetWindow: Window,
+	detail: EpubAnnotationCompareContextChangeDetail
+): boolean {
+	const normalizedDetail = normalizeEpubAnnotationCompareContextChangeDetail(detail);
+	if (!normalizedDetail) {
+		return false;
+	}
+	return targetWindow.dispatchEvent(
+		new CustomEvent(EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, {
+			detail: normalizedDetail,
+		})
+	);
 }
 
 export function shouldShowEpubReaderPrimaryToolbar(

@@ -21,7 +21,7 @@
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, createEpubAnnotationCompareContexts, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_DUAL_WINDOW_ANNOTATION_EVENT, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubDualWindowSession, getEpubStorageService, isBookCompleted, listEpubAnnotationVersions, loadEffectiveEpubSemanticProfile, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, notifyEpubAnnotationVersionChanged, normalizeEpubAnnotationCompareContext, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubAnnotationCompareExitPlan, resolveEpubHost, resolveEpubWeaveOfficialAPI, switchEpubAnnotationVersion, warmEpubAnnotationIndexForPaths, type EpubAnnotationCompareContext, type EpubAnnotationVersionSummary, type EpubDualWindowAnnotationDetail } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, createEpubAnnotationCompareContexts, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_DUAL_WINDOW_ANNOTATION_EVENT, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubDualWindowSession, getEpubStorageService, isBookCompleted, listEpubAnnotationVersions, loadEffectiveEpubSemanticProfile, markEpubDualWindowNoteLeaf, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, notifyEpubAnnotationVersionChanged, normalizeEpubAnnotationCompareContext, normalizeEpubAnnotationCompareContextChangeDetail, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubAnnotationCompareExitPlan, resolveEpubAnnotationPaneCapabilities, resolveEpubDualWindowOpenGuard, resolveEpubDualWindowPanes, resolveEpubHost, resolveEpubWeaveOfficialAPI, restoreEpubDualWindowSessionsFromWorkspace, switchEpubAnnotationVersion, unregisterEpubDualWindowSession, warmEpubAnnotationIndexForPaths, type EpubAnnotationCompareContext, type EpubAnnotationVersionSummary, type EpubDualWindowAnnotationDetail, type EpubDualWindowMode, type EpubOpenDualWindowSession } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { epubVaultPathsReferToSameBook } from '../../services/epub/epub-vault-path';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
@@ -135,6 +135,7 @@
 		app: App;
 		filePath: string;
 		annotationCompare?: EpubAnnotationCompareContext | null;
+		annotationCompareContextSourceId?: string;
 		pendingLocate?: PendingLocateState | null;
 		pendingCfi?: string;
 		pendingText?: string;
@@ -199,6 +200,7 @@
 		app, 
 		filePath, 
 		annotationCompare = null,
+		annotationCompareContextSourceId = '',
 		pendingLocate = null,
 		pendingCfi = '', 
 		pendingText = '', 
@@ -394,6 +396,24 @@
 	let lastAnnotationCompareBroadcastCfi = '';
 	const annotationCompareVersionId = $derived(String(annotationCompare?.versionId || '').trim());
 	const annotationCompareReadOnly = $derived(Boolean(annotationCompare && annotationCompare.paneRole === 'readonly'));
+	const annotationPaneCapabilities = $derived(resolveEpubAnnotationPaneCapabilities({
+		hasExcerptNotes: hasExcerptNotesCapability(),
+		annotationCompare,
+	}));
+	const canReadAnnotationsInPane = $derived(annotationPaneCapabilities.canReadAnnotations);
+	const canEditAnnotationsInPane = $derived(annotationPaneCapabilities.canEditAnnotations);
+	const canUseSelectionToolbarInPane = $derived(annotationPaneCapabilities.canUseSelectionToolbar);
+
+	$effect(() => {
+		if (!annotationCompareReadOnly) {
+			return;
+		}
+		highlightToolbarInfo = null;
+		commentEditorInfo = null;
+		commentEditorDraft = '';
+		commentEditorSaving = false;
+		closeAnnotationDisambiguation();
+	});
 	const annotationCompareLabels = {
 		editableSlot: '\u4e3b\u9875',
 		readonlySlot: '\u526f\u9875',
@@ -401,6 +421,7 @@
 		readonlyMode: '\u53ea\u8bfb',
 		syncPosition: '\u540c\u6b65\u9605\u8bfb\u4f4d\u7f6e',
 		swapPanes: '\u4ea4\u6362\u5de6\u53f3',
+		changeCompareVersions: '\u66f4\u6362\u5bf9\u6bd4\u7248\u672c',
 		versionManager: '\u7248\u672c\u7ba1\u7406',
 		exitCompare: '\u9000\u51fa\u5bf9\u6bd4',
 		promoteReadonly: '\u8bbe\u4e3a\u4e3b\u9875\u5e76\u7f16\u8f91',
@@ -422,6 +443,21 @@
 		}
 		new Notice(`\u5f53\u524d\u5bf9\u6bd4\u7a97\u53e3\u4e3a\u53ea\u8bfb\uff0c\u8bf7\u5148\u70b9\u51fb\u201c${annotationCompareLabels.promoteReadonly}\u201d`);
 		return false;
+	}
+
+	function applyAnnotationCompareContextChange(nextContext: EpubAnnotationCompareContext | null): void {
+		const previousVersionId = String(annotationCompare?.versionId || '').trim();
+		const nextVersionId = String(nextContext?.versionId || '').trim();
+		annotationCompare = nextContext;
+		highlightToolbarInfo = null;
+		closeAnnotationDisambiguation();
+		commentEditorInfo = null;
+		commentEditorDraft = '';
+		commentEditorSaving = false;
+		syncAsActiveEpubDocumentIfActive();
+		if (previousVersionId !== nextVersionId) {
+			void reloadHighlights({ invalidateCache: true, forceReaderReplace: true });
+		}
 	}
 
 	function readAnnotationCompareContextFromLeaf(leaf: WorkspaceLeaf | null | undefined): EpubAnnotationCompareContext | null {
@@ -2826,14 +2862,6 @@
 		await openAnnotationNoteWithOptions();
 	}
 
-	async function openAnnotationDualWindow() {
-		await openAnnotationNoteWithOptions({
-			dualWindowMode: true,
-			openMode: 'right-split',
-			focus: false,
-		});
-	}
-
 	function createAnnotationCompareSessionId(bookId: string): string {
 		return `${bookId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 	}
@@ -2845,14 +2873,174 @@
 		return versions.find((version) => String(version.versionId || '').trim() === versionId) || null;
 	}
 
-	async function openAnnotationCompareWindows(
-		selection: EpubAnnotationCompareVersionSelection
-	): Promise<void> {
+	function getDualWindowModeLabel(mode: EpubDualWindowMode): string {
+		if (mode === 'book-annotation-note') {
+			return '\u539f\u4e66 + \u6807\u6ce8\u7b14\u8bb0';
+		}
+		if (mode === 'annotation-compare') {
+			return '\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4';
+		}
+		return '\u539f\u4e66 + \u7ffb\u8bd1';
+	}
+
+	function revealOpenDualWindowSession(session: EpubOpenDualWindowSession | undefined): boolean {
+		const targetLeaf = session?.mainLeaf || session?.sideLeaf || null;
+		if (!targetLeaf) {
+			return false;
+		}
+		void app.workspace.revealLeaf(targetLeaf);
+		return true;
+	}
+
+	async function closeBookAnnotationNoteDualWindow(session?: EpubOpenDualWindowSession): Promise<void> {
+		const targetFilePath = session?.filePath || filePath;
+		const panes = resolveEpubDualWindowPanes(app, targetFilePath);
+		const noteLeaf = panes?.noteLeaf || session?.sideLeaf || null;
+		const epubLeaf = panes?.epubLeaf || session?.mainLeaf || null;
+		if (noteLeaf) {
+			markEpubDualWindowNoteLeaf(noteLeaf, false);
+			await noteLeaf.detach();
+		}
+		unregisterEpubDualWindowSession(app, targetFilePath);
+		if (epubLeaf) {
+			void app.workspace.revealLeaf(epubLeaf);
+		}
+	}
+
+	async function exitAnnotationCompareSession(sessionId: string): Promise<void> {
+		const targetSessionId = String(sessionId || '').trim();
+		if (!targetSessionId) {
+			return;
+		}
+		const entries = getAnnotationCompareLeafEntries(targetSessionId);
+		if (entries.length === 0) {
+			const currentLeaf = findCurrentAnnotationCompareLeaf();
+			if (currentLeaf) {
+				await setAnnotationCompareLeafState(currentLeaf, null, { active: true });
+			}
+			return;
+		}
+		const currentLeaf = findCurrentAnnotationCompareLeaf();
+		const exitPlan = resolveEpubAnnotationCompareExitPlan(entries, (entry) => entry.context);
+		const keepEntries = exitPlan.keepEntries.length > 0
+			? exitPlan.keepEntries
+			: entries.filter((entry) => !exitPlan.closeEntries.includes(entry));
+		const targetLeaf = keepEntries[0]?.leaf || currentLeaf || entries[0]?.leaf;
+
+		await Promise.all(keepEntries.map((entry) =>
+			setAnnotationCompareLeafState(entry.leaf, null, { active: entry.leaf === targetLeaf })
+		));
+		await Promise.all(exitPlan.closeEntries.map((entry) => entry.leaf.detach()));
+		if (targetLeaf) {
+			void app.workspace.revealLeaf(targetLeaf);
+		}
+	}
+
+	async function closeOpenDualWindowSession(session: EpubOpenDualWindowSession): Promise<void> {
+		if (session.mode === 'book-annotation-note') {
+			await closeBookAnnotationNoteDualWindow(session);
+			return;
+		}
+		if (session.mode === 'annotation-compare') {
+			await exitAnnotationCompareSession(session.sessionId || '');
+		}
+	}
+
+	async function promptReplaceDualWindow(
+		existingSession: EpubOpenDualWindowSession,
+		requestedMode: EpubDualWindowMode
+	): Promise<'replace' | 'reveal' | null> {
+		return showObsidianChoice(app, '\u5f53\u524d\u8fd9\u672c\u4e66\u5df2\u5904\u4e8e\u300c' + getDualWindowModeLabel(existingSession.mode) + '\u300d\u53cc\u7a97\u3002', {
+			title: '\u5df2\u6709\u53cc\u7a97',
+			cancelText: '\u53d6\u6d88',
+			choices: [
+				{
+					value: 'replace',
+					text: '\u9000\u51fa\u5f53\u524d\u53cc\u7a97\u5e76\u6253\u5f00' + getDualWindowModeLabel(requestedMode),
+					description: '\u5173\u95ed\u5f53\u524d\u526f\u9875\uff0c\u4fdd\u7559\u4e3b\u9875\u540e\u5207\u6362\u5230\u65b0\u7684\u53cc\u7a97\u6a21\u5f0f\u3002',
+					className: 'mod-cta',
+				},
+				{
+					value: 'reveal',
+					text: '\u56de\u5230\u5f53\u524d\u53cc\u7a97',
+					description: '\u4e0d\u65b0\u5efa\u7a97\u53e3\uff0c\u53ea\u5b9a\u4f4d\u5230\u5df2\u6253\u5f00\u7684\u53cc\u7a97\u3002',
+				},
+			],
+		});
+	}
+
+	async function ensureCanOpenDualWindowMode(requestedMode: EpubDualWindowMode): Promise<boolean> {
+		const annotationBookId = (await syncPortableBookIdForCurrentBook()) || getCurrentAnnotationBookId();
+		await restoreEpubDualWindowSessionsFromWorkspace(app);
+		const guard = resolveEpubDualWindowOpenGuard(app, {
+			requestedMode,
+			bookId: annotationBookId,
+			filePath,
+			currentAnnotationCompare: annotationCompare,
+		});
+		if (guard.action === 'open') {
+			return true;
+		}
+		if (guard.action === 'blocked-side-pane') {
+			new Notice('\u526f\u9875\u53ea\u8bfb\u7a97\u53e3\u4e0d\u652f\u6301\u518d\u6253\u5f00\u53cc\u7a97\uff0c\u8bf7\u5148\u56de\u5230\u4e3b\u9875\u64cd\u4f5c');
+			return false;
+		}
+		if (guard.action === 'reveal-existing') {
+			if (!revealOpenDualWindowSession(guard.existingSession)) {
+				new Notice('\u627e\u4e0d\u5230\u5df2\u6253\u5f00\u7684\u53cc\u7a97');
+			}
+			return false;
+		}
+		if (guard.action === 'change-annotation-compare-versions') {
+			await openAnnotationCompareVersionSelection({ existingSession: guard.existingSession });
+			return false;
+		}
+		if (!guard.existingSession) {
+			return true;
+		}
+		const choice = await promptReplaceDualWindow(guard.existingSession, requestedMode);
+		if (choice === 'reveal') {
+			if (!revealOpenDualWindowSession(guard.existingSession)) {
+				new Notice('\u627e\u4e0d\u5230\u5df2\u6253\u5f00\u7684\u53cc\u7a97');
+			}
+			return false;
+		}
+		if (choice !== 'replace') {
+			return false;
+		}
+		await closeOpenDualWindowSession(guard.existingSession);
+		return true;
+	}
+
+	async function openAnnotationDualWindow() {
 		if (!book?.id) {
 			new Notice(t('epub.reader.bookNotReady'));
 			return;
 		}
-		const annotationBookId = await syncPortableBookIdForCurrentBook() || getCurrentAnnotationBookId();
+		if (!(await ensureCanOpenDualWindowMode('book-annotation-note'))) {
+			return;
+		}
+		await openAnnotationNoteWithOptions({
+			dualWindowMode: true,
+			openMode: 'right-split',
+			focus: false,
+		});
+	}
+
+	type PreparedAnnotationCompareWindows = {
+		canonicalPath: string;
+		contexts: { editable: EpubAnnotationCompareContext; readonly: EpubAnnotationCompareContext };
+	};
+
+	async function prepareAnnotationCompareWindows(
+		selection: EpubAnnotationCompareVersionSelection,
+		input: { sessionId: string; syncPosition: boolean; reason: string }
+	): Promise<PreparedAnnotationCompareWindows | null> {
+		if (!book?.id) {
+			new Notice(t('epub.reader.bookNotReady'));
+			return null;
+		}
+		const annotationBookId = (await syncPortableBookIdForCurrentBook()) || getCurrentAnnotationBookId();
 		const versions = await listEpubAnnotationVersions(app, annotationBookId);
 		const editableVersionId = String(selection.editableVersionId || '').trim();
 		const readonlyVersionId = String(selection.readonlyVersionId || '').trim();
@@ -2860,53 +3048,141 @@
 		const readonlyVersion = findAnnotationVersionSummary(versions, readonlyVersionId);
 		if (!editableVersion || !readonlyVersion || editableVersionId === readonlyVersionId) {
 			new Notice('\u8bf7\u9009\u62e9\u4e24\u4e2a\u4e0d\u540c\u7684\u6807\u6ce8\u7248\u672c');
-			return;
+			return null;
 		}
 
 		await switchEpubAnnotationVersion(app, annotationBookId, editableVersionId);
 		notifyEpubAnnotationVersionChanged(annotationBookId, {
 			filePath,
 			versionId: editableVersionId,
-			reason: 'annotation-compare-open',
+			reason: input.reason,
 		});
 
 		const canonicalPath = storageService.resolveSupportedBookFilePath(filePath) || normalizePath(filePath);
 		const contexts = createEpubAnnotationCompareContexts({
-			sessionId: createAnnotationCompareSessionId(annotationBookId),
+			sessionId: input.sessionId,
 			bookId: annotationBookId,
 			filePath: canonicalPath,
 			editableVersionId,
 			editableVersionName: editableVersion.name,
 			readonlyVersionId,
 			readonlyVersionName: readonlyVersion.name,
-			syncPosition: true,
+			syncPosition: input.syncPosition,
 		});
 		if (!contexts) {
 			new Notice('\u65e0\u6cd5\u521b\u5efa\u6807\u6ce8\u5bf9\u6bd4\u7a97\u53e3');
+			return null;
+		}
+		return { canonicalPath, contexts };
+	}
+
+	async function openAnnotationCompareWindows(
+		selection: EpubAnnotationCompareVersionSelection
+	): Promise<void> {
+		const annotationBookId = (await syncPortableBookIdForCurrentBook()) || getCurrentAnnotationBookId();
+		const prepared = await prepareAnnotationCompareWindows(selection, {
+			sessionId: createAnnotationCompareSessionId(annotationBookId),
+			syncPosition: true,
+			reason: 'annotation-compare-open',
+		});
+		if (!prepared) {
 			return;
 		}
 
-		const viewType = resolveRegisteredEpubViewType(app, canonicalPath) || EPUB_RUNTIME.viewTypes.reader;
-		const editableLeaf = findOpenEpubLeaf(app, canonicalPath) || app.workspace.getMostRecentLeaf?.() || app.workspace.getLeaf('tab');
+		const viewType = resolveRegisteredEpubViewType(app, prepared.canonicalPath) || EPUB_RUNTIME.viewTypes.reader;
+		const editableLeaf = findOpenEpubLeaf(app, prepared.canonicalPath) || app.workspace.getMostRecentLeaf?.() || app.workspace.getLeaf('tab');
 		const readonlyLeaf = app.workspace.getLeaf('split', 'vertical');
 
 		await editableLeaf.setViewState({
 			type: viewType,
 			active: true,
 			state: {
-				filePath: canonicalPath,
-				annotationCompare: contexts.editable,
+				filePath: prepared.canonicalPath,
+				annotationCompare: prepared.contexts.editable,
 			},
 		});
 		await readonlyLeaf.setViewState({
 			type: viewType,
 			active: false,
 			state: {
-				filePath: canonicalPath,
-				annotationCompare: contexts.readonly,
+				filePath: prepared.canonicalPath,
+				annotationCompare: prepared.contexts.readonly,
 			},
 		});
 		void app.workspace.revealLeaf(editableLeaf);
+	}
+
+	function getAnnotationCompareSelectionForSession(sessionId: string): EpubAnnotationCompareVersionSelection | null {
+		const entries = getAnnotationCompareLeafEntries(sessionId);
+		const editable = entries.find((entry) => entry.context.paneRole === 'editable')?.context;
+		const readonly = entries.find((entry) => entry.context.paneRole === 'readonly')?.context;
+		if (!editable?.versionId || !readonly?.versionId || editable.versionId === readonly.versionId) {
+			return null;
+		}
+		return {
+			editableVersionId: editable.versionId,
+			readonlyVersionId: readonly.versionId,
+		};
+	}
+
+	async function changeAnnotationCompareVersions(
+		selection: EpubAnnotationCompareVersionSelection,
+		sessionId: string
+	): Promise<void> {
+		const targetSessionId = String(sessionId || '').trim();
+		const entries = getAnnotationCompareLeafEntries(targetSessionId);
+		if (entries.length < 2) {
+			await openAnnotationCompareWindows(selection);
+			return;
+		}
+		const prepared = await prepareAnnotationCompareWindows(selection, {
+			sessionId: targetSessionId,
+			syncPosition: annotationCompare?.syncPosition !== false,
+			reason: 'annotation-compare-change-versions',
+		});
+		if (!prepared) {
+			return;
+		}
+		const editableEntry = entries.find((entry) => entry.context.paneRole === 'editable') || entries[0];
+		const readonlyEntry = entries.find((entry) => entry.context.paneRole === 'readonly' && entry.leaf !== editableEntry.leaf)
+			|| entries.find((entry) => entry.leaf !== editableEntry.leaf);
+		if (!readonlyEntry) {
+			await openAnnotationCompareWindows(selection);
+			return;
+		}
+		await Promise.all([
+			setAnnotationCompareLeafState(editableEntry.leaf, prepared.contexts.editable, { active: true }),
+			setAnnotationCompareLeafState(readonlyEntry.leaf, prepared.contexts.readonly),
+		]);
+		void app.workspace.revealLeaf(editableEntry.leaf);
+	}
+
+	async function openAnnotationCompareVersionSelection(options: {
+		existingSession?: EpubOpenDualWindowSession;
+	} = {}): Promise<void> {
+		if (!book?.id) {
+			new Notice(t('epub.reader.bookNotReady'));
+			return;
+		}
+		const annotationBookId = options.existingSession?.bookId
+			|| (await syncPortableBookIdForCurrentBook())
+			|| getCurrentAnnotationBookId();
+		const sessionId = options.existingSession?.sessionId || annotationCompare?.sessionId || '';
+		const initialSelection = sessionId ? getAnnotationCompareSelectionForSession(sessionId) : null;
+		const { EpubAnnotationCompareVersionSelectModal } = await import('./EpubAnnotationCompareVersionSelectModal');
+		new EpubAnnotationCompareVersionSelectModal(app, {
+			bookId: annotationBookId,
+			bookTitle: book.metadata?.title?.trim() || filePath,
+			initialSelection,
+			confirmText: sessionId ? '\u5e94\u7528\u5bf9\u6bd4' : undefined,
+			onConfirm: async (selection) => {
+				if (sessionId) {
+					await changeAnnotationCompareVersions(selection, sessionId);
+					return;
+				}
+				await openAnnotationCompareWindows(selection);
+			},
+		}).open();
 	}
 
 	async function openAnnotationCompareDualWindow() {
@@ -2914,15 +3190,10 @@
 			new Notice(t('epub.reader.bookNotReady'));
 			return;
 		}
-		const annotationBookId = await syncPortableBookIdForCurrentBook() || getCurrentAnnotationBookId();
-		const { EpubAnnotationCompareVersionSelectModal } = await import('./EpubAnnotationCompareVersionSelectModal');
-		new EpubAnnotationCompareVersionSelectModal(app, {
-			bookId: annotationBookId,
-			bookTitle: book.metadata?.title?.trim() || filePath,
-			onConfirm: async (selection) => {
-				await openAnnotationCompareWindows(selection);
-			},
-		}).open();
+		if (!(await ensureCanOpenDualWindowMode('annotation-compare'))) {
+			return;
+		}
+		await openAnnotationCompareVersionSelection();
 	}
 
 	async function openAnnotationVersions() {
@@ -2976,28 +3247,7 @@
 		if (!annotationCompare) {
 			return;
 		}
-		const entries = getAnnotationCompareLeafEntries(annotationCompare.sessionId);
-		if (entries.length === 0) {
-			const currentLeaf = findCurrentAnnotationCompareLeaf();
-			if (currentLeaf) {
-				await setAnnotationCompareLeafState(currentLeaf, null, { active: true });
-			}
-			return;
-		}
-		const currentLeaf = findCurrentAnnotationCompareLeaf();
-		const exitPlan = resolveEpubAnnotationCompareExitPlan(entries, (entry) => entry.context);
-		const keepEntries = exitPlan.keepEntries.length > 0
-			? exitPlan.keepEntries
-			: entries.filter((entry) => !exitPlan.closeEntries.includes(entry));
-		const targetLeaf = keepEntries[0]?.leaf || currentLeaf || entries[0]?.leaf;
-
-		await Promise.all(keepEntries.map((entry) =>
-			setAnnotationCompareLeafState(entry.leaf, null, { active: entry.leaf === targetLeaf })
-		));
-		await Promise.all(exitPlan.closeEntries.map((entry) => entry.leaf.detach()));
-		if (targetLeaf) {
-			void app.workspace.revealLeaf(targetLeaf);
-		}
+		await exitAnnotationCompareSession(annotationCompare.sessionId);
 	}
 
 	async function switchAnnotationComparePaneToEditable(): Promise<void> {
@@ -3121,6 +3371,19 @@
 		};
 	}
 
+	$effect(() => {
+		const sessionId = annotationCompare?.sessionId || '';
+		const versionId = annotationCompare?.versionId || '';
+		const syncPosition = annotationCompare?.syncPosition !== false;
+		void sessionId;
+		void versionId;
+		void syncPosition;
+		const detach = setupAnnotationComparePositionSync();
+		return () => {
+			detach?.();
+		};
+	});
+
 	async function refreshAfterAnnotationVersionChanged() {
 		if (!book?.id) {
 			return;
@@ -3143,16 +3406,7 @@
 		} catch (error) {
 			logger.warn('[EpubReaderApp] Failed to invalidate annotation version caches:', error);
 		}
-		try {
-			if (readerReady) {
-				await readerService.applyHighlights([]);
-			}
-		} catch (error) {
-			logger.warn('[EpubReaderApp] Failed to clear reader highlights before annotation version reload:', error);
-		}
-		readerReady = false;
-		highlightReloading = true;
-		readerRenderKey += 1;
+		await reloadHighlights({ invalidateCache: true, forceReaderReplace: true });
 		queueOpenAnnotationNoteRefresh(annotationBookId);
 	}
 
@@ -4425,6 +4679,9 @@
 		color?: string,
 		style?: EpubHighlightStyle
 	) {
+		if (!canEditAnnotationsInPane || !ensureAnnotationCompareWritable()) {
+			return;
+		}
 		outputNote(text, cfiRange, color, style);
 	}
 
@@ -4434,6 +4691,9 @@
 		color?: string,
 		style?: EpubHighlightStyle
 	) {
+		if (!canEditAnnotationsInPane || !ensureAnnotationCompareWritable()) {
+			return;
+		}
 		if (readerReady && hasExcerptNotesCapability()) {
 			try {
 				readerService.addHighlight({
@@ -4482,6 +4742,9 @@
 	}
 
 	async function handleCreateReadingPoint(text: string, cfiRange: string) {
+		if (!canEditAnnotationsInPane || !ensureAnnotationCompareWritable()) {
+			return;
+		}
 		try {
 			const plugin = getIncrementalReadingHost();
 			if (!plugin?.openIRReadingPointFromExternalSelection) {
@@ -5125,6 +5388,9 @@
 	}
 
 	async function handleHighlightExtractToCard(info: HighlightClickInfo) {
+		if (!canEditAnnotationsInPane || !ensureAnnotationCompareWritable()) {
+			return;
+		}
 		await extractContentToCard(
 			buildNoteContent(
 				info.text,
@@ -5357,14 +5623,22 @@
 	function setupHighlightClickHandler() {
 		readerService.onHighlightClick((info: HighlightClickInfo) => {
 			footnotePreviewInfo = null;
+			if (info.interactionTarget === 'reference-badge') {
+				return;
+			}
+			if (annotationCompareReadOnly) {
+				closeAnnotationDisambiguation();
+				closeCommentEditor();
+				highlightToolbarInfo = null;
+				referencePopoverInfo = null;
+				referencePopoverStats = null;
+				return;
+			}
 			if (info.interactionTarget === 'comment-marker') {
 				closeAnnotationDisambiguation();
 				referencePopoverInfo = null;
 				referencePopoverStats = null;
 				openCommentEditor(info);
-				return;
-			}
-			if (info.interactionTarget === 'reference-badge') {
 				return;
 			}
 			if (readerUiMode === 'minimal') {
@@ -5465,6 +5739,9 @@
 		if (!hasExcerptNotesCapability()) {
 			return;
 		}
+		if (!ensureAnnotationCompareWritable()) {
+			return;
+		}
 		highlightToolbarInfo = null;
 		footnotePreviewInfo = null;
 		referencePopoverInfo = null;
@@ -5537,7 +5814,8 @@
 	function syncAsActiveEpubDocument() {
 		const activeFilePath = filePath?.trim() ? filePath : null;
 		const canUseReadingProgress = hasReadingProgressCapability();
-		const canUseExcerptNotes = hasExcerptNotesCapability();
+		const canUseExcerptNotes = canReadAnnotationsInPane;
+		const canEditExcerptNotes = canEditAnnotationsInPane;
 		if (!activeFilePath) {
 			epubActiveDocumentStore.clearActiveDocument();
 			epubActiveDocumentStore.setSharedState({
@@ -5577,7 +5855,7 @@
 			chapterHref: readerService.getCurrentChapterHref?.() || '',
 			paginationInfo,
 			onDeleteBookmark: deleteBookmarkById,
-			onDeleteHighlight: canUseExcerptNotes ? deleteDisplayHighlight : null,
+			onDeleteHighlight: canEditExcerptNotes ? deleteDisplayHighlight : null,
 			onExportHighlights: canUseExcerptNotes ? exportHighlightsBySelectionKeys : null,
 			onNavigate: requestBookLocate,
 			onSettingsClick: showSettingsMenu,
@@ -6710,6 +6988,24 @@
 			void refreshAfterAnnotationVersionChanged();
 		};
 		window.addEventListener(EPUB_ANNOTATION_VERSION_CHANGED_EVENT, handleAnnotationVersionChanged);
+		const handleAnnotationCompareContextChanged = (event: Event) => {
+			const detail = normalizeEpubAnnotationCompareContextChangeDetail((event as CustomEvent).detail);
+			if (!detail || detail.sourceId !== annotationCompareContextSourceId) {
+				return;
+			}
+			const eventFilePath = normalizePath(String(detail.filePath || '').trim());
+			const currentFilePath = normalizePath(String(filePath || '').trim());
+			if (
+				eventFilePath &&
+				currentFilePath &&
+				eventFilePath !== currentFilePath &&
+				!epubVaultPathsReferToSameBook(eventFilePath, currentFilePath)
+			) {
+				return;
+			}
+			applyAnnotationCompareContextChange(detail.annotationCompare);
+		};
+		window.addEventListener(EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, handleAnnotationCompareContextChanged);
 		const handleDualWindowAnnotation = (event: Event) => {
 			const detail = (event as CustomEvent<EpubDualWindowAnnotationDetail>).detail || null;
 			if (!detail || detail.mode !== 'book-annotation-note') {
@@ -6835,7 +7131,6 @@
 		setupFootnotePreviewHandler();
 		trackHighlightSourceChanges();
 		setupScrolledChapterEndHandler();
-		const detachAnnotationComparePositionSync = setupAnnotationComparePositionSync();
 		readerService.setBookEndAdvanceHandler?.(handleBookEndAdvanceAttempt);
 		const activeLeafChangeRef = app.workspace.on(
 			'active-leaf-change',
@@ -6925,8 +7220,8 @@
 			window.removeEventListener(EPUB_READER_UI_MODE_CHANGED_EVENT, handleReaderUiModeChanged);
 			window.removeEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
 			window.removeEventListener(EPUB_ANNOTATION_VERSION_CHANGED_EVENT, handleAnnotationVersionChanged);
+			window.removeEventListener(EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, handleAnnotationCompareContextChanged);
 			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, handleDualWindowAnnotation);
-			detachAnnotationComparePositionSync?.();
 			componentDisposed = true;
 			closeAnnotationDisambiguation();
 			getBookSessionManager(app).releaseIfNoOpenLeaves(app, filePath);
@@ -7177,6 +7472,16 @@
 							</button>
 							<button
 								type="button"
+								class="mod-cta"
+								title={annotationCompareLabels.changeCompareVersions}
+								aria-label={annotationCompareLabels.changeCompareVersions}
+								onclick={() => void openAnnotationCompareVersionSelection()}
+							>
+								<span use:icon={'git-compare'}></span>
+								<span>{annotationCompareLabels.changeCompareVersions}</span>
+							</button>
+							<button
+								type="button"
 								title={annotationCompareLabels.versionManager}
 								aria-label={annotationCompareLabels.versionManager}
 								onclick={() => void openAnnotationVersions()}
@@ -7216,9 +7521,10 @@
 					{settings}
 					{excerptSettings}
 					annotationBookId={getCurrentAnnotationBookId()}
+					annotationVersionId={annotationCompareVersionId}
 					renderKey={readerRenderKey}
 					canUseReadingProgress={hasReadingProgressCapability() && !annotationCompareReadOnly}
-					canUseExcerptNotes={hasExcerptNotesCapability()}
+					canUseExcerptNotes={canReadAnnotationsInPane}
 					getReadingPositionAutoSaveConfig={getContinuousReadingPositionAutoSaveConfig}
 					isParagraphModeActive={() => settings.paragraphModeEnabled}
 					isParagraphModeProgressDetached={() => paragraphModeDetachedSession}
@@ -7380,7 +7686,7 @@
 					mobileDockBottomOffset={settings.paragraphModeEnabled ? paragraphModeNavBottomOffset : 0}
 					readerUiMode={readerUiMode}
 					semanticSettings={semanticSettings}
-					info={hasExcerptNotesCapability() ? highlightToolbarInfo : null}
+					info={canEditAnnotationsInPane ? highlightToolbarInfo : null}
 					onDelete={handleHighlightDelete}
 					onTemporarilyReveal={handleTemporarilyRevealConcealed}
 					onChangeSemantic={handleHighlightChangeSemantic}
@@ -7391,8 +7697,8 @@
 			{/if}
 
 			<EpubCommentEditorPopover
-				open={hasExcerptNotesCapability() && !annotationCompareReadOnly && commentEditorInfo !== null}
-				info={hasExcerptNotesCapability() && !annotationCompareReadOnly ? commentEditorInfo : null}
+				open={canEditAnnotationsInPane && commentEditorInfo !== null}
+				info={canEditAnnotationsInPane ? commentEditorInfo : null}
 				{readerService}
 				boundsEl={viewportEl}
 				readingLockEl={readingViewportLockEl}
@@ -7421,7 +7727,7 @@
 				onClose={closeReferencePopover}
 			/>
 
-			{#if readerUiMode !== 'minimal'}
+			{#if readerUiMode !== 'minimal' && canUseSelectionToolbarInPane}
 				<SelectionToolbar
 					{app}
 					{readerService}
@@ -7434,19 +7740,19 @@
 					externalSelection={settings.paragraphModeEnabled ? paragraphModeSelection : null}
 					{autoInsert}
 					{canvasMode}
-					canUseExcerptNotes={hasExcerptNotesCapability()}
-					canUseStyledExcerpts={hasStyledExcerptCapability()}
-					showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled()}
+					canUseExcerptNotes={canEditAnnotationsInPane}
+					canUseStyledExcerpts={canEditAnnotationsInPane && hasStyledExcerptCapability()}
+					showPremiumFeaturePreviewEnabled={isPremiumFeaturePreviewEnabled() && !annotationCompareReadOnly}
 					onRequestPremiumFeaturePreview={openPremiumFeaturePreview}
-					onInsertToNote={hasExcerptNotesCapability() ? handleInsertToNote : undefined}
+					onInsertToNote={canEditAnnotationsInPane ? handleInsertToNote : undefined}
 					onCopySelectionLink={
-						hasExcerptNotesCapability() || isPremiumFeaturePreviewEnabled()
+						canEditAnnotationsInPane || (isPremiumFeaturePreviewEnabled() && !annotationCompareReadOnly)
 							? handleCopySelectionLink
 							: undefined
 					}
-					onExtractToCard={handleExtractToCard}
-					onCreateReadingPoint={hasCreateReadingPointCapability() ? handleCreateReadingPoint : undefined}
-					onAutoInsert={hasExcerptNotesCapability() ? handleAutoInsertSelection : undefined}
+					onExtractToCard={canEditAnnotationsInPane ? handleExtractToCard : undefined}
+					onCreateReadingPoint={canEditAnnotationsInPane && hasCreateReadingPointCapability() ? handleCreateReadingPoint : undefined}
+					onAutoInsert={canEditAnnotationsInPane ? handleAutoInsertSelection : undefined}
 					onOpenAIMenu={showSelectedTextAIMenu}
 				/>
 			{/if}

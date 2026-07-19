@@ -95,6 +95,11 @@ export {
 	type EpubAnnotationVersionSummary,
 } from "./epub-annotation-version-store";
 export {
+	resolveEpubAnnotationPaneCapabilities,
+	type EpubAnnotationPaneCapabilities,
+	type EpubAnnotationPaneCapabilitiesInput,
+} from "./epub-annotation-pane-capabilities";
+export {
 	createEpubAnnotatedBookPackage,
 	downloadEpubAnnotatedBookPackage,
 	importEpubAnnotatedBookPackage,
@@ -169,18 +174,23 @@ export type {
 	EpubWeaveRemoveExcerptResult,
 } from "./epub-host";
 export {
+	EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT,
 	EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
 	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
 	EPUB_DUAL_WINDOW_SESSION_EVENT,
 	createEpubDualWindowAnnotationDetail,
 	createEpubAnnotationCompareContexts,
+	dispatchEpubAnnotationCompareContextEvent,
 	dispatchEpubDualWindowAnnotationEvent,
 	dispatchEpubDualWindowReaderDisplayEvent,
 	dispatchEpubDualWindowSessionEvent,
+	normalizeEpubAnnotationCompareContextChangeDetail,
 	normalizeEpubDualWindowReaderDisplayDetail,
 	normalizeEpubAnnotationCompareContext,
 	resolveEpubAnnotationCompareExitPlan,
+	shouldRemountEpubReaderForStateChange,
 	shouldShowEpubReaderPrimaryToolbar,
+	type EpubAnnotationCompareContextChangeDetail,
 	type EpubAnnotationCompareContext,
 	type EpubAnnotationCompareExitPlan,
 	type EpubAnnotationComparePaneRole,
@@ -194,20 +204,30 @@ export {
 	type EpubDualWindowSessionDetail,
 } from "./epub-dual-window";
 export {
+	cleanupStaleEpubDualWindowSessions,
 	getEpubDualWindowLeafContainerEl,
 	getEpubDualWindowLeafContainerEls,
 	getEpubDualWindowSession,
 	hasEpubDualWindowSession,
+	listOpenEpubDualWindowSessions,
 	markEpubDualWindowPaneRoles,
 	markEpubDualWindowNoteLeaf,
 	registerEpubDualWindowSession,
+	resolveEpubDualWindowOpenGuard,
 	resolveEpubDualWindowBoundaryPosition,
 	resolveEpubDualWindowPanes,
+	restoreEpubDualWindowSessionsFromWorkspace,
 	swapEpubDualWindowPanes,
+	unregisterEpubDualWindowSession,
+	type EpubDualWindowHousekeepingResult,
+	type EpubDualWindowOpenGuardInput,
+	type EpubDualWindowOpenGuardResult,
 	type EpubDualWindowPanes,
 	type EpubDualWindowPosition,
 	type EpubDualWindowRect,
+	type EpubDualWindowSideKind,
 	type EpubDualWindowSession,
+	type EpubOpenDualWindowSession,
 } from "./epub-dual-window-workspace";
 export {
 	EPUB_RUNTIME,

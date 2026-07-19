@@ -36,6 +36,37 @@ export function resolveDefaultEpubAnnotationCompareSelection(
 	};
 }
 
+export function resolveEpubAnnotationCompareSelection(
+	versions: EpubAnnotationVersionSummary[],
+	preferredSelection?: Partial<EpubAnnotationCompareVersionSelection> | null
+): EpubAnnotationCompareVersionSelection {
+	const fallback = resolveDefaultEpubAnnotationCompareSelection(versions);
+	if (!preferredSelection) {
+		return fallback;
+	}
+
+	const editableVersionId = cleanVersionId(preferredSelection.editableVersionId);
+	const readonlyVersionId = cleanVersionId(preferredSelection.readonlyVersionId);
+	if (
+		editableVersionId &&
+		readonlyVersionId &&
+		editableVersionId !== readonlyVersionId &&
+		versionExists(versions, editableVersionId) &&
+		versionExists(versions, readonlyVersionId)
+	) {
+		return { editableVersionId, readonlyVersionId };
+	}
+
+	let next = fallback;
+	if (editableVersionId && versionExists(versions, editableVersionId)) {
+		next = selectEpubAnnotationCompareVersionSlot(versions, next, "editable", editableVersionId);
+	}
+	if (readonlyVersionId && versionExists(versions, readonlyVersionId)) {
+		next = selectEpubAnnotationCompareVersionSlot(versions, next, "readonly", readonlyVersionId);
+	}
+	return next;
+}
+
 export function isCompleteEpubAnnotationCompareSelection(
 	selection: EpubAnnotationCompareVersionSelection
 ): boolean {

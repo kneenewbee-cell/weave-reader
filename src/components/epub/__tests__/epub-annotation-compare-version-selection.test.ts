@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	isCompleteEpubAnnotationCompareSelection,
+	resolveEpubAnnotationCompareSelection,
 	resolveDefaultEpubAnnotationCompareSelection,
 	selectEpubAnnotationCompareVersionSlot,
 } from "../epub-annotation-compare-version-selection";
@@ -32,6 +33,25 @@ describe("epub annotation compare version selection", () => {
 			])
 		).toEqual({
 			editableVersionId: "default",
+			readonlyVersionId: "imported-default",
+		});
+	});
+
+	it("uses an existing compare selection when both versions are still available", () => {
+		expect(
+			resolveEpubAnnotationCompareSelection(
+				[
+					version("default", { active: true }),
+					version("imported-default"),
+					version("review-copy"),
+				],
+				{
+					editableVersionId: "review-copy",
+					readonlyVersionId: "imported-default",
+				}
+			)
+		).toEqual({
+			editableVersionId: "review-copy",
 			readonlyVersionId: "imported-default",
 		});
 	});

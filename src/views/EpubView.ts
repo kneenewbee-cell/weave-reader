@@ -26,6 +26,7 @@ import {
 	EPUB_DUAL_WINDOW_SESSION_EVENT,
 	EPUB_RUNTIME,
 	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
+	dispatchEpubAnnotationCompareContextEvent,
 	dispatchEpubDualWindowReaderDisplayEvent,
 	getEpubDualWindowLeafContainerEl,
 	normalizeEpubDualWindowReaderDisplayDetail,
@@ -33,6 +34,8 @@ import {
 	resolveEpubDualWindowBoundaryPosition,
 	resolveEpubDualWindowPanes,
 	shouldShowEpubReaderPrimaryToolbar,
+	shouldRemountEpubReaderForStateChange,
+	restoreEpubDualWindowSessionsFromWorkspace,
 	swapEpubDualWindowPanes,
 	type EpubAnnotationCompareContext,
 	type EpubDualWindowPanes,
@@ -85,6 +88,7 @@ export class EpubView extends ItemView {
 	private lastActiveMarkdownLeaf: WorkspaceLeaf | null = null;
 	private leafChangeHandler: unknown = null;
 	private layoutChangeHandler: unknown = null;
+	private dualWindowRestorePromise: Promise<void> | null = null;
 	private premiumUiUnsubscribers: Array<() => void> = [];
 	private linkedCanvasPath: string | null = null;
 	private mounting = false;
@@ -1126,7 +1130,13 @@ export class EpubView extends ItemView {
 			this.pendingText = incomingPending.text || "";
 		}
 
-		if (incomingPath && (incomingPath !== this.filePath || annotationCompareChanged)) {
+		if (
+			incomingPath &&
+			shouldRemountEpubReaderForStateChange({
+				currentFilePath: this.filePath,
+				incomingFilePath: incomingPath,
+			})
+		) {
 			this.filePath = incomingPath;
 			this.annotationCompare = incomingAnnotationCompare;
 			this.bookTitle = "";
@@ -1137,6 +1147,23 @@ export class EpubView extends ItemView {
 			this.refreshViewTitle();
 			if (this.isOpen) {
 				await this.mountComponent();
+			}
+		} else if (annotationCompareChanged) {
+			if (incomingPath) {
+				this.filePath = incomingPath;
+			}
+			this.annotationCompare = incomingAnnotationCompare;
+			this.refreshAllActionButtons();
+			this.refreshInlineToolbarVisibility();
+			this.refreshViewTitle();
+			if (!this.component && this.isOpen) {
+				await this.mountComponent();
+			} else if (this.component && this.isOpen && this.filePath) {
+				dispatchEpubAnnotationCompareContextEvent(window, {
+					sourceId: this.readerDisplaySyncSourceId,
+					filePath: this.filePath,
+					annotationCompare: this.annotationCompare,
+				});
 			}
 		} else if (incomingPath && !this.component && this.isOpen) {
 			this.filePath = incomingPath;
@@ -1169,6 +1196,7 @@ export class EpubView extends ItemView {
 		this.setupLeafChangeTracking();
 		this.setupLinkedTabTracking();
 		this.setupDualWindowSessionTracking();
+		this.queueDualWindowSessionRestore();
 
 		if (this.filePath) {
 			await this.mountComponent();
@@ -1404,6 +1432,20 @@ export class EpubView extends ItemView {
 		if (panes) {
 			this.positionDualWindowSwapBtn(panes);
 		}
+	}
+
+	private queueDualWindowSessionRestore(): void {
+		if (this.dualWindowRestorePromise) {
+			return;
+		}
+		this.dualWindowRestorePromise = restoreEpubDualWindowSessionsFromWorkspace(this.app)
+			.catch((error) => {
+				logger.warn("[EpubView] Failed to restore EPUB dual-window sessions:", error);
+			})
+			.finally(() => {
+				this.dualWindowRestorePromise = null;
+				this.updateDualWindowSwapBtn();
+			});
 	}
 
 	private appendInlineActionButton(
@@ -1732,6 +1774,7 @@ export class EpubView extends ItemView {
 			app: this.app,
 			filePath: this.filePath,
 			annotationCompare: this.annotationCompare,
+			annotationCompareContextSourceId: this.readerDisplaySyncSourceId,
 			onTitleChange: (title: string) => {
 				this.bookTitle = title;
 				this.refreshViewTitle();
@@ -1877,6 +1920,7 @@ export class EpubView extends ItemView {
 		this.layoutChangeHandler = () => {
 			this.applySurfaceContext();
 			this.checkLinkedCanvasTab();
+			this.queueDualWindowSessionRestore();
 			this.updateDualWindowSwapBtn();
 			if (this.toolbarHandlersReady) {
 				this.refreshAllActionButtons();

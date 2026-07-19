@@ -159,4 +159,53 @@ describe('EpubReaderView annotation version reload', () => {
 		);
 		expect(annotationService.collectAllHighlights).toHaveBeenCalledTimes(2);
 	});
+
+	it('passes the requested annotation version when collecting reader highlights', async () => {
+		vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+			x: 0,
+			y: 0,
+			top: 0,
+			left: 0,
+			right: 800,
+			bottom: 600,
+			width: 800,
+			height: 600,
+			toJSON: () => ({}),
+		} as DOMRect);
+
+		const requestedHighlight = createHighlight('readonly annotation');
+		const readerService = createReaderService();
+		const annotationService = {
+			collectAllHighlights: vi.fn(async () => [requestedHighlight]),
+		};
+		const backlinkService = {};
+
+		render(EpubReaderView, {
+			props: {
+				filePath: 'Books/book.epub',
+				book: createBook(),
+				readerService,
+				storageService: {},
+				annotationService,
+				backlinkService,
+				settings: createSettings(),
+				excerptSettings: { strikethroughDisplayMode: 'strikethrough' },
+				canUseReadingProgress: false,
+				canUseExcerptNotes: true,
+				annotationBookId: 'portable-book-id',
+				annotationVersionId: 'readonly-version',
+				renderKey: 0,
+			},
+		});
+
+		await waitFor(() => expect(readerService.applyHighlights).toHaveBeenLastCalledWith([
+			requestedHighlight,
+		]));
+		expect(annotationService.collectAllHighlights).toHaveBeenCalledWith(
+			'portable-book-id',
+			'Books/book.epub',
+			backlinkService,
+			{ annotationVersionId: 'readonly-version' }
+		);
+	});
 });

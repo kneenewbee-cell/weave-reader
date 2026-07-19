@@ -5,7 +5,7 @@ import {
 } from "../../services/epub";
 import {
 	isCompleteEpubAnnotationCompareSelection,
-	resolveDefaultEpubAnnotationCompareSelection,
+	resolveEpubAnnotationCompareSelection,
 	selectEpubAnnotationCompareVersionSlot,
 	type EpubAnnotationCompareVersionSelection,
 	type EpubAnnotationCompareVersionSlot,
@@ -14,6 +14,8 @@ import {
 export interface EpubAnnotationCompareVersionSelectModalOptions {
 	bookId: string;
 	bookTitle?: string;
+	initialSelection?: Partial<EpubAnnotationCompareVersionSelection> | null;
+	confirmText?: string;
 	onConfirm: (selection: EpubAnnotationCompareVersionSelection) => void | Promise<void>;
 }
 
@@ -69,7 +71,7 @@ export class EpubAnnotationCompareVersionSelectModal extends Modal {
 		this.contentEl.empty();
 		try {
 			this.versions = await listEpubAnnotationVersions(this.app, this.options.bookId);
-			this.selection = resolveDefaultEpubAnnotationCompareSelection(this.versions);
+			this.selection = resolveEpubAnnotationCompareSelection(this.versions, this.options.initialSelection);
 			this.render();
 		} catch (error) {
 			console.warn("[WeaveReader] Failed to load annotation compare versions:", error);
@@ -112,7 +114,7 @@ export class EpubAnnotationCompareVersionSelectModal extends Modal {
 		this.confirmButton = footer.createEl("button", {
 			cls: "mod-cta",
 			attr: { type: "button" },
-			text: TEXT.openCompare,
+			text: this.options.confirmText || TEXT.openCompare,
 		});
 		this.confirmButton.addEventListener("click", () => {
 			void this.confirm();

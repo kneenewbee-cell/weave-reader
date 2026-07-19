@@ -29,6 +29,7 @@
 		settings: EpubReaderSettings;
 		excerptSettings: EpubExcerptSettings;
 		annotationBookId?: string;
+		annotationVersionId?: string;
 		canUseReadingProgress?: boolean;
 		canUseExcerptNotes?: boolean;
 		getReadingPositionAutoSaveConfig?: () => { enabled: boolean; pages: number };
@@ -55,6 +56,7 @@
 		settings,
 		excerptSettings,
 		annotationBookId = '',
+		annotationVersionId = '',
 		canUseReadingProgress = true,
 		canUseExcerptNotes = true,
 		getReadingPositionAutoSaveConfig,
@@ -682,7 +684,15 @@
 		if (!book) return [];
 		try {
 			const targetBookId = String(annotationBookId || book.id).trim();
-			const allHighlights = await annotationService.collectAllHighlights(targetBookId, filePath, backlinkService);
+			const requestedVersionId = String(annotationVersionId || '').trim();
+			const allHighlights = requestedVersionId
+				? await annotationService.collectAllHighlights(
+					targetBookId,
+					filePath,
+					backlinkService,
+					{ annotationVersionId: requestedVersionId }
+				)
+				: await annotationService.collectAllHighlights(targetBookId, filePath, backlinkService);
 			logger.debug('[EpubReaderView] total highlights to apply:', allHighlights.length);
 			return allHighlights;
 		} catch (e) {
