@@ -925,6 +925,20 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("can defer highlight refresh while applying transient reader appearance", async () => {
+		const service = new FoliateReaderService(createMockApp(await createSampleEpubBuffer()) as any) as any;
+		try {
+			const refreshSpy = vi.spyOn(service, "refreshHighlights").mockResolvedValue(undefined);
+
+			await service.applyReaderAppearance({ lineHeight: 1.7 }, { refreshHighlights: false });
+
+			expect(service.currentLineHeight).toBe(1.7);
+			expect(refreshSpy).not.toHaveBeenCalled();
+		} finally {
+			service.destroy();
+		}
+	});
+
 	it("reads visible frames from renderer.getContents in modern foliate runtime", async () => {
 		const service = new FoliateReaderService(createMockApp(await createSampleEpubBuffer()) as any);
 		try {

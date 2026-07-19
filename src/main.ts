@@ -46,6 +46,7 @@ import {
 	renderEpubAnnotationNoteMarkdown,
 	markEpubDualWindowNoteLeaf,
 	registerEpubDualWindowSession,
+	unregisterEpubDualWindowSession,
 	findEpubPortableBookIdByIdentity,
 	resolveEpubPortableBookDataLocation,
 	resolveAnnotationChapterMetadata,
@@ -1237,6 +1238,8 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 				filePath: resolvedSourcePath,
 				notePath: noteFile.path,
 			});
+		} else if (resolvedSourcePath) {
+			unregisterEpubDualWindowSession(this.app, resolvedSourcePath);
 		}
 	}
 }

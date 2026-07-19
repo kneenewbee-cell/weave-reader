@@ -171,6 +171,10 @@ export interface ReaderAppearanceOptions {
 	strikethroughPresentation?: EpubStrikethroughDisplayMode;
 }
 
+export interface ReaderAppearanceApplyOptions {
+	refreshHighlights?: boolean;
+}
+
 export interface ReaderRemainingTimeEstimate {
 	bookMs?: number;
 	chapterMs?: number;
@@ -291,7 +295,10 @@ export interface EpubReaderEngine {
 	flushReadingPace?(): void;
 	isLayoutChanging(): boolean;
 	resize(width: number, height: number): void;
-	applyReaderAppearance(appearance: ReaderAppearanceOptions, redisplay?: boolean): Promise<void>;
+	applyReaderAppearance(
+		appearance: ReaderAppearanceOptions,
+		options?: boolean | ReaderAppearanceApplyOptions
+	): Promise<void>;
 	onRelocated(callback: (position: ReadingPosition) => void): () => void;
 	setLayoutMode(
 		mode: EpubLayoutMode,

@@ -84,6 +84,9 @@
 	let retryTimer: ReturnType<typeof window.setTimeout> | null = null;
 	let highlightReapplyTimer: ReturnType<typeof window.setTimeout> | null = null;
 	let mobileStabilizationTimer: ReturnType<typeof window.setTimeout> | null = null;
+	let resizeAnimationFrame: number | null = null;
+	let pendingResize: { width: number; height: number } | null = null;
+	let lastResize: { width: number; height: number } | null = null;
 	let highlightsReady = false;
 	let detachRelocatedHandler: (() => void) | null = null;
 	let skipNextAppearanceSync = false;
@@ -91,6 +94,8 @@
 	let mobileStabilizationToken = 0;
 	let viewDisposed = false;
 	let lastRenderKey = renderKey;
+	let lastHighlightCollectionKey = getHighlightCollectionKey();
+	let lastAppearanceStrikethroughMode = excerptSettings.strikethroughDisplayMode;
 	let readingPositionAutoSaveTrackerState = createReadingPositionAutoSaveTrackerState('', 0);
 	let readingPositionAutoSaveEnabled = DEFAULT_CONTINUOUS_READING_POSITION_AUTO_SAVE_ENABLED;
 	let readingPositionAutoSavePages = DEFAULT_CONTINUOUS_READING_POSITION_AUTO_SAVE_PAGES;
@@ -648,13 +653,34 @@
 		resizeObserver = new ResizeObserver((entries) => {
 			for (const entry of entries) {
 				const { width, height } = entry.contentRect;
-				if (width > 0 && height > 0 && !readerService.isLayoutChanging()) {
-					readerService.resize(width, height);
-					scheduleHighlightReapply();
-				}
+				scheduleReaderResize(width, height);
 			}
 		});
 		resizeObserver.observe(viewerContainer);
+	}
+
+	function scheduleReaderResize(width: number, height: number): void {
+		if (width <= 0 || height <= 0) {
+			return;
+		}
+		pendingResize = { width, height };
+		if (resizeAnimationFrame !== null) {
+			return;
+		}
+		resizeAnimationFrame = window.requestAnimationFrame(() => {
+			resizeAnimationFrame = null;
+			const resize = pendingResize;
+			pendingResize = null;
+			if (!resize || !rendered || readerService.isLayoutChanging()) {
+				return;
+			}
+			if (lastResize && lastResize.width === resize.width && lastResize.height === resize.height) {
+				return;
+			}
+			lastResize = resize;
+			readerService.resize(resize.width, resize.height);
+			scheduleHighlightReapply();
+		});
 	}
 
 	function resetRenderLifecycle(): void {
@@ -680,13 +706,19 @@
 			window.clearTimeout(mobileStabilizationTimer);
 			mobileStabilizationTimer = null;
 		}
+		if (resizeAnimationFrame !== null) {
+			window.cancelAnimationFrame(resizeAnimationFrame);
+			resizeAnimationFrame = null;
+		}
+		pendingResize = null;
+		lastResize = null;
 		if (resizeObserver) {
 			resizeObserver.disconnect();
 			resizeObserver = null;
 		}
 	}
 
-	async function applySettings() {
+	async function applySettings(options?: { refreshHighlights?: boolean }) {
 		if (!rendered) return;
 		await readerService.applyReaderAppearance({
 			lineHeight: settings.lineHeight,
@@ -694,7 +726,7 @@
 			pageMargin: settings.pageMargin,
 			widthMode: settings.widthMode,
 			strikethroughPresentation: excerptSettings.strikethroughDisplayMode,
-		});
+		}, options);
 	}
 
 	async function collectAllHighlights(expectedKey = getHighlightCollectionKey()): Promise<ReaderHighlight[] | null> {
@@ -785,6 +817,15 @@
 		await readerService.applyHighlights(allHighlights);
 	}
 
+	async function reloadSavedHighlightsForCollectionKey(expectedKey: string) {
+		const allHighlights = await collectAllHighlights(expectedKey);
+		if (allHighlights === null || isStaleHighlightCollection(expectedKey)) {
+			return;
+		}
+		await readerService.applyHighlights(allHighlights);
+		highlightsReady = true;
+	}
+
 	function registerRelocatedHandler() {
 		if (detachRelocatedHandler) return;
 		detachRelocatedHandler = readerService.onRelocated(async (position) => {
@@ -860,17 +901,36 @@
 	});
 
 	$effect(() => {
+		const nextHighlightCollectionKey = getHighlightCollectionKey();
+		if (nextHighlightCollectionKey === lastHighlightCollectionKey) {
+			return;
+		}
+		lastHighlightCollectionKey = nextHighlightCollectionKey;
+		if (!rendered) {
+			return;
+		}
+		untrack(() => {
+			highlightsReady = false;
+			void reloadSavedHighlightsForCollectionKey(nextHighlightCollectionKey);
+		});
+	});
+
+	$effect(() => {
 		const _lh = settings.lineHeight;
 		const _ls = settings.letterSpacing;
 		const _pm = settings.pageMargin;
 		const _sp = excerptSettings.strikethroughDisplayMode;
+		const refreshImmediately = _sp !== lastAppearanceStrikethroughMode;
+		lastAppearanceStrikethroughMode = _sp;
 		if (rendered) {
 			if (skipNextAppearanceSync) {
 				skipNextAppearanceSync = false;
 				return;
 			}
-			applySettings().then(() => {
-				scheduleHighlightReapply(150);
+			applySettings({ refreshHighlights: refreshImmediately }).then(() => {
+				if (!refreshImmediately) {
+					scheduleHighlightReapply(150);
+				}
 			});
 		}
 	});

@@ -424,7 +424,6 @@
 		editableMode: '\u53ef\u7f16\u8f91',
 		readonlyMode: '\u53ea\u8bfb',
 		syncPosition: '\u540c\u6b65\u9605\u8bfb\u4f4d\u7f6e',
-		swapPanes: '\u4ea4\u6362\u5de6\u53f3',
 		changeCompareVersions: '\u66f4\u6362\u5bf9\u6bd4\u7248\u672c',
 		versionManager: '\u7248\u672c\u7ba1\u7406',
 		exitCompare: '\u9000\u51fa\u5bf9\u6bd4',
@@ -3335,22 +3334,6 @@
 				syncPosition: nextSyncPosition,
 			})
 		));
-	}
-
-	async function swapAnnotationComparePanes(): Promise<void> {
-		if (!annotationCompare) {
-			return;
-		}
-		const entries = getAnnotationCompareLeafEntries(annotationCompare.sessionId);
-		if (entries.length < 2) {
-			new Notice('\u627e\u4e0d\u5230\u53ef\u4ea4\u6362\u7684\u5bf9\u6bd4\u7a97\u53e3');
-			return;
-		}
-		const [first, second] = entries;
-		await Promise.all([
-			setAnnotationCompareLeafState(first.leaf, second.context),
-			setAnnotationCompareLeafState(second.leaf, first.context),
-		]);
 	}
 
 	async function exitAnnotationCompareMode(): Promise<void> {
@@ -7655,15 +7638,6 @@
 							>
 								<span use:icon={annotationCompare.syncPosition === false ? 'unlink' : 'link'}></span>
 								<span>{annotationCompareLabels.syncPosition}</span>
-							</button>
-							<button
-								type="button"
-								title={annotationCompareLabels.swapPanes}
-								aria-label={annotationCompareLabels.swapPanes}
-								onclick={() => void swapAnnotationComparePanes()}
-							>
-								<span use:icon={'arrow-left-right'}></span>
-								<span>{annotationCompareLabels.swapPanes}</span>
 							</button>
 							<button
 								type="button"

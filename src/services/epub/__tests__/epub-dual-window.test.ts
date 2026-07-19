@@ -27,6 +27,8 @@ import {
 	resolveEpubDualWindowOpenGuard,
 	resolveEpubDualWindowBoundaryPosition,
 	resolveEpubDualWindowPanes,
+	resolveEpubDualWindowSwapPanes,
+	swapEpubDualWindowPanes,
 	unregisterEpubDualWindowSession,
 } from "../epub-dual-window-workspace";
 
@@ -67,7 +69,7 @@ function createMockApp(input: {
 	const files = new Map(
 		Object.entries(input.files || {}).map(([path, value]) => [
 			path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, ""),
-			JSON.stringify(value),
+			typeof value === "string" ? value : JSON.stringify(value),
 		])
 	);
 	return {
@@ -478,6 +480,115 @@ describe("epub-dual-window", () => {
 		expect(sessions[0].sideLeaf).toBeTruthy();
 	});
 
+	it("resolves annotation compare panes for the shared floating swap button", () => {
+		const contexts = createEpubAnnotationCompareContexts({
+			sessionId: "compare-1",
+			bookId: "book-1",
+			filePath: "demo.epub",
+			editableVersionId: "default",
+			readonlyVersionId: "imported",
+		});
+		const editableLeaf = createMockLeaf({
+			filePath: "demo.epub",
+			state: { annotationCompare: contexts?.editable },
+		});
+		const readonlyLeaf = createMockLeaf({
+			filePath: "demo.epub",
+			state: { annotationCompare: contexts?.readonly },
+		});
+		const app = createMockApp({
+			epubLeaves: [readonlyLeaf, editableLeaf],
+		});
+
+		const panes = resolveEpubDualWindowSwapPanes(app, {
+			filePath: "demo.epub",
+			annotationCompare: contexts?.editable,
+		});
+
+		expect(panes).toMatchObject({ mode: "annotation-compare" });
+		expect(panes?.mainLeaf).toBe(editableLeaf);
+		expect(panes?.sideLeaf).toBe(readonlyLeaf);
+	});
+
+	it("swaps annotation compare window contents without promoting the readonly pane", async () => {
+		const contexts = createEpubAnnotationCompareContexts({
+			sessionId: "compare-1",
+			bookId: "book-1",
+			filePath: "demo.epub",
+			editableVersionId: "default",
+			readonlyVersionId: "imported",
+		});
+		const editableLeaf = createMockLeaf({
+			filePath: "demo.epub",
+			state: {
+				filePath: "demo.epub",
+				annotationCompare: contexts?.editable,
+				positionMarker: "left",
+			},
+		});
+		const readonlyLeaf = createMockLeaf({
+			filePath: "demo.epub",
+			state: {
+				filePath: "demo.epub",
+				annotationCompare: contexts?.readonly,
+				positionMarker: "right",
+			},
+		});
+		const app = createMockApp({
+			epubLeaves: [editableLeaf, readonlyLeaf],
+		});
+
+		await expect(swapEpubDualWindowPanes(app, "demo.epub", contexts?.editable)).resolves.toBe(true);
+
+		expect(editableLeaf.getViewState().state).toMatchObject({
+			annotationCompare: contexts?.readonly,
+			positionMarker: "right",
+		});
+		expect(readonlyLeaf.getViewState().state).toMatchObject({
+			annotationCompare: contexts?.editable,
+			positionMarker: "left",
+		});
+		expect(app.workspace.revealLeaf).toHaveBeenCalledWith(readonlyLeaf);
+	});
+
+	it("keeps book annotation note window swaps on the shared floating swap path", async () => {
+		const epubLeaf = createMockLeaf({
+			filePath: "demo.epub",
+			state: {
+				filePath: "demo.epub",
+				positionMarker: "epub",
+			},
+		});
+		const noteLeaf = createMockLeaf({
+			type: "markdown",
+			viewFilePath: "weave/epub-data/books/book-1/annotations.md",
+			state: {
+				filePath: "weave/epub-data/books/book-1/annotations.md",
+				positionMarker: "note",
+			},
+		});
+		const app = createMockApp({
+			epubLeaves: [epubLeaf],
+			markdownLeaves: [noteLeaf],
+		});
+		registerEpubDualWindowSession(app, {
+			mode: "book-annotation-note",
+			bookId: "book-1",
+			filePath: "demo.epub",
+			notePath: "weave/epub-data/books/book-1/annotations.md",
+		});
+
+		await expect(swapEpubDualWindowPanes(app, "demo.epub")).resolves.toBe(true);
+
+		expect(epubLeaf.getViewState().state).toMatchObject({
+			positionMarker: "note",
+		});
+		expect(noteLeaf.getViewState().state).toMatchObject({
+			positionMarker: "epub",
+		});
+		expect(app.workspace.revealLeaf).toHaveBeenCalledWith(noteLeaf);
+	});
+
 	it("restores note dual-window sessions from Obsidian-restored leaves after restart", async () => {
 		const epubLeaf = createMockLeaf({ filePath: "Books/demo.epub" });
 		const noteLeaf = createMockLeaf({
@@ -492,6 +603,8 @@ describe("epub-dual-window", () => {
 					bookId: "book-1",
 					filePath: "Books/demo.epub",
 				},
+				"weave/epub-data/books/book-1/annotations.md":
+					'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="true"></div>',
 			},
 		});
 
@@ -517,6 +630,67 @@ describe("epub-dual-window", () => {
 			action: "replace-existing",
 			existingSession: { mode: "book-annotation-note" },
 		});
+	});
+
+	it("does not restore normal annotation note leaves as dual-window sessions", async () => {
+		const epubLeaf = createMockLeaf({ filePath: "Books/demo.epub" });
+		const noteLeaf = createMockLeaf({
+			type: "markdown",
+			viewFilePath: "weave/epub-data/books/book-1/annotations.md",
+		});
+		const app = createMockApp({
+			epubLeaves: [epubLeaf],
+			markdownLeaves: [noteLeaf],
+			files: {
+				"weave/epub-data/books/book-1/book.json": {
+					bookId: "book-1",
+					filePath: "Books/demo.epub",
+				},
+				"weave/epub-data/books/book-1/annotations.md":
+					'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>',
+			},
+		});
+
+		await expect(restoreEpubDualWindowSessionsFromWorkspace(app)).resolves.toBe(0);
+
+		expect(getEpubDualWindowSession(app, "Books/demo.epub")).toBeNull();
+		expect(
+			resolveEpubDualWindowOpenGuard(app, {
+				requestedMode: "annotation-compare",
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
+			})
+		).toMatchObject({ action: "open" });
+	});
+
+	it("clears stale note dual-window sessions when the generated note is no longer in dual-window mode", async () => {
+		const epubLeaf = createMockLeaf({ filePath: "Books/demo.epub" });
+		const noteLeaf = createMockLeaf({
+			type: "markdown",
+			viewFilePath: "weave/epub-data/books/book-1/annotations.md",
+		});
+		const app = createMockApp({
+			epubLeaves: [epubLeaf],
+			markdownLeaves: [noteLeaf],
+			files: {
+				"weave/epub-data/books/book-1/book.json": {
+					bookId: "book-1",
+					filePath: "Books/demo.epub",
+				},
+				"weave/epub-data/books/book-1/annotations.md":
+					'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>',
+			},
+		});
+		registerEpubDualWindowSession(app, {
+			mode: "book-annotation-note",
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			notePath: "weave/epub-data/books/book-1/annotations.md",
+		});
+
+		await expect(restoreEpubDualWindowSessionsFromWorkspace(app)).resolves.toBe(0);
+
+		expect(getEpubDualWindowSession(app, "Books/demo.epub")).toBeNull();
 	});
 
 	it("allows different books to keep independent dual-window sessions", () => {

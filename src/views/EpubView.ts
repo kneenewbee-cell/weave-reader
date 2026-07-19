@@ -32,15 +32,15 @@ import {
 	normalizeEpubDualWindowReaderDisplayDetail,
 	normalizeEpubAnnotationCompareContext,
 	resolveEpubDualWindowBoundaryPosition,
-	resolveEpubDualWindowPanes,
+	resolveEpubDualWindowSwapPanes,
 	shouldShowEpubReaderPrimaryToolbar,
 	shouldRemountEpubReaderForStateChange,
 	restoreEpubDualWindowSessionsFromWorkspace,
 	swapEpubDualWindowPanes,
 	type EpubAnnotationCompareContext,
-	type EpubDualWindowPanes,
 	type EpubDualWindowReaderDisplayDetail,
 	type EpubDualWindowSessionDetail,
+	type EpubDualWindowSwapPanes,
 } from "../services/epub";
 import type { EpubCanvasService } from "../services/epub/EpubCanvasService";
 import { reportEpubError } from "../services/epub/epub-error";
@@ -88,7 +88,9 @@ export class EpubView extends ItemView {
 	private lastActiveMarkdownLeaf: WorkspaceLeaf | null = null;
 	private leafChangeHandler: unknown = null;
 	private layoutChangeHandler: unknown = null;
+	private layoutChangeFrame: number | null = null;
 	private dualWindowRestorePromise: Promise<void> | null = null;
+	private dualWindowRestoreTimer: number | null = null;
 	private premiumUiUnsubscribers: Array<() => void> = [];
 	private linkedCanvasPath: string | null = null;
 	private mounting = false;
@@ -107,6 +109,7 @@ export class EpubView extends ItemView {
 	private annotationVersionsBtn: HTMLElement | null = null;
 	private inlineAnnotationVersionsBtn: HTMLButtonElement | null = null;
 	private dualWindowSwapBtn: HTMLButtonElement | null = null;
+	private dualWindowSwapBtnFrame: number | null = null;
 	private screenshotBtn: HTMLElement | null = null;
 	private inlineScreenshotBtn: HTMLButtonElement | null = null;
 	private saveAsImageBtn: HTMLElement | null = null;
@@ -1196,7 +1199,7 @@ export class EpubView extends ItemView {
 		this.setupLeafChangeTracking();
 		this.setupLinkedTabTracking();
 		this.setupDualWindowSessionTracking();
-		this.queueDualWindowSessionRestore();
+		this.queueDualWindowSessionRestore(0);
 
 		if (this.filePath) {
 			await this.mountComponent();
@@ -1396,37 +1399,47 @@ export class EpubView extends ItemView {
 	}
 
 	private async swapDualWindowPanes(): Promise<void> {
-		const swapped = await swapEpubDualWindowPanes(this.app, this.filePath);
+		const swapped = await swapEpubDualWindowPanes(this.app, this.filePath, this.annotationCompare);
 		if (!swapped) {
 			new Notice("暂无可交换的双窗");
 		}
 		this.updateDualWindowSwapBtn();
 	}
 
-	private positionDualWindowSwapBtn(panes: EpubDualWindowPanes): void {
+	private positionDualWindowSwapBtn(panes: EpubDualWindowSwapPanes): void {
 		if (!this.dualWindowSwapBtn) {
 			return;
 		}
-		const epubContainerEl = getEpubDualWindowLeafContainerEl(panes.epubLeaf);
-		const noteContainerEl = getEpubDualWindowLeafContainerEl(panes.noteLeaf);
-		if (!epubContainerEl || !noteContainerEl) {
+		const mainContainerEl = getEpubDualWindowLeafContainerEl(panes.mainLeaf);
+		const sideContainerEl = getEpubDualWindowLeafContainerEl(panes.sideLeaf);
+		if (!mainContainerEl || !sideContainerEl) {
 			this.dualWindowSwapBtn.style.removeProperty("left");
 			this.dualWindowSwapBtn.style.removeProperty("top");
 			return;
 		}
 		const position = resolveEpubDualWindowBoundaryPosition(
-			epubContainerEl.getBoundingClientRect(),
-			noteContainerEl.getBoundingClientRect()
+			mainContainerEl.getBoundingClientRect(),
+			sideContainerEl.getBoundingClientRect()
 		);
 		this.dualWindowSwapBtn.style.left = `${position.left}px`;
 		this.dualWindowSwapBtn.style.top = `${position.top}px`;
 	}
 
 	private updateDualWindowSwapBtn(): void {
+		if (this.dualWindowSwapBtnFrame !== null) {
+			return;
+		}
+		this.dualWindowSwapBtnFrame = window.requestAnimationFrame(() => {
+			this.dualWindowSwapBtnFrame = null;
+			this.refreshDualWindowSwapBtn();
+		});
+	}
+
+	private refreshDualWindowSwapBtn(): void {
 		if (!this.dualWindowSwapBtn) {
 			return;
 		}
-		const panes = this.filePath ? resolveEpubDualWindowPanes(this.app, this.filePath) : null;
+		const panes = this.resolveDualWindowSwapPanesForCurrentView();
 		const visible = Boolean(panes);
 		this.dualWindowSwapBtn.toggleClass("is-hidden", !visible);
 		if (panes) {
@@ -1434,18 +1447,39 @@ export class EpubView extends ItemView {
 		}
 	}
 
-	private queueDualWindowSessionRestore(): void {
-		if (this.dualWindowRestorePromise) {
+	private resolveDualWindowSwapPanesForCurrentView(): EpubDualWindowSwapPanes | null {
+		if (!this.filePath) {
+			return null;
+		}
+		if (this.annotationCompare) {
+			if (this.annotationCompare.paneRole !== "editable") {
+				return null;
+			}
+			return resolveEpubDualWindowSwapPanes(this.app, {
+				filePath: this.filePath,
+				annotationCompare: this.annotationCompare,
+			});
+		}
+		return resolveEpubDualWindowSwapPanes(this.app, { filePath: this.filePath });
+	}
+
+	private queueDualWindowSessionRestore(delayMs = 250): void {
+		if (this.dualWindowRestorePromise || this.dualWindowRestoreTimer) {
 			return;
 		}
-		this.dualWindowRestorePromise = restoreEpubDualWindowSessionsFromWorkspace(this.app)
-			.catch((error) => {
-				logger.warn("[EpubView] Failed to restore EPUB dual-window sessions:", error);
-			})
-			.finally(() => {
+		this.dualWindowRestoreTimer = window.setTimeout(() => {
+			this.dualWindowRestoreTimer = null;
+			this.dualWindowRestorePromise = (async (): Promise<void> => {
+				try {
+					await restoreEpubDualWindowSessionsFromWorkspace(this.app);
+				} catch (error) {
+					logger.warn("[EpubView] Failed to restore EPUB dual-window sessions:", error);
+				}
+			})().finally(() => {
 				this.dualWindowRestorePromise = null;
 				this.updateDualWindowSwapBtn();
 			});
+		}, delayMs);
 	}
 
 	private appendInlineActionButton(
@@ -1650,8 +1684,6 @@ export class EpubView extends ItemView {
 			if (leafWithHeader && typeof leafWithHeader.updateHeader === "function") {
 				leafWithHeader.updateHeader();
 			}
-
-			this.app.workspace.trigger("layout-change");
 
 			const titleEl = this.leaf?.view?.containerEl?.querySelector(".view-header-title");
 			if (domInstanceOf(titleEl, HTMLElement)) {
@@ -1876,6 +1908,18 @@ export class EpubView extends ItemView {
 			);
 			this.dualWindowReaderDisplayHandler = null;
 		}
+		if (this.layoutChangeFrame !== null) {
+			window.cancelAnimationFrame(this.layoutChangeFrame);
+			this.layoutChangeFrame = null;
+		}
+		if (this.dualWindowRestoreTimer) {
+			window.clearTimeout(this.dualWindowRestoreTimer);
+			this.dualWindowRestoreTimer = null;
+		}
+		if (this.dualWindowSwapBtnFrame !== null) {
+			window.cancelAnimationFrame(this.dualWindowSwapBtnFrame);
+			this.dualWindowSwapBtnFrame = null;
+		}
 		if (this.component) {
 			const { unmount } = await import("svelte");
 			try {
@@ -1918,15 +1962,29 @@ export class EpubView extends ItemView {
 
 	private setupLinkedTabTracking(): void {
 		this.layoutChangeHandler = () => {
-			this.applySurfaceContext();
-			this.checkLinkedCanvasTab();
-			this.queueDualWindowSessionRestore();
-			this.updateDualWindowSwapBtn();
-			if (this.toolbarHandlersReady) {
-				this.refreshAllActionButtons();
-			}
+			this.queueLayoutChangeRefresh();
 		};
 		this.app.workspace.on("layout-change", this.layoutChangeHandler);
+	}
+
+	private queueLayoutChangeRefresh(): void {
+		if (this.layoutChangeFrame !== null) {
+			return;
+		}
+		this.layoutChangeFrame = window.requestAnimationFrame(() => {
+			this.layoutChangeFrame = null;
+			this.refreshAfterLayoutChange();
+		});
+	}
+
+	private refreshAfterLayoutChange(): void {
+		this.applySurfaceContext();
+		this.checkLinkedCanvasTab();
+		this.queueDualWindowSessionRestore();
+		this.updateDualWindowSwapBtn();
+		if (this.toolbarHandlersReady) {
+			this.refreshAllActionButtons();
+		}
 	}
 
 	private setupDualWindowSessionTracking(): void {

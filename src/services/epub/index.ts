@@ -216,6 +216,7 @@ export {
 	resolveEpubDualWindowOpenGuard,
 	resolveEpubDualWindowBoundaryPosition,
 	resolveEpubDualWindowPanes,
+	resolveEpubDualWindowSwapPanes,
 	restoreEpubDualWindowSessionsFromWorkspace,
 	swapEpubDualWindowPanes,
 	unregisterEpubDualWindowSession,
@@ -227,6 +228,8 @@ export {
 	type EpubDualWindowRect,
 	type EpubDualWindowSideKind,
 	type EpubDualWindowSession,
+	type EpubDualWindowSwapLookupInput,
+	type EpubDualWindowSwapPanes,
 	type EpubOpenDualWindowSession,
 } from "./epub-dual-window-workspace";
 export {

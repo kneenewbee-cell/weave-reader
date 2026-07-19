@@ -5,6 +5,7 @@ import type {
 	EpubReaderEngine,
 	HighlightSourceLocator,
 	HighlightClickInfo,
+	ReaderAppearanceApplyOptions,
 	NavigateAndHighlightOptions,
 	ReaderAppearanceOptions,
 	ReaderApplyHighlightsOptions,
@@ -808,7 +809,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 	async applyReaderAppearance(
 		appearance: ReaderAppearanceOptions,
-		_redisplay?: boolean
+		options?: boolean | ReaderAppearanceApplyOptions
 	): Promise<void> {
 		if (typeof appearance.lineHeight === "number" && appearance.lineHeight > 0) {
 			this.currentLineHeight = appearance.lineHeight;
@@ -827,7 +828,11 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}
 		this.applyRendererLayout();
 		this.applyRendererAppearance();
-		await this.refreshHighlights();
+		const shouldRefreshHighlights =
+			typeof options === "object" ? options.refreshHighlights !== false : true;
+		if (shouldRefreshHighlights) {
+			await this.refreshHighlights();
+		}
 	}
 
 	onRelocated(callback: (position: ReadingPosition) => void): () => void {
