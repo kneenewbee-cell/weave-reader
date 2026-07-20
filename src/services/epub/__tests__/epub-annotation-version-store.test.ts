@@ -280,6 +280,69 @@ describe("epub-annotation-version-store", () => {
 		});
 	});
 
+	it("copies the active semantic profile when creating a version from the active annotations", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files } = createAppHarness({
+			[`${root}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			},
+			[`${root}/versions/default/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 10,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "important" }],
+			},
+			[`${root}/versions/default/semantic-profile.json`]: {
+				format: "weave-reader-semantic-profile/v1",
+				version: 1,
+				scope: "version",
+				bookId,
+				versionId: "default",
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: "custom",
+				semantics: [
+					{
+						id: "important",
+						label: "Important",
+						color: "purple",
+						style: "underline",
+						group: "study",
+						source: "custom",
+						active: true,
+					},
+				],
+				standardSemanticIds: ["important"],
+			},
+		});
+
+		const copied = await createEpubAnnotationVersion(app, bookId, "copy", {
+			copyFromActive: true,
+			setActive: true,
+		});
+
+		expect(readJson(files, `${root}/versions/${copied.versionId}/semantic-profile.json`)).toMatchObject({
+			format: "weave-reader-semantic-profile/v1",
+			scope: "version",
+			bookId,
+			versionId: copied.versionId,
+			semanticSchemeId: "custom",
+			semantics: [expect.objectContaining({ id: "important", color: "purple", style: "underline" })],
+		});
+		expect(readJson(files, `${root}/semantic-profile.json`)).toMatchObject({
+			format: "weave-reader-semantic-profile/v1",
+			scope: "book",
+			bookId,
+			sourceVersionId: copied.versionId,
+			semanticSchemeId: "custom",
+		});
+	});
+
 	it("lists and renames annotation versions without changing their folder id", async () => {
 		const bookId = "epub-book-demo";
 		const { app } = createAppHarness();

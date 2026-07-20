@@ -25,15 +25,16 @@ import {
 	notifyEpubSemanticProfileChanged,
 	profileToSettings,
 	readBookEpubSemanticProfile,
+	readEffectiveEpubPortableAnnotations,
 	readGlobalEpubSemanticProfile,
 	readEpubSemanticJson,
-	readEffectiveEpubPortableAnnotations,
 	safeEpubSemanticBookId,
 	writeBookEpubSemanticProfile,
 	writeGlobalEpubSemanticProfile,
 	type EpubSemanticSettings,
 	type EpubSemanticSettingsScope,
 } from "../../services/epub";
+import { shouldClearAnnotationsForSemanticSchemeChange } from "./epub-semantic-settings-actions";
 
 interface SemanticBookOption {
 	bookId: string;
@@ -205,7 +206,7 @@ function countPortableAnnotations(annotations: unknown[]): number {
 	return Array.isArray(annotations) ? annotations.length : 0;
 }
 
-async function confirmClearBookSemanticAnnotationsForSchemeChange(
+async function confirmClearCurrentVersionSemanticAnnotationsForSchemeChange(
 	plugin: StandaloneEpubPlugin,
 	bookId: string,
 	nextSchemeLabel: string
@@ -221,11 +222,11 @@ async function confirmClearBookSemanticAnnotationsForSchemeChange(
 
 	const confirmed = await showObsidianConfirm(
 		plugin.app,
-		`\u8fd9\u672c\u4e66\u5df2\u6709 ${annotationCount} \u6761\u6807\u6ce8\u3002\n\n\u5207\u6362\u4e3a\u300c${nextSchemeLabel}\u300d\u540e\uff0c\u4f1a\u5220\u9664\u8fd9\u672c\u4e66\u5df2\u6709\u7684\u9ad8\u4eae\u3001\u4e0b\u5212\u7ebf\u3001\u6ce2\u6d6a\u7ebf\u7b49\u6807\u6ce8\uff0c\u4f46\u4e0d\u4f1a\u5220\u9664\u4f60\u7684\u8bed\u4e49\u65b9\u6848\u914d\u7f6e\u3002`,
+		`当前标注版本已有 ${annotationCount} 条标注。\n\n切换为「${nextSchemeLabel}」后，会清空当前标注版本已有的高亮、下划线、波浪线等标注，然后切换到新语义方案。其他标注版本不受影响。`,
 		{
-			title: "\u5207\u6362\u672c\u4e66\u8bed\u4e49\u65b9\u6848",
-			confirmText: "\u5220\u9664\u6807\u6ce8\u5e76\u5207\u6362",
-			cancelText: "\u53d6\u6d88",
+			title: "切换当前版本语义方案",
+			confirmText: "清空当前版本标注并切换",
+			cancelText: "取消",
 			confirmClass: "mod-warning",
 		}
 	);
@@ -235,7 +236,7 @@ async function confirmClearBookSemanticAnnotationsForSchemeChange(
 
 	const removedCount = await clearBookEpubPortableSemanticAnnotations(plugin.app, bookId);
 	if (removedCount > 0) {
-		new Notice(`\u5df2\u6e05\u7a7a\u8fd9\u672c\u4e66\u7684 ${removedCount} \u6761\u6807\u6ce8`);
+		new Notice(`已清空当前标注版本的 ${removedCount} 条标注`);
 	}
 	return true;
 }
@@ -298,7 +299,7 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 	};
 
 	addScopeButton("global", "全局配置");
-	addScopeButton("book", "本书配置");
+	addScopeButton("book", "当前版本配置");
 	syncScopeButtons();
 
 	async function saveDraft(
@@ -384,7 +385,7 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 			if (scope === "book") {
 				new Setting(body)
 					.setName("书籍")
-					.setDesc("选择要单独配置语义映射的 EPUB。")
+					.setDesc("选择要配置当前活动标注版本的 EPUB。")
 					.addDropdown((dropdown) => {
 						dropdown.selectEl.addClass("weave-epub-semantic-book-select");
 						dropdown.addOption("", "选择书籍");
@@ -404,8 +405,8 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 				body.createDiv({
 					cls: "weave-epub-semantic-inheritance-note",
 					text: effective.bookProfile
-						? "这本书正在使用独立配置。"
-						: "当前使用全局配置；首次修改会自动建立本书配置。",
+						? "当前活动标注版本正在使用独立配置。"
+						: "当前活动标注版本使用全局配置；首次修改会自动建立版本配置。",
 				});
 			}
 
@@ -438,9 +439,9 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 				.setName("显示语义标注工具")
 				.setDesc(
 					currentScope === "global"
-						? "应用于所有没有本书配置的 EPUB。"
+						? "作为没有版本配置的 EPUB 标注版本模板。"
 						: currentBookId
-							? "仅控制当前所选书籍。"
+							? "仅控制当前所选书籍的活动标注版本。"
 							: "请先选择一本书。"
 				);
 			displayToolSetting.addToggle((toggle) => {
@@ -457,7 +458,7 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 				.setName(schemeModified ? "语义方案 · 已调整" : "语义方案")
 				.setDesc(
 					selectedScheme
-						? `当前启用 ${activeSemantics.length} 个语义；切换方案后仍会保留旧标注所需的历史映射。`
+						? `当前启用 ${activeSemantics.length} 个语义；切换方案会清空当前标注版本的旧标注。`
 						: `当前启用 ${activeSemantics.length} 个语义；自定义方案没有可恢复的系统初始版本。`
 				);
 			schemeSetting.addDropdown((dropdown) => {
@@ -486,10 +487,14 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 					const nextScheme = getSemanticScheme(value);
 					if (
 						nextScheme &&
-						currentBookId &&
-						value !== currentSettings.semanticSchemeId
+						shouldClearAnnotationsForSemanticSchemeChange({
+							scope: currentScope,
+							bookId: currentBookId,
+							currentSchemeId: currentSettings.semanticSchemeId,
+							nextSchemeId: value,
+						})
 					) {
-						const confirmed = await confirmClearBookSemanticAnnotationsForSchemeChange(
+						const confirmed = await confirmClearCurrentVersionSemanticAnnotationsForSchemeChange(
 							plugin,
 							currentBookId,
 							nextScheme.label

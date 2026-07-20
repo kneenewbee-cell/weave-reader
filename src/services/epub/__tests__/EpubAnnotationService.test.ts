@@ -629,6 +629,27 @@ describe('EpubAnnotationService', () => {
 					},
 				],
 			},
+			[`weave/epub-data/books/${bookId}/versions/default/semantic-profile.json`]: {
+				format: PROFILE_FORMAT,
+				version: PROFILE_VERSION,
+				scope: 'version',
+				bookId,
+				versionId: 'default',
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: 'custom',
+				semantics: [
+					{
+						id: 'active-note',
+						label: 'Active label',
+						color: 'yellow',
+						style: 'highlight',
+						group: 'study',
+						source: 'custom',
+						active: true,
+					},
+				],
+				standardSemanticIds: ['active-note'],
+			},
 			[`weave/epub-data/books/${bookId}/versions/readonly/annotations.json`]: {
 				format: 'weave-reader-annotations/v1',
 				version: 1,
@@ -642,6 +663,27 @@ describe('EpubAnnotationService', () => {
 						text: 'Readonly note',
 					},
 				],
+			},
+			[`weave/epub-data/books/${bookId}/versions/readonly/semantic-profile.json`]: {
+				format: PROFILE_FORMAT,
+				version: PROFILE_VERSION,
+				scope: 'version',
+				bookId,
+				versionId: 'readonly',
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: 'custom',
+				semantics: [
+					{
+						id: 'readonly-note',
+						label: 'Readonly label',
+						color: 'red',
+						style: 'wavy',
+						group: 'study',
+						source: 'custom',
+						active: true,
+					},
+				],
+				standardSemanticIds: ['readonly-note'],
 			},
 		});
 		const storageService = {
@@ -662,7 +704,10 @@ describe('EpubAnnotationService', () => {
 		).resolves.toEqual([
 			expect.objectContaining({
 				cfiRange: 'epubcfi(/6/4)',
+				color: 'red',
+				style: 'wavy',
 				semanticId: 'readonly-note',
+				semanticLabel: 'Readonly label',
 				text: 'Readonly note',
 			}),
 		]);
@@ -851,6 +896,50 @@ describe('EpubAnnotationService', () => {
 			annotations: [],
 			authoritative: true,
 		});
+	});
+
+	it('clears only the active annotation version when replacing the current semantic scheme', async () => {
+		const bookId = 'epub-book-version-clear';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: 'weave-reader-active-annotation-version/v1',
+				version: 1,
+				bookId,
+				activeVersionId: 'default',
+				updatedAt: 10,
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				updatedAt: 10,
+				authoritative: true,
+				annotations: [
+					{ cfiRange: 'epubcfi(/6/2)', semanticId: 'old-default', text: 'Default note' },
+				],
+			},
+			[`weave/epub-data/books/${bookId}/versions/readonly/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				updatedAt: 20,
+				authoritative: true,
+				annotations: [
+					{ cfiRange: 'epubcfi(/6/4)', semanticId: 'old-readonly', text: 'Readonly note' },
+				],
+			},
+		}) as any;
+
+		await expect(clearBookEpubPortableSemanticAnnotations(app, bookId)).resolves.toBe(1);
+
+		await expect(readEffectiveEpubPortableAnnotations(app, bookId)).resolves.toMatchObject({
+			bookId,
+			authoritative: true,
+			annotations: [],
+		});
+		await expect(
+			app.vault.adapter.read(`weave/epub-data/books/${bookId}/versions/readonly/annotations.json`)
+		).resolves.toContain('old-readonly');
 	});
 
 	it('keeps portable semantic annotations visible when their semantic mapping is missing or inactive', async () => {

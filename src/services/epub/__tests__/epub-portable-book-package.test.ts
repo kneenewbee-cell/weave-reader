@@ -178,6 +178,148 @@ describe("epub-portable-book-package", () => {
 		expect(result.fileName).toMatch(/^Demo.*\.zip$/);
 	});
 
+	it("exports a version semantic profile when only the active root mirror exists", async () => {
+		const bookId = "epub-book-semantic-export";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app } = createAppHarness({
+			binaries: {
+				"Books/Semantic.epub": toArrayBuffer("semantic-export-epub"),
+			},
+			files: {
+				[`${root}/book.json`]: JSON.stringify({
+					format: "weave-reader-book/v1",
+					version: 1,
+					bookId,
+					filePath: "Books/Semantic.epub",
+					title: "Semantic Export",
+				}),
+				[`${root}/active-version.json`]: JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId,
+					activeVersionId: "default",
+					updatedAt: 10,
+				}),
+				[`${root}/semantic-profile.json`]: JSON.stringify({
+					format: "weave-reader-semantic-profile/v1",
+					version: 1,
+					scope: "book",
+					bookId,
+					sourceVersionId: "default",
+					annotationSemanticsEnabled: true,
+					semanticSchemeId: "custom",
+					semantics: [
+						{
+							id: "important",
+							label: "Important",
+							color: "purple",
+							style: "underline",
+							group: "study",
+							source: "custom",
+							active: true,
+						},
+					],
+					standardSemanticIds: ["important"],
+				}),
+				[`${root}/versions/default/annotations.json`]: JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId,
+					updatedAt: 10,
+					annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "important" }],
+				}),
+			},
+		});
+
+		const result = await createEpubAnnotatedBookPackage(app, {
+			bookId,
+			filePath: "Books/Semantic.epub",
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const profile = JSON.parse(
+			(await zip.file("data/versions/default/semantic-profile.json")?.async("string")) || "{}",
+		);
+		expect(profile).toMatchObject({
+			format: "weave-reader-semantic-profile/v1",
+			scope: "version",
+			bookId,
+			versionId: "default",
+			semanticSchemeId: "custom",
+			semantics: [expect.objectContaining({ id: "important", color: "purple", style: "underline" })],
+		});
+	});
+
+	it("exports an effective global semantic profile for a version without a saved profile", async () => {
+		const bookId = "epub-book-global-semantic-export";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app } = createAppHarness({
+			binaries: {
+				"Books/GlobalSemantic.epub": toArrayBuffer("global-semantic-export-epub"),
+			},
+			files: {
+				"weave/epub-data/semantic-profiles/default.json": JSON.stringify({
+					format: "weave-reader-semantic-profile/v1",
+					version: 1,
+					scope: "global",
+					annotationSemanticsEnabled: true,
+					semanticSchemeId: "custom",
+					semantics: [
+						{
+							id: "global-note",
+							label: "Global Note",
+							color: "cyan",
+							style: "underline",
+							group: "study",
+							source: "custom",
+							active: true,
+						},
+					],
+					standardSemanticIds: ["global-note"],
+				}),
+				[`${root}/book.json`]: JSON.stringify({
+					format: "weave-reader-book/v1",
+					version: 1,
+					bookId,
+					filePath: "Books/GlobalSemantic.epub",
+					title: "Global Semantic Export",
+				}),
+				[`${root}/active-version.json`]: JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId,
+					activeVersionId: "default",
+					updatedAt: 10,
+				}),
+				[`${root}/versions/default/annotations.json`]: JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId,
+					updatedAt: 10,
+					annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "global-note" }],
+				}),
+			},
+		});
+
+		const result = await createEpubAnnotatedBookPackage(app, {
+			bookId,
+			filePath: "Books/GlobalSemantic.epub",
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const profile = JSON.parse(
+			(await zip.file("data/versions/default/semantic-profile.json")?.async("string")) || "{}",
+		);
+		expect(profile).toMatchObject({
+			format: "weave-reader-semantic-profile/v1",
+			scope: "version",
+			bookId,
+			versionId: "default",
+			semanticSchemeId: "custom",
+			semantics: [expect.objectContaining({ id: "global-note", color: "cyan", style: "underline" })],
+		});
+	});
+
 	it("preserves the EPUB extension when exporting a package for a long book filename", async () => {
 		const bookId = "epub-book-long-export";
 		const longBookFileName = `${"Long Practical LaTeX Cookbook ".repeat(8)}Second Edition.epub`;
@@ -1143,6 +1285,126 @@ describe("epub-portable-book-package", () => {
 			annotations: [{ semanticId: "remote" }],
 		});
 		expect(files.has(`weave/epub-data/books/${remoteBookId}/book.json`)).toBe(false);
+	});
+
+	it("retargets imported version semantic profiles when importing as a separate version", async () => {
+		const localBookId = "epub-book-local";
+		const remoteBookId = "epub-book-remote";
+		const root = `weave/epub-data/books/${localBookId}`;
+		const zip = new JSZip();
+		zip.file(
+			"manifest.json",
+			JSON.stringify({
+				format: "weave-reader-annotated-book-package/v1",
+				version: 1,
+				bookId: remoteBookId,
+				bookFileName: "Demo.epub",
+				exportedAt: 1,
+				sourceFingerprint: "same-fingerprint",
+				title: "Demo",
+			}),
+		);
+		zip.file(
+			"data/book.json",
+			JSON.stringify({
+				format: "weave-reader-book/v1",
+				version: 1,
+				bookId: remoteBookId,
+				filePath: "Remote/Demo.epub",
+				title: "Demo",
+				sourceFingerprint: "same-fingerprint",
+			}),
+		);
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: remoteBookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: remoteBookId,
+				updatedAt: 10,
+				annotations: [{ cfiRange: "epubcfi(/6/4)", semanticId: "remote" }],
+			}),
+		);
+		zip.file(
+			"data/versions/default/semantic-profile.json",
+			JSON.stringify({
+				format: "weave-reader-semantic-profile/v1",
+				version: 1,
+				scope: "version",
+				bookId: remoteBookId,
+				versionId: "default",
+				sourceVersionId: "default",
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: "custom",
+				semantics: [
+					{
+						id: "remote",
+						label: "Remote",
+						color: "red",
+						style: "wavy",
+						group: "study",
+						source: "custom",
+						active: true,
+					},
+				],
+				standardSemanticIds: ["remote"],
+			}),
+		);
+		const packageBuffer = await zip.generateAsync({ type: "arraybuffer" });
+		const { app, files } = createAppHarness({
+			files: {
+				"weave/epub-data/index.json": JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						[localBookId]: {
+							bookId: localBookId,
+							filePath: "Books/Demo.epub",
+							sourceFingerprint: "same-fingerprint",
+						},
+					},
+				}),
+				[`${root}/active-version.json`]: JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId: localBookId,
+					activeVersionId: "default",
+					updatedAt: 1,
+				}),
+				[`${root}/versions/default/annotations.json`]: JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId: localBookId,
+					updatedAt: 1,
+					annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "local" }],
+				}),
+			},
+		});
+
+		const result = await importEpubAnnotatedBookPackage(app, packageBuffer, {
+			defaultBookFolder: "Books",
+		});
+
+		expect(result.importedVersionIds).toEqual(["imported-default"]);
+		expect(readJson(files, `${root}/versions/imported-default/semantic-profile.json`)).toMatchObject({
+			format: "weave-reader-semantic-profile/v1",
+			scope: "version",
+			bookId: localBookId,
+			versionId: "imported-default",
+			sourceVersionId: "imported-default",
+			semanticSchemeId: "custom",
+			semantics: [expect.objectContaining({ id: "remote", color: "red", style: "wavy" })],
+		});
 	});
 
 	it("can activate an imported annotation version for an existing same-fingerprint book", async () => {

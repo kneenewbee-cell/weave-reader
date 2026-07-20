@@ -16,6 +16,7 @@ import type { HighlightSourceLocator, ReaderHighlight } from "./reader-engine-ty
 import { resolveDisplayProgress } from "./book-progress";
 import {
 	loadEffectiveEpubSemanticProfile,
+	loadEffectiveEpubSemanticProfileForVersion,
 	readEffectiveEpubPortableAnnotations,
 	readEpubPortableAnnotationsForVersion,
 	writeBookEpubPortableAnnotations,
@@ -272,13 +273,21 @@ export class EpubAnnotationService {
 		);
 	}
 
-	private async loadEffectiveSemanticProfile(bookId: string): Promise<unknown | null> {
+	private async loadEffectiveSemanticProfile(
+		bookId: string,
+		annotationVersionId?: string | null
+	): Promise<unknown | null> {
 		const app = this.getApp();
 		if (!app) {
 			return null;
 		}
 		try {
-			return (await loadEffectiveEpubSemanticProfile(app, bookId, {})).effectiveProfile;
+			const requestedVersionId = String(annotationVersionId || "").trim();
+			return (
+				requestedVersionId
+					? await loadEffectiveEpubSemanticProfileForVersion(app, bookId, requestedVersionId, {})
+					: await loadEffectiveEpubSemanticProfile(app, bookId, {})
+			).effectiveProfile;
 		} catch (error) {
 			console.warn("[EpubAnnotationService] Failed to load semantic profile:", error);
 			return null;
@@ -388,7 +397,7 @@ export class EpubAnnotationService {
 			const [resolvedProfile, payload] =
 				effectiveProfile === undefined
 					? await Promise.all([
-							this.loadEffectiveSemanticProfile(bookId),
+							this.loadEffectiveSemanticProfile(bookId, requestedVersionId),
 							requestedVersionId
 								? readEpubPortableAnnotationsForVersion(app, bookId, requestedVersionId)
 								: readEffectiveEpubPortableAnnotations(app, bookId),
@@ -729,7 +738,10 @@ export class EpubAnnotationService {
 			// 现在统一以 md/canvas/卡片中的真实摘录为准，因此这里直接移除遗留缓存文件。
 			await this.clearLegacyHighlightCache(bookId);
 
-			const effectiveSemanticProfile = await this.loadEffectiveSemanticProfile(bookId);
+			const effectiveSemanticProfile = await this.loadEffectiveSemanticProfile(
+				bookId,
+				annotationVersionId
+			);
 			const portableHighlights = await this.loadPortableHighlights(
 				bookId,
 				effectiveSemanticProfile,

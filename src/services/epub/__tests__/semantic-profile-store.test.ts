@@ -9,7 +9,15 @@ import {
 	profileToSettings,
 	type EpubSemanticSettings,
 } from "../semantic/profiles";
-import { loadEffectiveEpubSemanticProfile } from "../semantic/semantic-store";
+import {
+	ensureActiveEpubSemanticProfile,
+	loadEffectiveEpubSemanticProfile,
+	loadEffectiveEpubSemanticProfileForVersion,
+} from "../semantic/semantic-store";
+import {
+	readBookEpubSemanticProfile,
+	writeBookEpubSemanticProfile,
+} from "../semantic/semantic-store";
 
 function profilePayload(scope: "global" | "book", settings: EpubSemanticSettings, bookId?: string) {
 	return {
@@ -29,19 +37,24 @@ function createMockApp(files: Record<string, unknown>) {
 	const serialized = new Map(
 		Object.entries(files).map(([path, value]) => [path, JSON.stringify(value)])
 	);
+	const directories = new Set<string>();
 	return {
 		vault: {
 			adapter: {
-				exists: vi.fn(async (path: string) => serialized.has(path)),
+				exists: vi.fn(async (path: string) => serialized.has(path) || directories.has(path)),
 				read: vi.fn(async (path: string) => serialized.get(path) ?? ""),
 				write: vi.fn(async (path: string, value: string) => {
 					serialized.set(path, value);
+				}),
+				mkdir: vi.fn(async (path: string) => {
+					directories.add(path);
 				}),
 				remove: vi.fn(async (path: string) => {
 					serialized.delete(path);
 				}),
 			},
 		},
+		__files: serialized,
 	} as never;
 }
 
@@ -168,6 +181,274 @@ describe("loadEffectiveEpubSemanticProfile", () => {
 
 		const result = await loadEffectiveEpubSemanticProfile(app, currentBookId, {
 			semanticSettingsBookId: legacyBookId,
+			semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+		});
+
+		expect(result.bookProfile).toBeNull();
+		expect(result.settings.semanticSchemeId).toBe(DEFAULT_EPUB_SEMANTIC_SCHEME_ID);
+	});
+
+	it("uses the active annotation version semantic profile before the root mirror", async () => {
+		const bookId = "epub-book-current";
+		const globalSettings = applySemanticScheme({}, DEFAULT_EPUB_SEMANTIC_SCHEME_ID);
+		const rootSettings = applySemanticScheme({}, "law-policy");
+		const versionSettings = applySemanticScheme({}, "study-exam");
+		const app = createMockApp({
+			"weave/epub-data/semantic-profiles/default.json": profilePayload("global", globalSettings),
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "imported-default",
+				updatedAt: 10,
+			},
+			[`weave/epub-data/books/${bookId}/semantic-profile.json`]: profilePayload(
+				"book",
+				rootSettings,
+				bookId
+			),
+			[`weave/epub-data/books/${bookId}/versions/imported-default/semantic-profile.json`]: {
+				...profilePayload("book", versionSettings, bookId),
+				scope: "version",
+				versionId: "imported-default",
+			},
+		});
+
+		const result = await loadEffectiveEpubSemanticProfile(app, bookId, {
+			semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+		});
+
+		expect(result.bookProfile?.versionId).toBe("imported-default");
+		expect(result.settings.semanticSchemeId).toBe("study-exam");
+	});
+
+	it("does not use a stale root semantic mirror for a different active annotation version", async () => {
+		const bookId = "epub-book-current";
+		const globalSettings = applySemanticScheme({}, DEFAULT_EPUB_SEMANTIC_SCHEME_ID);
+		const staleRootSettings = applySemanticScheme({}, "law-policy");
+		const app = createMockApp({
+			"weave/epub-data/semantic-profiles/default.json": profilePayload("global", globalSettings),
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "imported-default",
+				updatedAt: 10,
+			},
+			[`weave/epub-data/books/${bookId}/semantic-profile.json`]: {
+				...profilePayload("book", staleRootSettings, bookId),
+				sourceVersionId: "default",
+			},
+		});
+
+		const result = await loadEffectiveEpubSemanticProfile(app, bookId, {
+			semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+		});
+
+		expect(result.bookProfile).toBeNull();
+		expect(result.settings.semanticSchemeId).toBe(DEFAULT_EPUB_SEMANTIC_SCHEME_ID);
+	});
+
+	it("writes the selected book semantic profile to the active version and root mirror", async () => {
+		const bookId = "epub-book-current";
+		const settings = applySemanticScheme({}, "law-policy");
+		const app = createMockApp({
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/version.json`]: {
+				format: "weave-reader-annotation-version/v1",
+				version: 1,
+				bookId,
+				versionId: "default",
+				name: "默认标注",
+				createdAt: 1,
+				updatedAt: 1,
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 1,
+				authoritative: true,
+				annotations: [],
+			},
+		});
+
+		await writeBookEpubSemanticProfile(app, bookId, settings);
+
+		const files = (app as unknown as { __files: Map<string, string> }).__files;
+		const rootProfile = JSON.parse(files.get(`weave/epub-data/books/${bookId}/semantic-profile.json`) || "{}");
+		const versionProfile = JSON.parse(
+			files.get(`weave/epub-data/books/${bookId}/versions/default/semantic-profile.json`) || "{}"
+		);
+		expect(rootProfile).toMatchObject({
+			format: PROFILE_FORMAT,
+			scope: "book",
+			bookId,
+			sourceVersionId: "default",
+			semanticSchemeId: "law-policy",
+		});
+		expect(versionProfile).toMatchObject({
+			format: PROFILE_FORMAT,
+			scope: "version",
+			bookId,
+			versionId: "default",
+			semanticSchemeId: "law-policy",
+		});
+
+		await expect(readBookEpubSemanticProfile(app, bookId)).resolves.toMatchObject({
+			scope: "version",
+			bookId,
+			versionId: "default",
+			semanticSchemeId: "law-policy",
+		});
+	});
+
+	it("materializes the initial active version semantic profile from the effective settings", async () => {
+		const bookId = "epub-book-initial-profile";
+		const settings = applySemanticScheme({}, "study-exam");
+		const app = createMockApp({});
+
+		await expect(ensureActiveEpubSemanticProfile(app, bookId, settings)).resolves.toMatchObject({
+			format: PROFILE_FORMAT,
+			scope: "version",
+			bookId,
+			versionId: "default",
+			sourceVersionId: "default",
+			semanticSchemeId: "study-exam",
+		});
+
+		const files = (app as unknown as { __files: Map<string, string> }).__files;
+		const rootProfile = JSON.parse(files.get(`weave/epub-data/books/${bookId}/semantic-profile.json`) || "{}");
+		const versionProfile = JSON.parse(
+			files.get(`weave/epub-data/books/${bookId}/versions/default/semantic-profile.json`) || "{}"
+		);
+		expect(rootProfile).toMatchObject({
+			format: PROFILE_FORMAT,
+			scope: "book",
+			bookId,
+			sourceVersionId: "default",
+			semanticSchemeId: "study-exam",
+		});
+		expect(versionProfile).toMatchObject({
+			format: PROFILE_FORMAT,
+			scope: "version",
+			bookId,
+			versionId: "default",
+			sourceVersionId: "default",
+			semanticSchemeId: "study-exam",
+		});
+	});
+
+	it("does not rewrite unchanged active semantic profile files while ensuring them", async () => {
+		const bookId = "epub-book-stable-profile";
+		const settings = applySemanticScheme({}, "study-exam");
+		const rootProfile = {
+			...profilePayload("book", settings, bookId),
+			sourceVersionId: "default",
+		};
+		const versionProfile = {
+			...rootProfile,
+			scope: "version",
+			versionId: "default",
+		};
+		const app = createMockApp({
+			"weave/epub-data/semantic-profiles/default.json": profilePayload("global", settings),
+			[`weave/epub-data/books/${bookId}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/version.json`]: {
+				format: "weave-reader-annotation-version/v1",
+				version: 1,
+				bookId,
+				versionId: "default",
+				name: "默认标注",
+				createdAt: 1,
+				updatedAt: 1,
+			},
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 1,
+				authoritative: true,
+				annotations: [],
+			},
+			[`weave/epub-data/books/${bookId}/versions/default/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 1,
+				authoritative: true,
+				annotations: [],
+			},
+			[`weave/epub-data/books/${bookId}/semantic-profile.json`]: rootProfile,
+			[`weave/epub-data/books/${bookId}/versions/default/semantic-profile.json`]: versionProfile,
+		});
+		const adapter = (app as any).vault.adapter;
+		adapter.write.mockClear();
+
+		await ensureActiveEpubSemanticProfile(app, bookId, settings);
+
+		const semanticProfileWrites = adapter.write.mock.calls
+			.map(([path]: [string]) => path)
+			.filter((path: string) => path.endsWith("semantic-profile.json"));
+		expect(semanticProfileWrites).toEqual([]);
+	});
+
+	it("loads a requested annotation version semantic profile without using a stale root mirror", async () => {
+		const bookId = "epub-book-current";
+		const globalSettings = applySemanticScheme({}, DEFAULT_EPUB_SEMANTIC_SCHEME_ID);
+		const rootSettings = applySemanticScheme({}, "law-policy");
+		const readonlySettings = applySemanticScheme({}, "study-exam");
+		const app = createMockApp({
+			"weave/epub-data/semantic-profiles/default.json": profilePayload("global", globalSettings),
+			[`weave/epub-data/books/${bookId}/semantic-profile.json`]: {
+				...profilePayload("book", rootSettings, bookId),
+				sourceVersionId: "default",
+			},
+			[`weave/epub-data/books/${bookId}/versions/readonly/semantic-profile.json`]: {
+				...profilePayload("book", readonlySettings, bookId),
+				scope: "version",
+				versionId: "readonly",
+			},
+		});
+
+		const result = await loadEffectiveEpubSemanticProfileForVersion(app, bookId, "readonly", {
+			semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+		});
+
+		expect(result.bookProfile).toMatchObject({
+			scope: "version",
+			bookId,
+			versionId: "readonly",
+			semanticSchemeId: "study-exam",
+		});
+		expect(result.settings.semanticSchemeId).toBe("study-exam");
+	});
+
+	it("falls back to global settings for a requested version when only another version root mirror exists", async () => {
+		const bookId = "epub-book-current";
+		const globalSettings = applySemanticScheme({}, DEFAULT_EPUB_SEMANTIC_SCHEME_ID);
+		const rootSettings = applySemanticScheme({}, "law-policy");
+		const app = createMockApp({
+			"weave/epub-data/semantic-profiles/default.json": profilePayload("global", globalSettings),
+			[`weave/epub-data/books/${bookId}/semantic-profile.json`]: {
+				...profilePayload("book", rootSettings, bookId),
+				sourceVersionId: "default",
+			},
+		});
+
+		const result = await loadEffectiveEpubSemanticProfileForVersion(app, bookId, "readonly", {
 			semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
 		});
 

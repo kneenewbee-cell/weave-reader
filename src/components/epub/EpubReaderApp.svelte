@@ -21,7 +21,7 @@
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, createEpubAnnotationCompareContexts, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_DUAL_WINDOW_ANNOTATION_EVENT, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubDualWindowSession, getEpubStorageService, isBookCompleted, listEpubAnnotationVersions, loadEffectiveEpubSemanticProfile, markEpubDualWindowNoteLeaf, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, notifyEpubAnnotationVersionChanged, normalizeEpubAnnotationCompareContext, normalizeEpubAnnotationCompareContextChangeDetail, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubAnnotationCompareExitPlan, resolveEpubAnnotationPaneCapabilities, resolveEpubDualWindowOpenGuard, resolveEpubDualWindowPanes, resolveEpubHost, resolveEpubWeaveOfficialAPI, restoreEpubDualWindowSessionsFromWorkspace, switchEpubAnnotationVersion, unregisterEpubDualWindowSession, warmEpubAnnotationIndexForPaths, type EpubAnnotationCompareContext, type EpubAnnotationVersionSummary, type EpubDualWindowAnnotationDetail, type EpubDualWindowMode, type EpubOpenDualWindowSession } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, createEpubAnnotationCompareContexts, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureActiveEpubSemanticProfile, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_DUAL_WINDOW_ANNOTATION_EVENT, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubDualWindowSession, getEpubStorageService, isBookCompleted, listEpubAnnotationVersions, loadEffectiveEpubSemanticProfileForVersion, markEpubDualWindowNoteLeaf, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, notifyEpubAnnotationVersionChanged, normalizeEpubAnnotationCompareContext, normalizeEpubAnnotationCompareContextChangeDetail, profileToSettings, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubAnnotationCompareExitPlan, resolveEpubAnnotationPaneCapabilities, resolveEpubDualWindowOpenGuard, resolveEpubDualWindowPanes, resolveEpubHost, resolveEpubWeaveOfficialAPI, restoreEpubDualWindowSessionsFromWorkspace, switchEpubAnnotationVersion, unregisterEpubDualWindowSession, warmEpubAnnotationIndexForPaths, type EpubAnnotationCompareContext, type EpubAnnotationVersionSummary, type EpubDualWindowAnnotationDetail, type EpubDualWindowMode, type EpubOpenDualWindowSession } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { epubVaultPathsReferToSameBook } from '../../services/epub/epub-vault-path';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
@@ -1853,8 +1853,28 @@
 		try {
 			const fallbackSettings = getHostSemanticSettings();
 			const semanticBookId = book?.id ? await syncPortableBookIdForCurrentBook() : '';
+			const semanticVersionId = String(annotationCompareVersionId || '').trim();
 			const nextSettings = semanticBookId
-				? (await loadEffectiveEpubSemanticProfile(app, semanticBookId, fallbackSettings)).settings
+				? (
+						semanticVersionId
+							? await loadEffectiveEpubSemanticProfileForVersion(
+									app,
+									semanticBookId,
+									semanticVersionId,
+									fallbackSettings
+								)
+							: {
+									settings: normalizeEpubSemanticSettings(
+										profileToSettings(
+											await ensureActiveEpubSemanticProfile(
+												app,
+												semanticBookId,
+												fallbackSettings
+											)
+										)
+									),
+								}
+					).settings
 				: normalizeEpubSemanticSettings(fallbackSettings);
 			if (componentDisposed || token !== semanticSettingsLoadToken) {
 				return;

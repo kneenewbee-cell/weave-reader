@@ -6,6 +6,7 @@ const EPUB_ANNOTATION_VERSION_DATA_ROOT = "weave/epub-data";
 const ACTIVE_VERSION_FORMAT = "weave-reader-active-annotation-version/v1";
 const ANNOTATION_VERSION_FORMAT = "weave-reader-annotation-version/v1";
 const ANNOTATIONS_FORMAT = "weave-reader-annotations/v1";
+const SEMANTIC_PROFILE_FORMAT = "weave-reader-semantic-profile/v1";
 const DEFAULT_VERSION_ID = "default";
 const DEFAULT_VERSION_NAME = "默认标注";
 
@@ -157,6 +158,79 @@ async function writeJson(app: App, filePath: string, value: unknown): Promise<vo
 	await adapter.write(normalizedPath, JSON.stringify(value, null, 2));
 }
 
+async function removeJsonIfExists(app: App, filePath: string): Promise<void> {
+	const adapter = getAdapter(app);
+	if (
+		!adapter ||
+		typeof adapter.exists !== "function" ||
+		typeof (adapter as { remove?: unknown }).remove !== "function"
+	) {
+		return;
+	}
+	const normalizedPath = normalizePath(filePath);
+	if (await adapter.exists(normalizedPath)) {
+		await (adapter as { remove: (path: string) => Promise<void> }).remove(normalizedPath);
+	}
+}
+
+function semanticProfileComparable(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map((item) => semanticProfileComparable(item));
+	}
+	if (!isRecord(value)) {
+		return value;
+	}
+	const result: Record<string, unknown> = {};
+	for (const key of Object.keys(value).sort()) {
+		if (key === "updatedAt") {
+			continue;
+		}
+		result[key] = semanticProfileComparable(value[key]);
+	}
+	return result;
+}
+
+function semanticProfilesEqual(left: unknown, right: unknown): boolean {
+	return JSON.stringify(semanticProfileComparable(left)) === JSON.stringify(semanticProfileComparable(right));
+}
+
+async function syncRootSemanticProfileMirror(
+	app: App,
+	bookId: string,
+	versionId: string
+): Promise<void> {
+	const safeId = safeBookId(bookId);
+	const safeVersionId = safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
+	const versionProfile = await readJson(
+		app,
+		versionPath(safeId, safeVersionId, "semantic-profile.json")
+	);
+	const rootProfilePath = bookPath(safeId, "semantic-profile.json");
+	if (isRecord(versionProfile) && versionProfile.format === SEMANTIC_PROFILE_FORMAT) {
+		const rootProfile = {
+			...versionProfile,
+			scope: "book",
+			bookId: safeId,
+			sourceVersionId: safeVersionId,
+		};
+		delete (rootProfile as Record<string, unknown>).versionId;
+		const existingRootProfile = await readJson(app, rootProfilePath);
+		if (semanticProfilesEqual(existingRootProfile, rootProfile)) {
+			return;
+		}
+		await writeJson(app, rootProfilePath, rootProfile);
+		return;
+	}
+
+	const rootProfile = await readJson(app, rootProfilePath);
+	const rootSourceVersionId = isRecord(rootProfile) && rootProfile.sourceVersionId
+		? safeEpubAnnotationVersionId(rootProfile.sourceVersionId)
+		: "";
+	if (rootSourceVersionId && rootSourceVersionId !== safeVersionId) {
+		await removeJsonIfExists(app, rootProfilePath);
+	}
+}
+
 function normalizeAnnotationsPayload(
 	value: unknown,
 	bookId: string
@@ -292,6 +366,98 @@ async function writeRootAnnotations(
 	});
 }
 
+function normalizeSemanticProfilePayload(
+	value: unknown,
+	bookId: string,
+	versionId: string
+): Record<string, unknown> | null {
+	if (!isRecord(value) || value.format !== SEMANTIC_PROFILE_FORMAT) {
+		return null;
+	}
+	const safeId = safeBookId(bookId);
+	const safeVersionId = safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
+	return {
+		...value,
+		scope: "version",
+		bookId: safeId,
+		versionId: safeVersionId,
+		sourceVersionId: safeVersionId,
+	};
+}
+
+async function readVersionSemanticProfile(
+	app: App,
+	bookId: string,
+	versionId: string
+): Promise<Record<string, unknown> | null> {
+	return normalizeSemanticProfilePayload(
+		await readJson(app, versionPath(bookId, versionId, "semantic-profile.json")),
+		bookId,
+		versionId
+	);
+}
+
+async function readRootSemanticProfileForVersion(
+	app: App,
+	bookId: string,
+	versionId: string
+): Promise<Record<string, unknown> | null> {
+	const rootProfile = await readJson(app, bookPath(bookId, "semantic-profile.json"));
+	if (!isRecord(rootProfile) || rootProfile.format !== SEMANTIC_PROFILE_FORMAT) {
+		return null;
+	}
+	const rootSourceVersionId = rootProfile.sourceVersionId
+		? safeEpubAnnotationVersionId(rootProfile.sourceVersionId)
+		: safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
+	const safeVersionId = safeEpubAnnotationVersionId(versionId || DEFAULT_VERSION_ID);
+	if (rootSourceVersionId !== safeVersionId) {
+		return null;
+	}
+	return normalizeSemanticProfilePayload(rootProfile, bookId, safeVersionId);
+}
+
+async function writeVersionSemanticProfile(
+	app: App,
+	bookId: string,
+	versionId: string,
+	profile: Record<string, unknown>
+): Promise<void> {
+	const normalized = normalizeSemanticProfilePayload(profile, bookId, versionId);
+	if (!normalized) {
+		return;
+	}
+	await writeJson(app, versionPath(bookId, versionId, "semantic-profile.json"), normalized);
+}
+
+async function ensureVersionSemanticProfileFromRootMirror(
+	app: App,
+	bookId: string,
+	versionId: string
+): Promise<void> {
+	const existing = await readVersionSemanticProfile(app, bookId, versionId);
+	if (existing) {
+		return;
+	}
+	const rootMirror = await readRootSemanticProfileForVersion(app, bookId, versionId);
+	if (rootMirror) {
+		await writeVersionSemanticProfile(app, bookId, versionId, rootMirror);
+	}
+}
+
+async function copyActiveSemanticProfileToVersion(
+	app: App,
+	bookId: string,
+	activeVersionId: string,
+	nextVersionId: string
+): Promise<void> {
+	const source =
+		(await readVersionSemanticProfile(app, bookId, activeVersionId)) ||
+		(await readRootSemanticProfileForVersion(app, bookId, activeVersionId));
+	if (source) {
+		await writeVersionSemanticProfile(app, bookId, nextVersionId, source);
+	}
+}
+
 async function ensureVersionMetadata(
 	app: App,
 	bookId: string,
@@ -347,6 +513,8 @@ export async function ensureActiveEpubAnnotationVersion(
 
 	await writeJson(app, activePath, active);
 	await writeRootAnnotations(app, safeId, activeAnnotations);
+	await ensureVersionSemanticProfileFromRootMirror(app, safeId, activeVersionId);
+	await syncRootSemanticProfileMirror(app, safeId, activeVersionId);
 	return active;
 }
 
@@ -481,7 +649,7 @@ export async function createEpubAnnotationVersion(
 	} = {}
 ): Promise<EpubAnnotationVersionSummary> {
 	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
-	await ensureActiveEpubAnnotationVersion(app, safeId);
+	const active = await ensureActiveEpubAnnotationVersion(app, safeId);
 	const versionId = await getUniqueVersionId(app, safeId, name || "version");
 	const timestamp = now();
 	const source = cleanString(options.source);
@@ -511,6 +679,9 @@ export async function createEpubAnnotationVersion(
 
 	await writeVersionMetadata(app, metadata);
 	await writeVersionAnnotations(app, safeId, versionId, payload);
+	if (options.copyFromActive) {
+		await copyActiveSemanticProfileToVersion(app, safeId, active.activeVersionId, versionId);
+	}
 	if (options.setActive) {
 		await switchEpubAnnotationVersion(app, safeId, versionId);
 	}
@@ -543,6 +714,7 @@ export async function switchEpubAnnotationVersion(
 	};
 	await writeJson(app, bookPath(safeId, "active-version.json"), active);
 	await writeRootAnnotations(app, safeId, payload);
+	await syncRootSemanticProfileMirror(app, safeId, safeVersionId);
 	return active;
 }
 

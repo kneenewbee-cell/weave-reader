@@ -5,12 +5,14 @@ import { DirectoryUtils } from "../../utils/directory-utils";
 import { generateUniqueVaultFilePath } from "./epub-markdown-path-resolver";
 import {
 	getEpubPortableDataRoot,
+	materializeEpubSemanticProfileForVersion,
 	readEpubSemanticJson,
 	safeEpubSemanticBookId,
 	writeEpubSemanticJson,
 } from "./semantic/semantic-store";
 import {
 	ensureActiveEpubAnnotationVersion,
+	listEpubAnnotationVersions,
 	readActiveEpubAnnotationVersionAnnotations,
 	safeEpubAnnotationVersionId,
 	switchEpubAnnotationVersion,
@@ -27,6 +29,7 @@ import {
 
 export const EPUB_ANNOTATED_BOOK_PACKAGE_FORMAT =
 	"weave-reader-annotated-book-package/v1";
+const SEMANTIC_PROFILE_FORMAT = "weave-reader-semantic-profile/v1";
 
 export interface CreateEpubAnnotatedBookPackageOptions {
 	bookId: string;
@@ -608,6 +611,27 @@ function retargetVersionJson(
 	return next;
 }
 
+function retargetSemanticProfileJson(
+	value: unknown,
+	bookId: string,
+	versionId: string
+): unknown {
+	if (!isRecord(value)) {
+		return value;
+	}
+	const next: Record<string, unknown> = { ...value, bookId };
+	if (next.format !== SEMANTIC_PROFILE_FORMAT) {
+		return next;
+	}
+	const safeVersionId = safeEpubAnnotationVersionId(versionId || "default");
+	return {
+		...next,
+		scope: "version",
+		versionId: safeVersionId,
+		sourceVersionId: safeVersionId,
+	};
+}
+
 function retargetActiveVersionJson(value: unknown, bookId: string, versionMap: Map<string, string>): unknown {
 	if (!isRecord(value)) {
 		return value;
@@ -689,6 +713,9 @@ export async function createEpubAnnotatedBookPackage(
 	const bookPath = normalizePath(options.filePath);
 	const bookDir = getBookDir(bookId);
 	await ensureActiveEpubAnnotationVersion(app, bookId);
+	for (const version of await listEpubAnnotationVersions(app, bookId)) {
+		await materializeEpubSemanticProfileForVersion(app, bookId, version.versionId);
+	}
 
 	const bookJson = await readEpubSemanticJson(app, getBookDataPath(bookId, "book.json"));
 	const bookFileName = sanitizeFileName(getFileNameFromPath(bookPath), "book.epub");
@@ -905,9 +932,17 @@ export async function importEpubAnnotatedBookPackage(
 			continue;
 		}
 		const sourceVersionId = getVersionIdFromRelativePath(normalizedRelativePath);
-		const mappedVersionId = sourceVersionId ? versionMap.get(sourceVersionId) || sourceVersionId : "";
+		const rootSemanticProfileForSeparateVersion =
+			importAsSeparateVersion && normalizedRelativePath === "semantic-profile.json";
+		const mappedVersionId = sourceVersionId
+			? versionMap.get(sourceVersionId) || sourceVersionId
+			: rootSemanticProfileForSeparateVersion
+				? mappedActiveVersionId
+				: "";
 		const relativePath = mappedVersionId
-			? replaceVersionIdInRelativePath(normalizedRelativePath, mappedVersionId)
+			? rootSemanticProfileForSeparateVersion
+				? `versions/${mappedVersionId}/semantic-profile.json`
+				: replaceVersionIdInRelativePath(normalizedRelativePath, mappedVersionId)
 			: normalizedRelativePath;
 		let retargeted = entry.parsed ? retargetPortableJson(entry.parsed, targetBookId, bookPath) : null;
 		if (retargeted && normalizedRelativePath === "book.json") {
@@ -922,6 +957,19 @@ export async function importEpubAnnotatedBookPackage(
 				targetBookId,
 				mappedVersionId || sourceVersionId || "default",
 				importAsSeparateVersion
+			);
+		}
+		if (
+			retargeted &&
+			(
+				normalizedRelativePath === "semantic-profile.json" ||
+				/^versions\/[^/]+\/semantic-profile\.json$/.test(normalizedRelativePath)
+			)
+		) {
+			retargeted = retargetSemanticProfileJson(
+				retargeted,
+				targetBookId,
+				mappedVersionId || sourceVersionId || packageActiveVersion || "default"
 			);
 		}
 		const nextContent = retargeted ? JSON.stringify(retargeted, null, 2) : entry.text;
