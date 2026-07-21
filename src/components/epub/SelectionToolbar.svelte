@@ -54,6 +54,21 @@
 		clear?: () => void;
 	};
 
+	type SelectionThoughtDraft = {
+		text: string;
+		cfiRange: string;
+		rect: ReaderViewportRect;
+		rects?: ReaderViewportRect[];
+		anchorPoint?: ReaderAnchorPoint;
+		segments?: ReaderHighlightSegment[];
+	};
+
+	const LEGACY_SEMANTIC_COLOR_ALIASES: Record<string, string> = {
+		cyan: 'teal',
+		pink: 'magenta',
+		gray: 'slate'
+	};
+
 	interface Props {
 		app: App;
 		readerService: EpubReaderEngine;
@@ -86,6 +101,7 @@
 		) => void;
 		onExtractToCard?: (text: string, cfiRange: string) => void;
 		onCreateReadingPoint?: (text: string, cfiRange: string) => void;
+		onEditThought?: (draft: SelectionThoughtDraft) => void | Promise<void>;
 		onOpenAIMenu: (event: MouseEvent, text: string, cfiRange: string) => void;
 	}
 
@@ -110,6 +126,7 @@
 		onAutoInsert,
 		onExtractToCard,
 		onCreateReadingPoint,
+		onEditThought,
 		onOpenAIMenu
 	}: Props = $props();
 	let t = $derived($tr);
@@ -140,6 +157,9 @@
 	let selectedText = $state('');
 	let currentCfiRange = $state('');
 	let currentSegments: ReaderHighlightSegment[] = [];
+	let currentSelectionRect: ReaderViewportRect | null = null;
+	let currentSelectionRects: ReaderViewportRect[] = [];
+	let currentSelectionAnchorPoint: ReaderAnchorPoint | undefined = undefined;
 	let iframeDoc: Document | null = null;
 	let teardownReaderTracking: (() => void) | null = null;
 	let teardownPositionTracking: (() => void) | null = null;
@@ -323,6 +343,9 @@
 		selectedText = '';
 		currentCfiRange = '';
 		currentSegments = [];
+		currentSelectionRect = null;
+		currentSelectionRects = [];
+		currentSelectionAnchorPoint = undefined;
 		activeClearSelection = null;
 		stopPositionTracking();
 	}
@@ -357,7 +380,8 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
-		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow;
+		const canonicalKey = LEGACY_SEMANTIC_COLOR_ALIASES[key] || key;
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow;
 	}
 
 	function getSemanticPreviewStyle(semantic: EpubAnnotationSemantic): string {
@@ -496,6 +520,24 @@
 	function handleCreateReadingPoint() {
 		if (selectedText && currentCfiRange) {
 			onCreateReadingPoint?.(selectedText, currentCfiRange);
+		}
+		clearAndHide();
+	}
+
+	function handleEditThought() {
+		if (!canUseExcerptNotes && showPremiumFeaturePreviewEnabled) {
+			handlePremiumExcerptFeaturePreview();
+			return;
+		}
+		if (selectedText && currentCfiRange && currentSelectionRect) {
+			void onEditThought?.({
+				text: selectedText,
+				cfiRange: currentCfiRange,
+				rect: currentSelectionRect,
+				rects: currentSelectionRects.length > 0 ? currentSelectionRects : [currentSelectionRect],
+				anchorPoint: currentSelectionAnchorPoint,
+				segments: currentSegments.length > 1 ? currentSegments : undefined,
+			});
 		}
 		clearAndHide();
 	}
@@ -645,13 +687,6 @@
 				item.setIcon('external-link');
 				item.onClick(() => {
 					void runSelectionLinkCopy('obsidianUri');
-				});
-			});
-			menu.addItem((item) => {
-				item.setTitle(t('epub.selectionToolbar.copyPlainText'));
-				item.setIcon('clipboard-copy');
-				item.onClick(() => {
-					void runSelectionLinkCopy('plainText');
 				});
 			});
 		}
@@ -858,6 +893,9 @@
 				}
 				return;
 			}
+			currentSelectionRect = geometry.rect;
+			currentSelectionRects = geometry.rects;
+			currentSelectionAnchorPoint = geometry.anchorPoint;
 
 			startPositionTracking(frame);
 			await positionToolbar(geometry.rect, viewportEl, geometry.rects, geometry.anchorPoint);
@@ -940,6 +978,9 @@
 			selectedText = selection.text;
 			currentCfiRange = selection.cfiRange;
 			currentSegments = [];
+			currentSelectionRect = selection.rect;
+			currentSelectionRects = selection.rects || [selection.rect];
+			currentSelectionAnchorPoint = undefined;
 			activeClearSelection = selection.clear || null;
 			stopPositionTracking();
 		});
@@ -1012,16 +1053,17 @@
 						</button>
 					{/each}
 				{/if}
-				{#if canUseExcerptNotes || canPreviewLockedExcerptFeature()}
-					<button class="clickable-icon action-item" onclick={handleInsertToNote} title={autoInsert ? t('epub.selectionToolbar.insert') : t('epub.selectionToolbar.copy')} aria-label={autoInsert ? t('epub.selectionToolbar.insert') : t('epub.selectionToolbar.copy')}>
-						<span class="action-icon" use:icon={autoInsert ? 'clipboard-paste' : 'clipboard-copy'}></span>
-						<span class="action-label">{autoInsert ? t('epub.selectionToolbar.insert') : t('epub.selectionToolbar.copy')}</span>
-					</button>
-				{/if}
 				<button class="clickable-icon action-item" onclick={handleVaultSearch} title={t('epub.selectionToolbar.vaultSearchTitle')} aria-label={t('epub.selectionToolbar.vaultSearch')}>
 					<span class="action-icon" use:icon={'search'}></span>
 					<span class="action-label">{t('epub.selectionToolbar.vaultSearch')}</span>
 				</button>
+
+				{#if onEditThought && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
+					<button class="clickable-icon action-item comment-action" onclick={handleEditThought} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
+						<span class="action-icon" use:icon={'message-square-plus'}></span>
+						<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
+					</button>
+				{/if}
 
 				{#if onExtractToCard && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
 					<div class="row-divider"></div>

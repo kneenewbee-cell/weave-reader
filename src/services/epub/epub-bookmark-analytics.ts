@@ -15,15 +15,27 @@ import { unknownPlainText } from "../../utils/unknown-plain-text";
 
 const HIGHLIGHT_COLORS = new Set([
 	"yellow",
-	"green",
-	"blue",
-	"red",
-	"purple",
 	"orange",
+	"red",
+	"magenta",
+	"purple",
+	"indigo",
+	"blue",
+	"teal",
+	"green",
+	"slate",
 	"cyan",
 	"pink",
 	"gray",
 ]);
+
+function normalizeHighlightColorForAnalytics(color: unknown): string {
+	const token = String(color || "").trim().toLowerCase();
+	if (token === "cyan") return "teal";
+	if (token === "pink") return "magenta";
+	if (token === "gray") return "slate";
+	return token;
+}
 
 export type EpubBookmarkAnalyticsBuildOptions = Pick<
 	EpubExcerptSettings,
@@ -270,7 +282,7 @@ export function buildEpubBookmarkAnalytics(
 		}
 
 		highlightCount += 1;
-		const color = String(highlight.color || "").trim().toLowerCase();
+		const color = normalizeHighlightColorForAnalytics(highlight.color);
 		if (HIGHLIGHT_COLORS.has(color)) {
 			highlightsByColor[color] = (highlightsByColor[color] || 0) + 1;
 		}

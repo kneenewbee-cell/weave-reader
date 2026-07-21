@@ -36,6 +36,24 @@ describe("highlight-identity", () => {
 		expect(merged).toHaveLength(2);
 	});
 
+	it("keeps a thought anchor separate from a visual highlight at the same quote", () => {
+		const base = {
+			cfiRange: "epubcfi(/6/26)",
+			text: "same quote",
+			color: "yellow",
+		} as const;
+
+		expect(
+			getReaderHighlightIdentityKey({ ...base, presentation: "thought" })
+		).not.toBe(getReaderHighlightIdentityKey({ ...base, presentation: "highlight" }));
+		expect(
+			mergeReaderHighlightsByIdentity([], [
+				{ ...base, presentation: "thought", commentText: "Independent thought", hasCommentDivider: true },
+				{ ...base, presentation: "highlight" },
+			] as ReaderHighlight[])
+		).toHaveLength(2);
+	});
+
 	it("prefers the first merged highlight's comment text over stale in-memory data", () => {
 		const merged = mergeReaderHighlightsByIdentity(
 			[

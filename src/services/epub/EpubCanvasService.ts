@@ -221,6 +221,56 @@ export class EpubCanvasService {
 		return this.insertCanvasTextNode(content, color, "add raw text node");
 	}
 
+	async hasExcerptNodeForCfi(cfiRange: string): Promise<boolean> {
+		const targetCfi = EpubLinkService.normalizeCfi(String(cfiRange || "").trim());
+		if (!targetCfi || !this.canvasPath) {
+			return false;
+		}
+		const data = await this.readCanvas();
+		return data.nodes.some((node) => this.nodeContainsExcerptCfi(node, targetCfi));
+	}
+
+	async removeExcerptNodesByCfi(cfiRange: string): Promise<number> {
+		const targetCfi = EpubLinkService.normalizeCfi(String(cfiRange || "").trim());
+		if (!targetCfi || !this.canvasPath) {
+			return 0;
+		}
+		try {
+			const data = await this.readCanvas();
+			const removeNodeIds = new Set(
+				data.nodes
+					.filter((node) => this.nodeContainsExcerptCfi(node, targetCfi))
+					.map((node) => node.id)
+			);
+			if (removeNodeIds.size === 0) {
+				return 0;
+			}
+			data.nodes = data.nodes.filter((node) => !removeNodeIds.has(node.id));
+			data.edges = data.edges.filter(
+				(edge) => !removeNodeIds.has(edge.fromNode) && !removeNodeIds.has(edge.toNode)
+			);
+			await this.writeCanvas(data);
+			return removeNodeIds.size;
+		} catch (e) {
+			logger.error("[EpubCanvasService] Failed to remove excerpt nodes:", e);
+			new Notice(i18n.t("views.epubView.notice.canvasAddNodeFailed"));
+			return 0;
+		}
+	}
+
+	private nodeContainsExcerptCfi(node: CanvasNode, normalizedTargetCfi: string): boolean {
+		if (node.type !== "text" || !node.text) {
+			return false;
+		}
+		for (const markup of EpubLinkService.collectEpubLinkMarkups(node.text)) {
+			const parsed = EpubLinkService.parseLinkMarkup(markup);
+			if (parsed && EpubLinkService.normalizeCfi(parsed.cfi) === normalizedTargetCfi) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private async insertCanvasTextNode(
 		text: string,
 		color: string | undefined,

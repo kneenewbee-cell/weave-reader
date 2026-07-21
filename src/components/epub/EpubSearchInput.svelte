@@ -452,7 +452,9 @@
       item.setTitle(t('epub.globalSidebar.searchUi.highlightColorLabel'));
       item.setDisabled(true);
     });
-    const values = availableHighlightColors.length > 0 ? availableHighlightColors : ['黄色', '绿色', '蓝色', '红色', '紫色'];
+    const values = availableHighlightColors.length > 0
+      ? availableHighlightColors
+      : ['黄色', '橙色', '红色', '洋红', '紫色', '靛蓝', '天蓝', '青绿', '绿色', '岩灰'];
     values.forEach((value) => {
       menu.addItem((item) => {
         item.setTitle(value);

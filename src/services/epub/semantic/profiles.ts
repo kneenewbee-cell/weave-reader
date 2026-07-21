@@ -11,15 +11,21 @@ const ANNOTATION_STYLE_TOKENS = new Set([
   "wavy"
 ]);
 const SEMANTIC_COLOR_HEX = {
-  yellow: "#FFE58A",
-  blue: "#9ED8FF",
-  red: "#FF9A9A",
-  purple: "#C9A7FF",
-  green: "#A7E8B3",
-  orange: "#FFC978",
-  cyan: "#8BE3E7",
-  pink: "#FFB3D1",
-  gray: "#C9CDD4"
+  yellow: "#FACC15",
+  orange: "#F97316",
+  red: "#EF4444",
+  magenta: "#EC4899",
+  purple: "#8B5CF6",
+  indigo: "#4F46E5",
+  blue: "#0EA5E9",
+  teal: "#14B8A6",
+  green: "#22C55E",
+  slate: "#64748B"
+};
+const SEMANTIC_COLOR_ALIASES = {
+  cyan: "teal",
+  pink: "magenta",
+  gray: "slate"
 };
 const ANNOTATION_STYLE_LABELS = {
   highlight: "\u9ad8\u4eae",
@@ -45,6 +51,7 @@ function schemeSemantic(
     group,
     description,
     showInStandard,
+    autoAddToCanvas: false,
     source: "preset",
     active: true
   };
@@ -60,10 +67,10 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     "通用阅读",
     [
       schemeSemantic("important", "重点", "yellow", "highlight", "general", "值得保留或反复阅读的内容", true),
-      schemeSemantic("favorite", "摘句", "cyan", "underline", "general", "喜欢的表达、句子或段落", true),
+      schemeSemantic("favorite", "摘句", "teal", "underline", "general", "喜欢的表达、句子或段落", true),
       schemeSemantic("reflection", "感想", "purple", "highlight", "thinking", "阅读时产生的联想或个人回应", true),
       schemeSemantic("question", "疑问", "purple", "wavy", "thinking", "需要回看、查证或继续思考的内容", true),
-      schemeSemantic("review", "待回看", "gray", "wavy", "thinking", "暂时标出、之后再判断是否保留的内容")
+      schemeSemantic("review", "待回看", "slate", "wavy", "thinking", "暂时标出、之后再判断是否保留的内容")
     ],
     ["important", "favorite", "reflection", "question"]
   ),
@@ -72,9 +79,9 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     "文学与人文",
     [
       schemeSemantic("theme", "主题/观点", "yellow", "highlight", "humanities", "作品主题或作者核心观点", true),
-      schemeSemantic("character", "人物", "pink", "underline", "humanities", "人物、身份及人物关系", true),
+      schemeSemantic("character", "人物", "magenta", "underline", "humanities", "人物、身份及人物关系", true),
       schemeSemantic("event", "事件/情节", "orange", "underline", "humanities", "关键事件、情节推进或历史节点", true),
-      schemeSemantic("quote", "引文/史料", "cyan", "highlight", "humanities", "值得引用的文本、史料或原话", true),
+      schemeSemantic("quote", "引文/史料", "teal", "highlight", "humanities", "值得引用的文本、史料或原话", true),
       schemeSemantic("conflict", "冲突/争议", "red", "wavy", "humanities", "矛盾、争议或需要辨析的内容"),
       schemeSemantic("reflection", "感想", "purple", "highlight", "thinking", "个人感受、解释或延伸思考")
     ],
@@ -87,7 +94,7 @@ const SYSTEM_SEMANTIC_SCHEMES = [
       schemeSemantic("important", "重点", "yellow", "highlight", "study", "必须掌握的核心内容", true),
       schemeSemantic("definition", "定义", "blue", "underline", "study", "术语、定义或概念说明", true),
       schemeSemantic("example", "例题/案例", "green", "highlight", "study", "帮助理解和迁移的例题或案例"),
-      schemeSemantic("method", "方法/公式", "cyan", "underline", "study", "解题方法、公式或操作步骤"),
+      schemeSemantic("method", "方法/公式", "teal", "underline", "study", "解题方法、公式或操作步骤"),
       schemeSemantic("mistake", "易错点", "red", "wavy", "exam", "容易混淆或答错的内容", true),
       schemeSemantic("exam", "必考点", "orange", "highlight", "exam", "考试和复习中高频出现的内容"),
       schemeSemantic("question", "未掌握", "purple", "wavy", "thinking", "尚未理解或需要回看的内容", true)
@@ -99,12 +106,12 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     "学术研究",
     [
       schemeSemantic("research-question", "研究问题", "purple", "highlight", "research", "论文试图回答的问题", true),
-      schemeSemantic("related-work", "相关工作", "gray", "underline", "research", "前人研究与理论背景"),
+      schemeSemantic("related-work", "相关工作", "slate", "underline", "research", "前人研究与理论背景"),
       schemeSemantic("method", "研究方法", "blue", "underline", "research", "研究设计、方法和分析过程", true),
       schemeSemantic("evidence", "数据/证据", "green", "highlight", "research", "实验数据、材料和论据", true),
       schemeSemantic("result", "结果/结论", "yellow", "highlight", "research", "研究发现与主要结论", true),
       schemeSemantic("limitation", "局限", "red", "wavy", "research", "研究边界、缺陷和限制"),
-      schemeSemantic("citation", "引用/跟进", "cyan", "underline", "research", "值得引用或进一步查阅的来源")
+      schemeSemantic("citation", "引用/跟进", "teal", "underline", "research", "值得引用或进一步查阅的来源")
     ],
     ["research-question", "method", "evidence", "result"]
   ),
@@ -114,7 +121,7 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     [
       schemeSemantic("theorem", "定理/结论", "yellow", "highlight", "science", "定理、规律与关键结论", true),
       schemeSemantic("definition", "定义", "blue", "underline", "science", "概念、符号和定义", true),
-      schemeSemantic("formula", "公式", "cyan", "underline", "science", "公式、方程和计算关系", true),
+      schemeSemantic("formula", "公式", "teal", "underline", "science", "公式、方程和计算关系", true),
       schemeSemantic("proof", "证明/推导", "purple", "highlight", "science", "证明步骤、推导过程和思路"),
       schemeSemantic("example", "例题/实验", "green", "highlight", "science", "例题、实验或直观例子"),
       schemeSemantic("mistake", "条件/易错", "red", "wavy", "science", "适用条件、边界和易错点", true),
@@ -144,7 +151,7 @@ const SYSTEM_SEMANTIC_SCHEMES = [
       schemeSemantic("symptom", "症状/体征", "blue", "underline", "medical", "症状、体征和临床表现", true),
       schemeSemantic("mechanism", "机制/病理", "purple", "underline", "medical", "作用机制、病理过程和生理关系"),
       schemeSemantic("evidence", "证据/检查", "green", "highlight", "medical", "检查结果、研究证据和鉴别依据"),
-      schemeSemantic("treatment", "治疗", "cyan", "highlight", "medical", "治疗原则、方案和随访"),
+      schemeSemantic("treatment", "治疗", "teal", "highlight", "medical", "治疗原则、方案和随访"),
       schemeSemantic("drug-dose", "药物/剂量", "orange", "underline", "medical", "药物名称、剂量和用法"),
       schemeSemantic("contraindication", "禁忌/风险", "red", "wavy", "medical", "禁忌、不良反应和高风险情况", true),
       schemeSemantic("question", "疑点", "purple", "wavy", "thinking", "证据不足或需要进一步确认的内容", true)
@@ -173,7 +180,7 @@ const SYSTEM_SEMANTIC_SCHEMES = [
       schemeSemantic("steps", "步骤", "yellow", "highlight", "practice", "操作流程和执行步骤", true),
       schemeSemantic("example", "示例", "green", "highlight", "practice", "可直接参考的示例和结果", true),
       schemeSemantic("warning", "警告", "red", "wavy", "practice", "风险、限制和禁止事项", true),
-      schemeSemantic("best-practice", "最佳实践", "cyan", "highlight", "practice", "推荐做法和经验规则"),
+      schemeSemantic("best-practice", "最佳实践", "teal", "highlight", "practice", "推荐做法和经验规则"),
       schemeSemantic("todo", "待处理", "purple", "wavy", "practice", "需要执行、验证或继续处理的事项")
     ],
     ["term-parameter", "steps", "example", "warning"]
@@ -226,8 +233,9 @@ function normalizeAnnotationStyle(style) {
 
 function normalizeSemanticColorToken(color) {
   const normalized = String(color || "").trim().toLowerCase();
-  return Object.prototype.hasOwnProperty.call(SEMANTIC_COLOR_HEX, normalized)
-    ? normalized
+  const canonical = SEMANTIC_COLOR_ALIASES[normalized] || normalized;
+  return Object.prototype.hasOwnProperty.call(SEMANTIC_COLOR_HEX, canonical)
+    ? canonical
     : "";
 }
 
@@ -263,6 +271,7 @@ function normalizeSemanticEntry(entry, index = 0) {
     group: group || "study",
     description,
     active: source.active !== false,
+    autoAddToCanvas: source.autoAddToCanvas === true,
     showInStandard:
       source.showInStandard === true ||
       (source.showInStandard !== false &&
@@ -366,7 +375,12 @@ function applySemanticScheme(profile, schemeId) {
   const selectedIds = new Set(selected.semantics.map((entry) => entry.id));
   const archived = current.annotationSemantics
     .filter((entry) => !selectedIds.has(String(entry?.id || "").trim()))
-    .map((entry) => ({ ...clone(entry), active: false, showInStandard: false }));
+    .map((entry) => ({
+      ...clone(entry),
+      active: false,
+      showInStandard: false,
+      autoAddToCanvas: false
+    }));
   const result = normalizeSemanticSettings({
     ...current,
     semanticSchemeId: selected.id,
@@ -400,6 +414,7 @@ function addCustomSemantic(profile) {
       group: "custom",
       description: "",
       showInStandard: false,
+      autoAddToCanvas: false,
       source: "custom",
       active: true
     }
@@ -419,7 +434,7 @@ function archiveSemantic(profile, semanticId) {
     profile,
     semanticEntries(profile).map((entry) =>
       String(entry?.id || "").trim() === id
-        ? { ...clone(entry), active: false, showInStandard: false }
+        ? { ...clone(entry), active: false, showInStandard: false, autoAddToCanvas: false }
         : clone(entry)
     )
   );
@@ -460,6 +475,7 @@ function addCustomSemanticNormalized(profile) {
         description: "",
         active: true,
         showInStandard: false,
+        autoAddToCanvas: false,
         source: "custom"
       }
     ]
@@ -479,7 +495,7 @@ function archiveSemanticNormalized(profile, semanticId) {
       : "custom",
     annotationSemantics: normalized.annotationSemantics.map((entry) =>
       String(entry?.id || "").trim() === id
-        ? { ...clone(entry), active: false, showInStandard: false }
+        ? { ...clone(entry), active: false, showInStandard: false, autoAddToCanvas: false }
         : clone(entry)
     ),
     standardSemanticIds: normalized.standardSemanticIds.filter(
@@ -604,7 +620,8 @@ function toStoredAnnotation(annotation) {
     "chapterHref",
     "spineIndex",
     "createdTime",
-    "updatedAt"
+    "updatedAt",
+    "presentation"
   ];
   for (const field of fields) {
     if (hasOwn(annotation, field) && annotation[field] !== undefined) {
@@ -670,7 +687,15 @@ function profileToSettings(profile) {
     annotationSemanticsEnabled: profile?.annotationSemanticsEnabled !== false,
     semanticSchemeId:
       String(profile?.semanticSchemeId || "custom").trim() || "custom",
-    annotationSemantics: clone(semanticEntries(profile)),
+    annotationSemantics: clone(semanticEntries(profile)).map((entry) => {
+      if (!entry || typeof entry !== "object") return entry;
+      const normalizedColor = normalizeSemanticColorToken(entry.color);
+      const normalizedEntry = {
+        ...entry,
+        autoAddToCanvas: entry.autoAddToCanvas === true
+      };
+      return normalizedColor ? { ...normalizedEntry, color: normalizedColor } : normalizedEntry;
+    }),
     standardSemanticIds: clone(profile?.standardSemanticIds || [])
   };
 }

@@ -12,6 +12,7 @@ import { setSvgInteractionAttributes } from "./svg-interaction";
 import { i18n } from "../../utils/i18n";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const THOUGHT_MARKER_COLOR = "#111111";
 
 export type FoliateOverlayerModule = {
 	Overlayer: {
@@ -107,10 +108,11 @@ export class ReaderAnnotationOverlayRenderer {
 		overlayer?: FoliateOverlayerModule
 	): SVGElement {
 		const group = activeDocument.createElementNS(SVG_NS, "g");
+		const isThought = annotation.presentation === "thought";
 
-		if (annotation.style) {
+		if (!isThought && annotation.style) {
 			group.appendChild(this.createStyledAnnotationOverlay(rects, annotation.style, annotation.color));
-		} else if (overlayer) {
+		} else if (!isThought && overlayer) {
 			group.appendChild(
 				overlayer.Overlayer.highlight(rects, {
 					color: this.ports.resolveHighlightTint(annotation.color),
@@ -119,7 +121,7 @@ export class ReaderAnnotationOverlayRenderer {
 			);
 		}
 
-		if (annotation.hasCommentDivider) {
+		if (annotation.hasCommentDivider || isThought) {
 			group.appendChild(this.createCommentMarkerOverlay(annotation, rects));
 		}
 
@@ -241,7 +243,9 @@ export class ReaderAnnotationOverlayRenderer {
 			return group;
 		}
 
-		const accentColor = annotation.color
+		const accentColor = annotation.presentation === "thought"
+			? THOUGHT_MARKER_COLOR
+			: annotation.color
 			? this.ports.resolveHighlightTint(annotation.color)
 			: this.ports.getObsidianCSSVar("--interactive-accent", "#7c3aed");
 		const fillColor = this.ports.getObsidianCSSVar("--background-primary", "#ffffff");

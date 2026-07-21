@@ -27,10 +27,14 @@
 		readerUiMode?: EpubReaderUiMode;
 		semanticSettings?: EpubSemanticSettings | null;
 		mobileDockBottomOffset?: number;
+		canvasAttached?: boolean;
+		canvasActionBusy?: boolean;
 		onDelete: (info: HighlightClickInfo) => void;
 		onTemporarilyReveal: (info: HighlightClickInfo) => void;
 		onChangeSemantic: (info: HighlightClickInfo, semantic: EpubAnnotationSemantic) => void;
 		onEditComment: (info: HighlightClickInfo) => void;
+		onAddToCanvas?: (info: HighlightClickInfo) => void | Promise<void>;
+		onRemoveFromCanvas?: (info: HighlightClickInfo) => void | Promise<void>;
 		onCopyText: (info: HighlightClickInfo) => void;
 		onDismiss: () => void;
 	}
@@ -41,10 +45,14 @@
 		readerUiMode = 'standard',
 		semanticSettings = null,
 		mobileDockBottomOffset = 0,
+		canvasAttached = false,
+		canvasActionBusy = false,
 		onDelete,
 		onTemporarilyReveal,
 		onChangeSemantic,
 		onEditComment,
+		onAddToCanvas,
+		onRemoveFromCanvas,
 		onCopyText,
 		onDismiss
 	}: Props = $props();
@@ -65,6 +73,11 @@
 			: (activeSemanticEntries(semanticSettings || {}) as EpubAnnotationSemantic[])
 	);
 	const isMobileToolbar = Platform.isMobile || activeDocument.body.classList.contains('is-mobile');
+	const LEGACY_SEMANTIC_COLOR_ALIASES: Record<string, string> = {
+		cyan: 'teal',
+		pink: 'magenta',
+		gray: 'slate'
+	};
 
 	function icon(node: HTMLElement, name: string) {
 		setIcon(node, name);
@@ -191,7 +204,8 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
-		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
+		const canonicalKey = LEGACY_SEMANTIC_COLOR_ALIASES[key] || key;
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}
 
 	function getSemanticPreviewStyle(semantic: EpubAnnotationSemantic): string {
@@ -314,10 +328,21 @@
 							<span class="action-icon" use:icon={'tags'}></span>
 							<span class="action-label">{t('epub.highlightToolbar.changeSemantic')}</span>
 						</button>
-						{#if readerUiMode === 'expert'}
-							<button class="clickable-icon action-item comment-action" class:accent={Boolean(info.hasCommentDivider)} onclick={() => onEditComment(info)} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
-								<span class="action-icon" use:icon={'message-square'}></span>
-								<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
+						<button class="clickable-icon action-item comment-action" class:accent={Boolean(info.hasCommentDivider)} onclick={() => onEditComment(info)} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
+							<span class="action-icon" use:icon={'message-square'}></span>
+							<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
+						</button>
+						{#if onAddToCanvas || onRemoveFromCanvas}
+							<button
+								class="clickable-icon action-item canvas-action"
+								class:accent={canvasAttached}
+								disabled={canvasActionBusy}
+								onclick={() => canvasAttached ? void onRemoveFromCanvas?.(info) : void onAddToCanvas?.(info)}
+								title={canvasAttached ? '取消加入脑图' : '加入脑图'}
+								aria-label={canvasAttached ? '取消加入脑图' : '加入脑图'}
+							>
+								<span class="action-icon" use:icon={canvasAttached ? 'unlink' : 'network'}></span>
+								<span class="action-label">{canvasAttached ? '取消脑图' : '加入脑图'}</span>
 							</button>
 						{/if}
 						<div class="row-divider"></div>

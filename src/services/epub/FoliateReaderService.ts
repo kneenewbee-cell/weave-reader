@@ -1785,7 +1785,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 	previewHighlightFocus(
 		cfiRange: string,
-		color = "cyan",
+		color = "teal",
 		durationMs = 1200,
 		options?: string | ReaderHighlightFocusPreviewOptions
 	): void {
@@ -7141,7 +7141,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			const textHint = String(options.textHint || "").trim();
 			return await this.resolveHighlightAnchorCfiSafe({
 				cfiRange,
-				color: "cyan",
+				color: "teal",
 				text: textHint,
 				...(typeof options.chapterIndex === "number"
 					? { chapterIndex: options.chapterIndex }

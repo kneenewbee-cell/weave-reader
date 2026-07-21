@@ -316,7 +316,7 @@ describe("epub-portable-book-package", () => {
 			bookId,
 			versionId: "default",
 			semanticSchemeId: "custom",
-			semantics: [expect.objectContaining({ id: "global-note", color: "cyan", style: "underline" })],
+			semantics: [expect.objectContaining({ id: "global-note", color: "teal", style: "underline" })],
 		});
 	});
 

@@ -450,16 +450,19 @@
 .weave-epub-semantic-setting-row {
   display: grid;
   grid-template-columns:
-    minmax(6rem, 0.8fr)
-    minmax(7rem, 1fr)
-    minmax(13.5rem, 1.7fr)
-    minmax(6rem, 0.75fr)
+    minmax(5.6rem, 0.9fr)
+    minmax(6.4rem, 0.95fr)
+    7.7rem
+    minmax(5.2rem, 0.68fr)
     minmax(5.8rem, auto)
-    2rem;
-  gap: 0.55rem;
+    minmax(5.2rem, auto)
+    2.2rem;
+  gap: 0.38rem;
   align-items: center;
   min-width: 0;
-  padding: 0.55rem 0.15rem;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.55rem 0.25rem 0.55rem 0.15rem;
   border-top: 1px solid var(--background-modifier-border);
 }
 
@@ -492,20 +495,22 @@
 }
 
 .weave-epub-semantic-color-swatches {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, 1.32rem);
+  grid-auto-rows: 1.32rem;
   align-items: center;
   align-content: center;
-  flex-wrap: wrap;
-  gap: 0.28rem;
+  gap: 0.22rem;
   min-width: 0;
-  max-width: 14rem;
+  width: max-content;
+  max-width: 100%;
 }
 
 .weave-epub-semantic-color-swatch {
   position: relative;
-  width: 1.45rem;
-  height: 1.45rem;
-  min-width: 1.45rem;
+  width: 1.32rem;
+  height: 1.32rem;
+  min-width: 1.32rem;
   padding: 0;
   border: 1px solid var(--background-modifier-border);
   border-radius: 999px;
@@ -515,7 +520,7 @@
 .weave-epub-semantic-color-swatch::before {
   content: "";
   position: absolute;
-  inset: 0.25rem;
+  inset: 0.22rem;
   border-radius: 999px;
   background: var(--weave-semantic-color);
 }
@@ -531,6 +536,7 @@
   opacity: 0.45;
 }
 
+.weave-epub-semantic-canvas-toggle,
 .weave-epub-semantic-standard-toggle {
   display: inline-flex;
   align-items: center;
@@ -545,6 +551,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  justify-self: end;
   width: 2rem;
   height: 2rem;
   min-width: 2rem;
@@ -655,6 +662,7 @@
   }
 
   .weave-epub-semantic-color-swatches,
+  .weave-epub-semantic-canvas-toggle,
   .weave-epub-semantic-standard-toggle {
     justify-self: start;
     max-width: 100%;
@@ -703,6 +711,7 @@
 
   .weave-epub-semantic-setting-preview,
   .weave-epub-semantic-color-swatches,
+  .weave-epub-semantic-canvas-toggle,
   .weave-epub-semantic-standard-toggle {
     justify-self: start;
   }

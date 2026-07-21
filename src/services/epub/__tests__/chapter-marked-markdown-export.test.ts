@@ -37,7 +37,7 @@ describe("chapter-marked-markdown-export", () => {
 	it("wraps highlight styles with markdown and html", () => {
 		expect(
 			wrapChapterMarkedHighlightText("alpha", createHighlight({ text: "alpha", color: "green" }))
-		).toContain('background-color: rgba(76, 175, 80, 0.3)');
+		).toContain('background-color: rgba(34, 197, 94, 0.28)');
 		expect(
 			wrapChapterMarkedHighlightText(
 				"beta",
@@ -83,7 +83,7 @@ describe("chapter-marked-markdown-export", () => {
 
 		const result = applyChapterHighlightsToMarkdown(markdown, highlights);
 
-		expect(result.markdown).toContain('<mark style="background-color: rgba(255, 235, 59, 0.4);">Alpha</mark>[^1]');
+		expect(result.markdown).toContain('<mark style="background-color: rgba(250, 204, 21, 0.36);">Alpha</mark>[^1]');
 		expect(result.markdown).toContain("<u>gamma</u>[^2]");
 		expect(result.footnotesMarkdown).toBe("[^1]: First note\n[^2]: Second note");
 	});
@@ -97,7 +97,7 @@ describe("chapter-marked-markdown-export", () => {
 	it("escapes html characters inside marked highlight wrappers", () => {
 		expect(
 			wrapChapterMarkedHighlightText("<tag>", createHighlight({ text: "<tag>", color: "yellow" }))
-		).toBe('<mark style="background-color: rgba(255, 235, 59, 0.4);">&lt;tag&gt;</mark>');
+		).toBe('<mark style="background-color: rgba(250, 204, 21, 0.36);">&lt;tag&gt;</mark>');
 	});
 
 	it("numbers footnotes by document order rather than creation time", () => {
@@ -123,7 +123,7 @@ describe("chapter-marked-markdown-export", () => {
 			{ plainText }
 		);
 
-		expect(result.markdown).toContain('<mark style="background-color: rgba(76, 175, 80, 0.3);">');
+		expect(result.markdown).toContain('<mark style="background-color: rgba(34, 197, 94, 0.28);">');
 		expect(result.markdown).toContain("bold");
 	});
 
@@ -137,7 +137,7 @@ describe("chapter-marked-markdown-export", () => {
 			}
 		);
 
-		expect(result.markdown).toContain('<mark style="background-color: rgba(255, 235, 59, 0.4);">beta</mark>');
+		expect(result.markdown).toContain('<mark style="background-color: rgba(250, 204, 21, 0.36);">beta</mark>');
 	});
 
 	it("accepts chapter highlights resolved by cfi section index", () => {

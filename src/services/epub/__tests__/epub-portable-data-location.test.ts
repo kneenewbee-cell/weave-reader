@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	findEpubPortableBookIdInIndex,
+	isEpubGeneratedAnnotationNotePath,
 	resolveEpubPortableBookDataLocation,
+	shouldUsePortableAnnotationMutationForHighlight,
 } from "../epub-portable-data-location";
 
 describe("epub portable data location", () => {
@@ -13,6 +15,7 @@ describe("epub portable data location", () => {
 			bookDir: "weave/epub-data/books/epub-book-rv441q",
 			bookMetadataPath: "weave/epub-data/books/epub-book-rv441q/book.json",
 			annotationsPath: "weave/epub-data/books/epub-book-rv441q/annotations.json",
+			annotationsMarkdownPath: "weave/epub-data/books/epub-book-rv441q/annotations.md",
 			semanticProfilePath: "weave/epub-data/books/epub-book-rv441q/semantic-profile.json",
 			bookmarksPath: "weave/epub-data/books/epub-book-rv441q/bookmarks.json",
 			readingStatePath: "weave/epub-data/books/epub-book-rv441q/reading-state.json",
@@ -45,5 +48,36 @@ describe("epub portable data location", () => {
 		expect(findEpubPortableBookIdInIndex(index, "Books/New Name.epub")).toBe("epub-book-a");
 		expect(findEpubPortableBookIdInIndex(index, "Books/Other.epub")).toBe("epub-book-b");
 		expect(findEpubPortableBookIdInIndex(index, "Books/Missing.epub")).toBe("");
+	});
+
+	it("detects generated annotation notes as portable annotation sources", () => {
+		const annotationsMd = "weave/epub-data/books/epub-book-a/annotations.md";
+
+		expect(isEpubGeneratedAnnotationNotePath(annotationsMd)).toBe(true);
+		expect(shouldUsePortableAnnotationMutationForHighlight({ sourceFile: "" }, null)).toBe(true);
+		expect(
+			shouldUsePortableAnnotationMutationForHighlight(
+				{ sourceFile: "" },
+				{ sourceFile: annotationsMd }
+			)
+		).toBe(true);
+		expect(
+			shouldUsePortableAnnotationMutationForHighlight(
+				{ sourceFile: annotationsMd },
+				{ sourceFile: "Notes/manual.md" }
+			)
+		).toBe(true);
+		expect(
+			shouldUsePortableAnnotationMutationForHighlight(
+				{ sourceFile: "", sourceLocators: [{ sourceFile: annotationsMd }] },
+				{ sourceFile: "Notes/manual.md" }
+			)
+		).toBe(true);
+		expect(
+			shouldUsePortableAnnotationMutationForHighlight(
+				{ sourceFile: "Notes/manual.md" },
+				{ sourceFile: "Notes/manual.md" }
+			)
+		).toBe(false);
 	});
 });

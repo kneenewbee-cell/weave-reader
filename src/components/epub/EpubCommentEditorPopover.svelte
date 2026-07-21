@@ -1,7 +1,17 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
 	import { tr } from '../../utils/i18n';
-	import type { EpubReaderEngine, HighlightClickInfo } from '../../services/epub';
+	import {
+		activeSemanticEntries,
+		normalizeAnnotationStyle,
+		SEMANTIC_COLOR_HEX,
+	} from '../../services/epub';
+	import type {
+		EpubAnnotationSemantic,
+		EpubReaderEngine,
+		EpubSemanticSettings,
+		HighlightClickInfo,
+	} from '../../services/epub';
 	import { computeToolbarPosition, TOOLBAR_EDGE_MARGIN } from './toolbar-positioning';
 	import {
 		bindMobileFloatingViewport,
@@ -21,8 +31,10 @@
 		readingLockEl?: HTMLElement | null;
 		draftText: string;
 		saving?: boolean;
+		semanticSettings?: EpubSemanticSettings | null;
 		onDraftTextChange: (value: string) => void;
 		onSave: () => void;
+		onConvertToSemantic?: (info: HighlightClickInfo, semantic: EpubAnnotationSemantic) => void | Promise<void>;
 		onClose: () => void;
 	}
 
@@ -34,8 +46,10 @@
 		readingLockEl = null,
 		draftText,
 		saving = false,
+		semanticSettings = null,
 		onDraftTextChange,
 		onSave,
+		onConvertToSemantic,
 		onClose,
 	}: Props = $props();
 	let t = $derived($tr);
@@ -54,6 +68,15 @@
 	let hasFocusedCurrentSession = false;
 	let teardownViewportTracking: (() => void) | null = null;
 	let readingLockCleanup: (() => void) | null = null;
+	let convertPickerOpen = $state(false);
+	let activeSemantics = $derived(
+		semanticSettings?.annotationSemanticsEnabled === false
+			? []
+			: (activeSemanticEntries(semanticSettings || {}) as EpubAnnotationSemantic[])
+	);
+	let canConvertThought = $derived(
+		Boolean(info && info.presentation === 'thought' && onConvertToSemantic && activeSemantics.length > 0)
+	);
 
 	const KEYBOARD_ACTIVE_BODY_CLASS = 'epub-comment-keyboard-active';
 
@@ -339,6 +362,30 @@
 		}, 120);
 	}
 
+	function getSemanticColorHex(color?: string): string {
+		const key = String(color || 'yellow').trim().toLowerCase();
+		const canonicalKey = key === 'cyan' ? 'teal' : key === 'pink' ? 'magenta' : key === 'gray' ? 'slate' : key;
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
+	}
+
+	function getSemanticPreviewStyle(semantic: EpubAnnotationSemantic): string {
+		return normalizeAnnotationStyle(semantic.style);
+	}
+
+	function getSemanticTitle(semantic: EpubAnnotationSemantic): string {
+		const label = String(semantic.label || semantic.id || '').trim();
+		const description = String(semantic.description || '').trim();
+		return description && description !== label ? `${label} - ${description}` : label || description;
+	}
+
+	function handleConvertSemanticClick(semantic: EpubAnnotationSemantic) {
+		if (!info) {
+			return;
+		}
+		convertPickerOpen = false;
+		void onConvertToSemantic?.(info, semantic);
+	}
+
 	$effect(() => {
 		const currentOpen = open;
 		const currentInfo = info;
@@ -354,6 +401,7 @@
 			untrack(() => {
 				clearPendingFocus();
 				hasFocusedCurrentSession = false;
+				convertPickerOpen = false;
 				stopViewportTracking();
 			});
 			return;
@@ -412,6 +460,36 @@
 			onfocus={handleTextareaFocus}
 			oninput={(event) => onDraftTextChange((event.currentTarget as HTMLTextAreaElement).value)}
 		></textarea>
+		{#if canConvertThought}
+			<div class="epub-comment-editor__convert">
+				<button
+					type="button"
+					class="epub-comment-editor__convert-toggle"
+					class:active={convertPickerOpen}
+					disabled={saving}
+					onclick={() => convertPickerOpen = !convertPickerOpen}
+				>转为标注</button>
+				{#if convertPickerOpen}
+					<div class="epub-comment-editor__semantic-row" aria-label="转换为语义标注">
+						{#each activeSemantics as semantic (semantic.id)}
+							<button
+								type="button"
+								class="epub-comment-editor__semantic-chip"
+								data-semantic-style={getSemanticPreviewStyle(semantic)}
+								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
+								title={getSemanticTitle(semantic)}
+								aria-label={semantic.label || semantic.id}
+								disabled={saving}
+								onclick={() => handleConvertSemanticClick(semantic)}
+							>
+								<span class="epub-comment-editor__semantic-dot"></span>
+								<span class="epub-comment-editor__semantic-label">{semantic.label}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
 		<div class="epub-comment-editor__actions">
 			<button type="button" class="epub-comment-editor__cancel" disabled={saving} onclick={onClose}>{t('epub.reader.commentEditor.cancel')}</button>
 			<button type="button" class="mod-cta" disabled={saving} onclick={onSave}>{saving ? t('epub.reader.commentEditor.saving') : t('epub.reader.commentEditor.save')}</button>
@@ -470,6 +548,72 @@
 
 	.epub-comment-editor__textarea::placeholder {
 		color: var(--text-faint);
+	}
+
+	.epub-comment-editor__convert {
+		display: flex;
+		flex-direction: column;
+		gap: var(--size-4-2);
+	}
+
+	.epub-comment-editor__convert-toggle {
+		align-self: flex-start;
+		border: 1px solid color-mix(in srgb, var(--text-normal) 36%, transparent);
+		border-radius: var(--button-radius, 6px);
+		background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+		color: var(--text-normal);
+		font-size: var(--font-ui-smaller);
+		box-shadow: none;
+	}
+
+	.epub-comment-editor__convert-toggle.active {
+		background: color-mix(in srgb, var(--text-normal) 10%, var(--background-primary));
+		border-color: color-mix(in srgb, var(--text-normal) 58%, transparent);
+	}
+
+	.epub-comment-editor__semantic-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+		max-height: 6.6rem;
+		overflow: auto;
+		padding: 0.15rem 0;
+	}
+
+	.epub-comment-editor__semantic-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		min-height: 1.75rem;
+		max-width: 10rem;
+		padding: 0.2rem 0.45rem;
+		border: 1px solid color-mix(in srgb, var(--weave-semantic-color) 34%, var(--background-modifier-border));
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--weave-semantic-color) 12%, var(--background-primary));
+		color: var(--text-normal);
+		box-shadow: none;
+		font-size: var(--font-ui-smaller);
+	}
+
+	.epub-comment-editor__semantic-chip:hover,
+	.epub-comment-editor__semantic-chip:focus-visible {
+		border-color: color-mix(in srgb, var(--weave-semantic-color) 72%, var(--background-modifier-border));
+		background: color-mix(in srgb, var(--weave-semantic-color) 18%, var(--background-primary));
+	}
+
+	.epub-comment-editor__semantic-dot {
+		width: 0.66rem;
+		height: 0.66rem;
+		border-radius: 999px;
+		background: var(--weave-semantic-color);
+		flex: 0 0 auto;
+	}
+
+	.epub-comment-editor__semantic-label {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.epub-comment-editor--mobile .epub-comment-editor__textarea:focus {

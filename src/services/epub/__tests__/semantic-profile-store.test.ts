@@ -7,6 +7,7 @@ import {
 	PROFILE_FORMAT,
 	PROFILE_VERSION,
 	profileToSettings,
+	SEMANTIC_COLOR_HEX,
 	type EpubSemanticSettings,
 } from "../semantic/profiles";
 import {
@@ -57,6 +58,78 @@ function createMockApp(files: Record<string, unknown>) {
 		__files: serialized,
 	} as never;
 }
+
+describe("semantic color palette", () => {
+	it("exposes ten high-contrast colors in a two-row palette order", () => {
+		expect(Object.keys(SEMANTIC_COLOR_HEX)).toEqual([
+			"yellow",
+			"orange",
+			"red",
+			"magenta",
+			"purple",
+			"indigo",
+			"blue",
+			"teal",
+			"green",
+			"slate",
+		]);
+	});
+
+	it("keeps newly added palette colors when normalizing semantic settings", () => {
+		const settings = profileToSettings({
+			annotationSemantics: [
+				{
+					id: "mind-map",
+					label: "脑图",
+					color: "indigo",
+					style: "highlight",
+					group: "study",
+				},
+			],
+			standardSemanticIds: ["mind-map"],
+		});
+
+		expect(settings.annotationSemantics[0]?.color).toBe("indigo");
+	});
+
+	it("normalizes legacy color tokens to the new palette", () => {
+		const settings = profileToSettings({
+			annotationSemantics: [
+				{ id: "quote", label: "摘句", color: "cyan", style: "underline" },
+				{ id: "person", label: "人物", color: "pink", style: "highlight" },
+				{ id: "review", label: "待回看", color: "gray", style: "wavy" },
+			],
+			standardSemanticIds: ["quote", "person", "review"],
+		});
+
+		expect(settings.annotationSemantics.map((semantic) => semantic.color)).toEqual([
+			"teal",
+			"magenta",
+			"slate",
+		]);
+	});
+
+	it("defaults semantic canvas auto-add to false and preserves explicit opt-in", () => {
+		const settings = applySemanticScheme({}, "literature-humanities");
+
+		expect(settings.annotationSemantics.every((semantic) => semantic.autoAddToCanvas === false)).toBe(true);
+
+		const custom = profileToSettings({
+			annotationSemantics: [
+				{
+					id: "quote",
+					label: "摘句",
+					color: "teal",
+					style: "highlight",
+					autoAddToCanvas: true,
+				},
+			],
+			standardSemanticIds: ["quote"],
+		});
+
+		expect(custom.annotationSemantics[0]?.autoAddToCanvas).toBe(true);
+	});
+});
 
 describe("loadEffectiveEpubSemanticProfile", () => {
 	it("does not append global active semantics when a book profile exists", () => {

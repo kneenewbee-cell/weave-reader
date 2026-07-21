@@ -17,7 +17,7 @@ import type { FlatTocExportItem } from "./epub-toc-export-scope";
 export type EpubReaderEngineType = "foliate";
 
 export type FlashStyle = "pulse" | "highlight" | "none";
-export type ReaderHighlightPresentation = "highlight" | "conceal";
+export type ReaderHighlightPresentation = "highlight" | "conceal" | "thought";
 
 export interface HighlightSourceLocator {
 	sourceFile: string;

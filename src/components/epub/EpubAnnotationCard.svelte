@@ -1,5 +1,18 @@
 <script lang="ts">
-	type HighlightColor = 'yellow' | 'green' | 'blue' | 'red' | 'purple' | 'orange' | 'cyan' | 'pink' | 'gray';
+	type HighlightColor =
+		| 'yellow'
+		| 'orange'
+		| 'red'
+		| 'magenta'
+		| 'purple'
+		| 'indigo'
+		| 'blue'
+		| 'teal'
+		| 'green'
+		| 'slate'
+		| 'cyan'
+		| 'pink'
+		| 'gray';
 
 	interface Props {
 		color?: string;
@@ -39,14 +52,21 @@
 
 	function normalizeColor(currentColor?: string): HighlightColor {
 		switch (currentColor) {
-			case 'green':
-			case 'blue':
-			case 'red':
-			case 'purple':
-			case 'orange':
 			case 'cyan':
+				return 'teal';
 			case 'pink':
+				return 'magenta';
 			case 'gray':
+				return 'slate';
+			case 'orange':
+			case 'red':
+			case 'magenta':
+			case 'purple':
+			case 'indigo':
+			case 'blue':
+			case 'teal':
+			case 'green':
+			case 'slate':
 				return currentColor;
 			default:
 				return 'yellow';
@@ -382,21 +402,15 @@
 	}
 
 	.hl-yellow {
-		color: color-mix(in srgb, var(--text-normal) 96%, #6b4f00 4%);
-		background: linear-gradient(180deg, rgba(255, 235, 59, 0.28) 0%, rgba(255, 193, 7, 0.18) 100%);
-		border-color: rgba(214, 158, 0, 0.26);
+		color: color-mix(in srgb, var(--text-normal) 96%, #854d0e 4%);
+		background: linear-gradient(180deg, rgba(250, 204, 21, 0.28) 0%, rgba(234, 179, 8, 0.18) 100%);
+		border-color: rgba(133, 77, 14, 0.26);
 	}
 
-	.hl-green {
-		color: color-mix(in srgb, var(--text-normal) 95%, #1f6a33 5%);
-		background: linear-gradient(180deg, rgba(76, 175, 80, 0.18) 0%, rgba(51, 194, 122, 0.12) 100%);
-		border-color: rgba(31, 106, 51, 0.18);
-	}
-
-	.hl-blue {
-		color: color-mix(in srgb, var(--text-normal) 95%, #165d9a 5%);
-		background: linear-gradient(180deg, rgba(66, 165, 245, 0.18) 0%, rgba(59, 130, 246, 0.12) 100%);
-		border-color: rgba(22, 93, 154, 0.18);
+	.hl-orange {
+		color: color-mix(in srgb, var(--text-normal) 95%, #9a3412 5%);
+		background: linear-gradient(180deg, rgba(249, 115, 22, 0.18) 0%, rgba(234, 88, 12, 0.12) 100%);
+		border-color: rgba(154, 52, 18, 0.18);
 	}
 
 	.hl-red {
@@ -405,34 +419,49 @@
 		border-color: rgba(159, 31, 31, 0.18);
 	}
 
-	.hl-purple {
-		color: color-mix(in srgb, var(--text-normal) 95%, #6b2e93 5%);
-		background: linear-gradient(180deg, rgba(171, 71, 188, 0.16) 0%, rgba(139, 92, 246, 0.12) 100%);
-		border-color: rgba(107, 46, 147, 0.18);
-	}
-
-	.hl-orange {
-		color: color-mix(in srgb, var(--text-normal) 95%, #8a4d00 5%);
-		background: linear-gradient(180deg, rgba(255, 152, 0, 0.18) 0%, rgba(245, 124, 0, 0.12) 100%);
-		border-color: rgba(138, 77, 0, 0.18);
-	}
-
-	.hl-cyan {
-		color: color-mix(in srgb, var(--text-normal) 95%, #006c78 5%);
-		background: linear-gradient(180deg, rgba(0, 188, 212, 0.18) 0%, rgba(8, 145, 178, 0.12) 100%);
-		border-color: rgba(0, 108, 120, 0.18);
-	}
-
+	.hl-magenta,
 	.hl-pink {
 		color: color-mix(in srgb, var(--text-normal) 95%, #9d174d 5%);
-		background: linear-gradient(180deg, rgba(244, 114, 182, 0.18) 0%, rgba(219, 39, 119, 0.12) 100%);
+		background: linear-gradient(180deg, rgba(236, 72, 153, 0.18) 0%, rgba(219, 39, 119, 0.12) 100%);
 		border-color: rgba(157, 23, 77, 0.18);
 	}
 
+	.hl-purple {
+		color: color-mix(in srgb, var(--text-normal) 95%, #6b2e93 5%);
+		background: linear-gradient(180deg, rgba(139, 92, 246, 0.16) 0%, rgba(124, 58, 237, 0.12) 100%);
+		border-color: rgba(107, 46, 147, 0.18);
+	}
+
+	.hl-indigo {
+		color: color-mix(in srgb, var(--text-normal) 95%, #4338ca 5%);
+		background: linear-gradient(180deg, rgba(79, 70, 229, 0.16) 0%, rgba(67, 56, 202, 0.12) 100%);
+		border-color: rgba(67, 56, 202, 0.18);
+	}
+
+	.hl-blue {
+		color: color-mix(in srgb, var(--text-normal) 95%, #0369a1 5%);
+		background: linear-gradient(180deg, rgba(14, 165, 233, 0.18) 0%, rgba(2, 132, 199, 0.12) 100%);
+		border-color: rgba(3, 105, 161, 0.18);
+	}
+
+	.hl-teal,
+	.hl-cyan {
+		color: color-mix(in srgb, var(--text-normal) 95%, #0f766e 5%);
+		background: linear-gradient(180deg, rgba(20, 184, 166, 0.18) 0%, rgba(13, 148, 136, 0.12) 100%);
+		border-color: rgba(15, 118, 110, 0.18);
+	}
+
+	.hl-green {
+		color: color-mix(in srgb, var(--text-normal) 95%, #15803d 5%);
+		background: linear-gradient(180deg, rgba(34, 197, 94, 0.18) 0%, rgba(22, 163, 74, 0.12) 100%);
+		border-color: rgba(21, 128, 61, 0.18);
+	}
+
+	.hl-slate,
 	.hl-gray {
-		color: color-mix(in srgb, var(--text-normal) 95%, #4b5563 5%);
-		background: linear-gradient(180deg, rgba(156, 163, 175, 0.18) 0%, rgba(107, 114, 128, 0.12) 100%);
-		border-color: rgba(75, 85, 99, 0.18);
+		color: color-mix(in srgb, var(--text-normal) 95%, #475569 5%);
+		background: linear-gradient(180deg, rgba(100, 116, 139, 0.18) 0%, rgba(71, 85, 105, 0.12) 100%);
+		border-color: rgba(71, 85, 105, 0.18);
 	}
 
 	.annotation-quote :global(mark),

@@ -109,6 +109,13 @@ function createSemanticAnnotationAdapter(options) {
     const commentText = String(
       presentedAnnotation.commentText || ""
     ).trim();
+    const rawPresentation = String(
+      presentedAnnotation.presentation || ""
+    ).trim().toLowerCase();
+    const presentation =
+      rawPresentation === "thought" || rawPresentation === "conceal"
+        ? rawPresentation
+        : "highlight";
     return {
       cfiRange,
       color,
@@ -140,7 +147,7 @@ function createSemanticAnnotationAdapter(options) {
       Number.isFinite(presentedAnnotation.updatedAt)
         ? { updatedAt: presentedAnnotation.updatedAt }
         : {}),
-      presentation: "highlight"
+      presentation
     };
   }
 

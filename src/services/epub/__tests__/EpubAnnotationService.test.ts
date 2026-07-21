@@ -326,6 +326,177 @@ describe('EpubAnnotationService', () => {
 		});
 	});
 
+	it('preserves thought presentation when saving a portable thought anchor', async () => {
+		const bookId = 'epub-book-thought';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+		const thought = {
+			cfiRange: 'epubcfi(/6/2!/4/2)',
+			color: 'yellow',
+			text: 'Thought source',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			createdTime: 100,
+			presentation: 'thought' as const,
+		};
+
+		const result = await service.replacePortableHighlight(bookId, thought, thought);
+
+		expect(result?.current.presentation).toBe('thought');
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			text: 'Thought source',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			presentation: 'thought',
+		});
+	});
+
+	it('replaces a thought anchor with one semantic highlight when converting to annotation', async () => {
+		const bookId = 'epub-book-thought-convert';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2)',
+						color: 'yellow',
+						text: 'Thought source',
+						commentText: 'Thought body',
+						hasCommentDivider: true,
+						createdTime: 100,
+						presentation: 'thought',
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.replacePortableHighlight(
+			bookId,
+			{
+				cfiRange: 'epubcfi(/6/2!/4/2)',
+				color: 'yellow',
+				text: 'Thought source',
+				commentText: 'Thought body',
+				hasCommentDivider: true,
+				createdTime: 100,
+				presentation: 'thought',
+			},
+			{
+				cfiRange: 'epubcfi(/6/2!/4/2)',
+				color: 'green',
+				style: 'underline',
+				text: 'Thought source',
+				commentText: 'Thought body',
+				hasCommentDivider: true,
+				semanticId: 'theme',
+				semanticLabel: '主题',
+				createdTime: 100,
+				presentation: 'highlight',
+			}
+		);
+
+		expect(result?.previous?.presentation).toBe('thought');
+		expect(result?.current).toMatchObject({
+			semanticId: 'theme',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			presentation: 'highlight',
+		});
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			semanticId: 'theme',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			presentation: 'highlight',
+		});
+	});
+
+	it('converts an existing thought anchor into the new annotation for the same text', async () => {
+		const bookId = 'epub-book-thought-then-highlight';
+		const app = createPortableMockApp({
+			[`weave/epub-data/books/${bookId}/annotations.json`]: {
+				format: 'weave-reader-annotations/v1',
+				version: 1,
+				bookId,
+				annotations: [
+					{
+						cfiRange: 'epubcfi(/6/2!/4/2)',
+						color: 'yellow',
+						text: 'Shared source',
+						commentText: 'Thought body',
+						hasCommentDivider: true,
+						createdTime: 100,
+						presentation: 'thought',
+					},
+				],
+			},
+		});
+		const storageService = {
+			getApp: vi.fn(() => app),
+			removeLegacyHighlights: vi.fn(async () => {}),
+			getCanvasBinding: vi.fn(async () => null),
+		} as any;
+		const service = new EpubAnnotationService(storageService);
+
+		const result = await service.savePortableHighlightWithPolicy(bookId, {
+			cfiRange: 'epubcfi(/6/2!/4/2)',
+			color: 'green',
+			style: 'underline',
+			text: 'Shared source',
+			semanticId: 'theme',
+			semanticLabel: '主题',
+			createdTime: 200,
+			presentation: 'highlight',
+		});
+
+		expect(result.kind).toBe('replace');
+		expect(result.previous).toMatchObject({
+			text: 'Shared source',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			presentation: 'thought',
+		});
+		expect(result.current).toMatchObject({
+			text: 'Shared source',
+			semanticId: 'theme',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			presentation: 'highlight',
+		});
+		const payload = await readEffectiveEpubPortableAnnotations(app as any, bookId);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			text: 'Shared source',
+			semanticId: 'theme',
+			commentText: 'Thought body',
+			hasCommentDivider: true,
+			presentation: 'highlight',
+		});
+	});
+
 	it('removes one portable annotation by reader highlight identity', async () => {
 		const bookId = 'epub-book-undo';
 		const app = createPortableMockApp({

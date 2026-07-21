@@ -7,6 +7,7 @@ import {
 	createRenderedFoliateAnnotation,
 	isSameFoliateAnnotation,
 } from "../reader-annotation-model";
+import { ReaderAnnotationOverlayRenderer } from "../reader-annotation-overlayer";
 import { FoliateReaderService } from "../FoliateReaderService";
 
 vi.mock("obsidian", async () => {
@@ -264,6 +265,40 @@ describe("FoliateReaderService comment marker layering", () => {
 		} finally {
 			service.destroy();
 		}
+	});
+
+	it("draws standalone thoughts as a black comment marker without a base highlight overlay", () => {
+		const highlightOverlay = vi.fn(() => document.createElementNS("http://www.w3.org/2000/svg", "g"));
+		const renderer = new ReaderAnnotationOverlayRenderer({
+			resolveHighlightTint: vi.fn((color?: string) => color || "rgb(250, 204, 21)"),
+			getObsidianCSSVar: vi.fn((_name: string, fallback: string) => fallback),
+			getConcealmentPalette: vi.fn(() => ({
+				base: "#ffffff",
+				border: "#111111",
+				stripe: "#dddddd",
+			})),
+			onCommentMarkerClick: vi.fn(),
+			onReferenceBadgeClick: vi.fn(),
+		});
+
+		const overlay = renderer.createCompositeAnnotationOverlay(
+			createReaderFoliateAnnotation({
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Thought source",
+				commentText: "Thought body",
+				hasCommentDivider: true,
+				presentation: "thought",
+			}),
+			[{ left: 10, top: 10, width: 84, height: 18 }],
+			{ Overlayer: { highlight: highlightOverlay } }
+		);
+
+		expect(highlightOverlay).not.toHaveBeenCalled();
+		expect(overlay.querySelector('[data-weave-comment-marker="bubble"]')).not.toBeNull();
+		expect(
+			overlay.querySelector('[data-weave-comment-marker="bubble"]')?.getAttribute("stroke")
+		).toBe("#111111");
 	});
 
 	it("draws source-locate focus as a visible translucent box over an existing styled annotation", () => {

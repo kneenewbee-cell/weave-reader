@@ -19,6 +19,7 @@ export interface EpubAnnotationSemantic {
 	group: string;
 	description: string;
 	showInStandard?: boolean;
+	autoAddToCanvas?: boolean;
 	source?: string;
 	active?: boolean;
 }

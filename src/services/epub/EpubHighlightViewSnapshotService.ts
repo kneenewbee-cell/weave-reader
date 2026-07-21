@@ -12,11 +12,15 @@ import type { EpubReaderEngine, ReaderHighlight } from "./reader-engine-types";
 
 export type EpubHighlightColor =
 	| "yellow"
-	| "green"
-	| "blue"
-	| "red"
-	| "purple"
 	| "orange"
+	| "red"
+	| "magenta"
+	| "purple"
+	| "indigo"
+	| "blue"
+	| "teal"
+	| "green"
+	| "slate"
 	| "cyan"
 	| "pink"
 	| "gray";
@@ -624,14 +628,21 @@ export class EpubHighlightViewSnapshotService {
 
 	private normalizeColor(color?: string): EpubHighlightColor {
 		switch (color) {
-			case "green":
-			case "blue":
-			case "red":
-			case "purple":
-			case "orange":
 			case "cyan":
+				return "teal";
 			case "pink":
+				return "magenta";
 			case "gray":
+				return "slate";
+			case "orange":
+			case "red":
+			case "magenta":
+			case "purple":
+			case "indigo":
+			case "blue":
+			case "teal":
+			case "green":
+			case "slate":
 				return color;
 			default:
 				return "yellow";
@@ -640,22 +651,28 @@ export class EpubHighlightViewSnapshotService {
 
 	private getHighlightColorLabel(color: EpubHighlightColor): string {
 		switch (color) {
-			case "green":
-				return "绿色";
-			case "blue":
-				return "蓝色";
-			case "red":
-				return "红色";
-			case "purple":
-				return "紫色";
 			case "orange":
 				return "橙色";
+			case "red":
+				return "红色";
+			case "magenta":
+				return "洋红";
+			case "purple":
+				return "紫色";
+			case "indigo":
+				return "靛蓝";
+			case "blue":
+				return "天蓝";
+			case "teal":
 			case "cyan":
-				return "青色";
+				return "青绿";
+			case "green":
+				return "绿色";
 			case "pink":
-				return "粉色";
+				return "洋红";
+			case "slate":
 			case "gray":
-				return "灰色";
+				return "岩灰";
 			default:
 				return "黄色";
 		}

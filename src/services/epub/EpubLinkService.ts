@@ -96,23 +96,27 @@ export class EpubLinkService {
 	}
 
 	static normalizeHighlightColorToken(color?: string): string | undefined {
-		switch (
-			String(color || "")
-				.trim()
-				.toLowerCase()
-		) {
-			case "blue":
+		const normalized = String(color || "")
+			.trim()
+			.toLowerCase();
+		switch (normalized) {
 			case "cyan":
-			case "gray":
-			case "green":
-			case "orange":
+				return "teal";
 			case "pink":
+				return "magenta";
+			case "gray":
+				return "slate";
+			case "blue":
+			case "green":
+			case "indigo":
+			case "magenta":
+			case "orange":
 			case "purple":
 			case "red":
+			case "slate":
+			case "teal":
 			case "yellow":
-				return String(color || "")
-					.trim()
-					.toLowerCase();
+				return normalized;
 			default:
 				return undefined;
 		}

@@ -637,14 +637,18 @@ body.is-mobile .epub-reader-root[data-paragraph-mode="active"] .epub-paragraph-o
 }
 
 .epub-note-card .note-quote.hl-yellow { background-color: var(--epub-hl-yellow); }
-.epub-note-card .note-quote.hl-green { background-color: var(--epub-hl-green); }
-.epub-note-card .note-quote.hl-blue { background-color: var(--epub-hl-blue); }
-.epub-note-card .note-quote.hl-red { background-color: var(--epub-hl-red); }
-.epub-note-card .note-quote.hl-purple { background-color: var(--epub-hl-purple); }
 .epub-note-card .note-quote.hl-orange { background-color: var(--epub-hl-orange); }
-.epub-note-card .note-quote.hl-cyan { background-color: var(--epub-hl-cyan); }
-.epub-note-card .note-quote.hl-pink { background-color: var(--epub-hl-pink); }
-.epub-note-card .note-quote.hl-gray { background-color: var(--epub-hl-gray); }
+.epub-note-card .note-quote.hl-red { background-color: var(--epub-hl-red); }
+.epub-note-card .note-quote.hl-magenta { background-color: var(--epub-hl-magenta); }
+.epub-note-card .note-quote.hl-purple { background-color: var(--epub-hl-purple); }
+.epub-note-card .note-quote.hl-indigo { background-color: var(--epub-hl-indigo); }
+.epub-note-card .note-quote.hl-blue { background-color: var(--epub-hl-blue); }
+.epub-note-card .note-quote.hl-teal,
+.epub-note-card .note-quote.hl-cyan { background-color: var(--epub-hl-teal); }
+.epub-note-card .note-quote.hl-green { background-color: var(--epub-hl-green); }
+.epub-note-card .note-quote.hl-slate,
+.epub-note-card .note-quote.hl-gray { background-color: var(--epub-hl-slate); }
+.epub-note-card .note-quote.hl-pink { background-color: var(--epub-hl-magenta); }
 
 .epub-note-card .note-comment {
 	font-size: 13px;

@@ -592,20 +592,43 @@ body.styled-scrollbars .epub-paragraph-overlay__text-viewport::-webkit-scrollbar
 	box-shadow: inset 0 -0.78em 0 rgba(250, 204, 21, 0.34);
 }
 
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="orange"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(249, 115, 22, 0.3);
+}
+
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="red"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(239, 68, 68, 0.26);
+}
+
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="magenta"][data-style="highlight"],
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="pink"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(236, 72, 153, 0.26);
+}
+
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="purple"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(139, 92, 246, 0.26);
+}
+
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="indigo"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(79, 70, 229, 0.24);
+}
+
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="blue"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(14, 165, 233, 0.26);
+}
+
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="teal"][data-style="highlight"],
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="cyan"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(20, 184, 166, 0.26);
+}
+
 .epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="green"][data-style="highlight"] {
 	box-shadow: inset 0 -0.78em 0 rgba(34, 197, 94, 0.28);
 }
 
-.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="blue"][data-style="highlight"] {
-	box-shadow: inset 0 -0.78em 0 rgba(59, 130, 246, 0.26);
-}
-
-.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="red"][data-style="highlight"] {
-	box-shadow: inset 0 -0.78em 0 rgba(239, 68, 68, 0.24);
-}
-
-.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="purple"][data-style="highlight"] {
-	box-shadow: inset 0 -0.78em 0 rgba(168, 85, 247, 0.24);
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="slate"][data-style="highlight"],
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="gray"][data-style="highlight"] {
+	box-shadow: inset 0 -0.78em 0 rgba(100, 116, 139, 0.24);
 }
 
 .epub-paragraph-overlay__text .weave-paragraph-annotation[data-style="underline"] {

@@ -9,6 +9,7 @@ import {
 } from "./highlight/highlight-identity";
 import {
 	findSameAnnotationRange,
+	getAnnotationRangeRelation,
 	getAnnotationSemanticKey,
 } from "./annotation-range-policy";
 import type { EpubStorageService } from "./EpubStorageService";
@@ -254,6 +255,26 @@ export class EpubAnnotationService {
 		});
 	}
 
+	private normalizeReaderHighlightPresentation(value: unknown): ReaderHighlight["presentation"] {
+		const presentation = String(value || "").trim().toLowerCase();
+		return presentation === "thought" || presentation === "conceal" ? presentation : "highlight";
+	}
+
+	private isThoughtHighlight(highlight: Pick<ReaderHighlight, "presentation">): boolean {
+		return highlight.presentation === "thought";
+	}
+
+	private mergeThoughtIntoAnnotation(thought: ReaderHighlight, annotation: ReaderHighlight): ReaderHighlight {
+		return {
+			...thought,
+			...annotation,
+			commentText: annotation.commentText ?? thought.commentText,
+			hasCommentDivider: annotation.hasCommentDivider ?? thought.hasCommentDivider,
+			createdTime: thought.createdTime ?? annotation.createdTime,
+			presentation: "highlight",
+		};
+	}
+
 	private getApp() {
 		return typeof this.storageService.getApp === "function"
 			? this.storageService.getApp()
@@ -355,6 +376,9 @@ export class EpubAnnotationService {
 		const spineIndex = (presentedAnnotation as { spineIndex?: unknown }).spineIndex;
 		const createdTime = (presentedAnnotation as { createdTime?: unknown }).createdTime;
 		const updatedAt = (presentedAnnotation as { updatedAt?: unknown }).updatedAt;
+		const presentation = this.normalizeReaderHighlightPresentation(
+			(presentedAnnotation as { presentation?: unknown }).presentation
+		);
 
 		return {
 			cfiRange,
@@ -379,7 +403,7 @@ export class EpubAnnotationService {
 			...(typeof spineIndex === "number" && Number.isFinite(spineIndex) ? { spineIndex } : {}),
 			...(typeof createdTime === "number" && Number.isFinite(createdTime) ? { createdTime } : {}),
 			...(typeof updatedAt === "number" && Number.isFinite(updatedAt) ? { updatedAt } : {}),
-			presentation: "highlight",
+			presentation,
 		};
 	}
 
@@ -468,7 +492,34 @@ export class EpubAnnotationService {
 			const existing = payload.annotations
 				.map((annotation) => this.normalizePortableAnnotation(annotation, profileResult.effectiveProfile))
 				.filter((item): item is ReaderHighlight => Boolean(item));
-			const sameRange = findSameAnnotationRange(existing, normalizedIncoming);
+			if (!this.isThoughtHighlight(normalizedIncoming)) {
+				const sameThought = findSameAnnotationRange(
+					existing.filter((item) => this.isThoughtHighlight(item)),
+					normalizedIncoming
+				);
+				if (sameThought) {
+					const sameThoughtKey = getReaderHighlightIdentityKey(sameThought);
+					const converted = this.mergeThoughtIntoAnnotation(sameThought, normalizedIncoming);
+					const remaining = existing.filter((item) => {
+						if (getReaderHighlightIdentityKey(item) === sameThoughtKey) {
+							return false;
+						}
+						return getAnnotationRangeRelation(item, normalizedIncoming) !== "same-range";
+					});
+					const merged = mergeReaderHighlightsByIdentity(remaining, [converted]);
+					await writeBookEpubPortableAnnotations(app, bookId, merged);
+					this.invalidateCollectedHighlightsCache(bookId);
+					return {
+						kind: "replace",
+						previous: sameThought,
+						current: converted,
+					};
+				}
+			}
+			const sameRangeCandidates = existing.filter(
+				(item) => this.isThoughtHighlight(item) === this.isThoughtHighlight(normalizedIncoming)
+			);
+			const sameRange = findSameAnnotationRange(sameRangeCandidates, normalizedIncoming);
 			if (sameRange) {
 				if (getAnnotationSemanticKey(sameRange) === getAnnotationSemanticKey(normalizedIncoming)) {
 					return {
@@ -850,7 +901,7 @@ export class EpubAnnotationService {
 						excerptId: primaryLocator?.excerptId || bh.excerptId,
 						sourceLocators: incomingLocators,
 						createdTime: bh.createdTime,
-						presentation: "highlight",
+						presentation: this.normalizeReaderHighlightPresentation(bh.presentation),
 					});
 				}
 			}

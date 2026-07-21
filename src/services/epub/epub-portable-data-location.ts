@@ -116,6 +116,33 @@ export function isEpubGeneratedAnnotationNotePath(value: unknown): boolean {
 	return /^weave\/epub-data\/books\/[^/]+\/annotations\.md$/i.test(normalizedPath);
 }
 
+export interface EpubPortableAnnotationMutationHighlightSource {
+	sourceFile?: unknown;
+}
+
+export interface EpubPortableAnnotationMutationHighlightInfo {
+	sourceFile?: unknown;
+	sourceLocators?: Array<{ sourceFile?: unknown }> | null;
+}
+
+export function shouldUsePortableAnnotationMutationForHighlight(
+	info: EpubPortableAnnotationMutationHighlightInfo,
+	source?: EpubPortableAnnotationMutationHighlightSource | null
+): boolean {
+	if (!cleanString(source?.sourceFile)) {
+		return true;
+	}
+	if (isEpubGeneratedAnnotationNotePath(source?.sourceFile)) {
+		return true;
+	}
+	if (isEpubGeneratedAnnotationNotePath(info.sourceFile)) {
+		return true;
+	}
+	return (info.sourceLocators || []).some((locator) =>
+		isEpubGeneratedAnnotationNotePath(locator?.sourceFile)
+	);
+}
+
 export function findEpubPortableBookIdInIndex(index: unknown, filePath: unknown): string {
 	return findEpubPortableBookIdInIndexByIdentity(index, { filePath });
 }

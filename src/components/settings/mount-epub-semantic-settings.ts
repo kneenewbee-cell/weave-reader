@@ -49,14 +49,20 @@ interface MountEpubSemanticSettingsOptions {
 
 const SEMANTIC_COLOR_LABELS: Record<string, string> = {
 	yellow: "黄色",
-	blue: "蓝色",
-	red: "红色",
-	purple: "紫色",
-	green: "绿色",
 	orange: "橙色",
-	cyan: "青色",
-	pink: "粉色",
-	gray: "灰色",
+	red: "红色",
+	magenta: "洋红",
+	purple: "紫色",
+	indigo: "靛蓝",
+	blue: "天蓝",
+	teal: "青绿",
+	green: "绿色",
+	slate: "岩灰",
+};
+const LEGACY_SEMANTIC_COLOR_ALIASES: Record<string, string> = {
+	cyan: "teal",
+	pink: "magenta",
+	gray: "slate",
 };
 
 function cloneSemanticSettings(settings: unknown): EpubSemanticSettings {
@@ -75,7 +81,8 @@ function semanticProfileKey(scope: EpubSemanticSettingsScope, bookId: string): s
 
 function getSemanticColorHex(color: unknown): string {
 	const key = String(color || "").trim().toLowerCase();
-	return SEMANTIC_COLOR_HEX[key as keyof typeof SEMANTIC_COLOR_HEX] || SEMANTIC_COLOR_HEX.yellow;
+	const canonicalKey = LEGACY_SEMANTIC_COLOR_ALIASES[key] || key;
+	return SEMANTIC_COLOR_HEX[canonicalKey as keyof typeof SEMANTIC_COLOR_HEX] || SEMANTIC_COLOR_HEX.yellow;
 }
 
 function shortBookTitleFromPath(filePath: unknown): string {
@@ -581,6 +588,23 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 				styleSelect.disabled = !canEdit;
 				styleSelect.addEventListener("change", async () => {
 					await editSemantic(semantic.id, { style: styleSelect.value as EpubSemanticSettings["annotationSemantics"][number]["style"] });
+				});
+
+				const canvasLabel = row.createEl("label", {
+					cls: "weave-epub-semantic-canvas-toggle",
+				});
+				const canvasCheckbox = canvasLabel.createEl("input", { type: "checkbox" });
+				canvasCheckbox.checked = semantic.autoAddToCanvas === true;
+				canvasCheckbox.disabled = !canEdit;
+				canvasLabel.createSpan({ text: "自动入脑图" });
+				canvasCheckbox.addEventListener("change", async () => {
+					await editSemantic(semantic.id, { autoAddToCanvas: canvasCheckbox.checked });
+					if (canvasCheckbox.checked && currentBookId) {
+						const canvasPath = await plugin.getEpubStorageService().getCanvasBinding(currentBookId);
+						if (!canvasPath) {
+							new Notice("已开启自动入脑图；当前书还没有绑定 Canvas，请先在读书器里创建或绑定 Canvas。");
+						}
+					}
 				});
 
 				const standardLabel = row.createEl("label", {

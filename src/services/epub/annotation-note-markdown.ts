@@ -54,19 +54,25 @@ type ResolvedEpubAnnotationNoteAnnotation = EpubAnnotationNoteAnnotationInput & 
 };
 
 const COLOR_STYLES: Record<string, { highlight: string; line: string }> = {
-	yellow: { highlight: "rgba(255, 224, 102, 0.62)", line: "#f2b705" },
-	blue: { highlight: "rgba(158, 216, 255, 0.42)", line: "#60a5fa" },
-	red: { highlight: "rgba(255, 154, 154, 0.42)", line: "#f87171" },
-	purple: { highlight: "rgba(167, 139, 250, 0.35)", line: "#a78bfa" },
-	green: { highlight: "rgba(167, 232, 179, 0.45)", line: "#34d399" },
-	orange: { highlight: "rgba(255, 201, 120, 0.46)", line: "#f59e0b" },
-	cyan: { highlight: "rgba(139, 227, 231, 0.42)", line: "#22d3ee" },
-	pink: { highlight: "rgba(255, 179, 209, 0.42)", line: "#fb7185" },
-	gray: { highlight: "rgba(201, 205, 212, 0.42)", line: "#94a3b8" },
+	yellow: { highlight: "rgba(250, 204, 21, 0.36)", line: "#facc15" },
+	orange: { highlight: "rgba(249, 115, 22, 0.32)", line: "#f97316" },
+	red: { highlight: "rgba(239, 68, 68, 0.3)", line: "#ef4444" },
+	magenta: { highlight: "rgba(236, 72, 153, 0.3)", line: "#ec4899" },
+	purple: { highlight: "rgba(139, 92, 246, 0.3)", line: "#8b5cf6" },
+	indigo: { highlight: "rgba(79, 70, 229, 0.26)", line: "#4f46e5" },
+	blue: { highlight: "rgba(14, 165, 233, 0.28)", line: "#0ea5e9" },
+	teal: { highlight: "rgba(20, 184, 166, 0.28)", line: "#14b8a6" },
+	green: { highlight: "rgba(34, 197, 94, 0.28)", line: "#22c55e" },
+	slate: { highlight: "rgba(100, 116, 139, 0.25)", line: "#64748b" },
+	cyan: { highlight: "rgba(20, 184, 166, 0.28)", line: "#14b8a6" },
+	pink: { highlight: "rgba(236, 72, 153, 0.3)", line: "#ec4899" },
+	gray: { highlight: "rgba(100, 116, 139, 0.25)", line: "#64748b" },
 };
 
 const MASK_STYLE =
 	"background-image: repeating-linear-gradient(135deg, rgba(180, 83, 9, 0.34) 0 5px, rgba(245, 158, 11, 0.10) 5px 10px); color: var(--text-normal); border-radius: 4px; padding: 0 3px;";
+const THOUGHT_SOURCE_STYLE =
+	"display: inline-block; border: 1.5px solid #111111; border-radius: 4px; padding: 0 4px; color: var(--text-normal); background: transparent;";
 
 const TEXT = {
 	untitledBook: "\u672a\u547d\u540d\u4e66\u7c4d",
@@ -120,6 +126,9 @@ function encodeQueryValue(value: unknown): string {
 
 function normalizeColorToken(value: unknown): string {
 	const token = String(value || "").trim().toLowerCase();
+	if (token === "cyan") return "teal";
+	if (token === "pink") return "magenta";
+	if (token === "gray") return "slate";
 	return COLOR_STYLES[token] ? token : "yellow";
 }
 
@@ -128,6 +137,10 @@ function normalizeStyle(value: unknown): "highlight" | "underline" | "strikethro
 	return token === "underline" || token === "strikethrough" || token === "wavy"
 		? token
 		: "highlight";
+}
+
+function isThoughtAnnotation(annotation: EpubAnnotationNoteAnnotationInput): boolean {
+	return String(annotation.presentation || "").trim().toLowerCase() === "thought";
 }
 
 function buildProtocolHref(input: {
@@ -292,6 +305,9 @@ function renderStyledText(annotation: EpubAnnotationNoteAnnotationInput): string
 	const semanticLabel = escapeHtml(annotation.semanticLabel || annotation.semanticId || "");
 	const semanticAttr = semanticLabel ? ` data-semantic="${semanticLabel}"` : "";
 
+	if (isThoughtAnnotation(annotation)) {
+		return `<span class="weave-thought-source" style="${THOUGHT_SOURCE_STYLE}">${text}</span>`;
+	}
 	if (style === "strikethrough") {
 		return `<span${semanticAttr} style="${MASK_STYLE}">${text}</span>`;
 	}
@@ -313,6 +329,7 @@ function renderAnnotationLine(
 	const semanticLabel = getSemanticLabel(annotation);
 	const cfiRange = String(annotation.cfiRange || "").trim();
 	const annotationText = normalizeInlineAnnotationText(getAnnotationDisplayText(annotation));
+	const presentation = isThoughtAnnotation(annotation) ? "thought" : "highlight";
 	const href = buildProtocolHref({
 		filePath: book.filePath,
 		cfi: cfiRange,
@@ -325,7 +342,7 @@ function renderAnnotationLine(
 	});
 	const styledText = renderStyledText(annotation);
 	const lines = [
-		`<div class="weave-annotation-note-line" data-book-id="${escapeHtml(bookId)}" data-source-file="${escapeHtml(book.filePath)}" data-annotation-id="${escapeHtml(annotation.id || "")}" data-cfi-range="${escapeHtml(cfiRange)}" data-chapter-key="${escapeHtml(annotation.noteChapter.key)}" data-chapter-index="${typeof chapterIndex === "number" ? chapterIndex : ""}" data-chapter-title="${escapeHtml(chapterTitle)}" data-semantic-id="${escapeHtml(semanticId)}" data-semantic-label="${escapeHtml(semanticLabel)}" data-annotation-text="${escapeHtml(annotationText)}"><a href="${escapeHtml(href)}" style="text-decoration: none; color: var(--text-normal);">${styledText}</a>`,
+		`<div class="weave-annotation-note-line" data-book-id="${escapeHtml(bookId)}" data-source-file="${escapeHtml(book.filePath)}" data-annotation-id="${escapeHtml(annotation.id || "")}" data-cfi-range="${escapeHtml(cfiRange)}" data-chapter-key="${escapeHtml(annotation.noteChapter.key)}" data-chapter-index="${typeof chapterIndex === "number" ? chapterIndex : ""}" data-chapter-title="${escapeHtml(chapterTitle)}" data-semantic-id="${escapeHtml(semanticId)}" data-semantic-label="${escapeHtml(semanticLabel)}" data-annotation-text="${escapeHtml(annotationText)}" data-presentation="${escapeHtml(presentation)}"><a href="${escapeHtml(href)}" style="text-decoration: none; color: var(--text-normal);">${styledText}</a>`,
 	];
 	const comment = String(annotation.commentText || "").trim();
 	if (comment) {

@@ -84,7 +84,7 @@ describe("annotation-note-markdown", () => {
 		expect(markdown.indexOf("Chapter 1")).toBeLessThan(markdown.indexOf("Chapter 2"));
 		expect(markdown.indexOf("theorem text")).toBeLessThan(markdown.indexOf("masked text"));
 		expect(markdown).toContain("<mark");
-		expect(markdown).toContain("rgba(255, 224, 102, 0.62)");
+		expect(markdown).toContain("rgba(250, 204, 21, 0.36)");
 		expect(markdown).toContain("text-decoration-style: wavy");
 		expect(markdown).toContain("repeating-linear-gradient(135deg, rgba(180, 83, 9, 0.34)");
 		expect(markdown).toContain('data-semantic="Theorem"');
@@ -138,6 +138,34 @@ describe("annotation-note-markdown", () => {
 		expect(markdown).toContain("First paragraph has enough text.<br>Second paragraph should stay visible.");
 		expect(markdown).toContain('data-annotation-text="First paragraph has enough text. Second paragraph should stay visible."');
 		expect(markdown).toContain("text=First%20paragraph%20has%20enough%20text.%20Second%20paragraph%20should%20stay%20visible.");
+	});
+
+	it("renders standalone thoughts with a black boxed source instead of a highlight mark", () => {
+		const markdown = renderEpubAnnotationNoteMarkdown({
+			book: {
+				title: "Thought Book",
+				filePath: "Books/thought.epub",
+			},
+			bookId: "epub-book-thought",
+			annotations: [
+				{
+					id: "thought-1",
+					cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:8)",
+					text: "source text",
+					commentText: "我的想法",
+					hasCommentDivider: true,
+					presentation: "thought",
+				},
+			],
+			semanticProfile: null,
+		});
+
+		expect(markdown).toContain('data-presentation="thought"');
+		expect(markdown).toContain('class="weave-thought-source"');
+		expect(markdown).toContain("border: 1.5px solid");
+		expect(markdown).toContain("source text");
+		expect(markdown).toContain("我的想法");
+		expect(markdown).not.toContain("<mark");
 	});
 
 	it("puts book identity on dual-window controls and annotation lines for Obsidian chunked rendering", () => {

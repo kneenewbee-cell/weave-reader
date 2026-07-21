@@ -35,11 +35,18 @@
 	import { EpubScreenshotService } from '../../services/epub/EpubScreenshotService';
 	import { EpubCanvasService } from '../../services/epub/EpubCanvasService';
 	import {
+		shouldAutoAddSemanticToCanvas,
+		shouldBackfillAutoCanvasHighlight,
+		shouldInsertSelectionOutputToEditor,
+		shouldRouteSelectionOutputToCanvas,
+		shouldTreatHighlightAsCanvasAttached,
+	} from '../../services/epub/semantic-canvas-policy';
+	import {
 		WEAVE_EPUB_CANVAS_LAYOUT_DIRECTION_EVENT,
 		type WeaveEpubCanvasLayoutDirectionPayload,
 	} from '../../services/epub/canvas-excerpt-anchor';
 	import type { EpubVisibleFrameLike, ScreenshotRect } from '../../services/epub/EpubScreenshotService';
-	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderHighlightSegment, ReaderParagraph, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
+	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderAnchorPoint, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderHighlightSegment, ReaderParagraph, ReaderViewportRect, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
 	import { PremiumFeatureGuard, PREMIUM_FEATURES } from '../../services/premium/PremiumFeatureGuard';
 	import { getBookFormatDisplayLabel, isSupportedBookFile } from '../../services/epub/book-format';
 	import {
@@ -63,6 +70,7 @@
 		findEpubPortableBookIdByIdentity,
 		isEpubGeneratedAnnotationNotePath,
 		resolveEpubPortableBookDataLocation,
+		shouldUsePortableAnnotationMutationForHighlight,
 	} from '../../services/epub/epub-portable-data-location';
 	import { findOpenAnnotationNoteLeaf } from '../../services/epub/open-annotation-note-file';
 	import {
@@ -319,6 +327,14 @@
 		paragraphIndex?: number;
 		paragraphTextPreview?: string;
 	} | null>(null);
+	type SelectionThoughtDraft = {
+		text: string;
+		cfiRange: string;
+		rect: ReaderViewportRect;
+		rects?: ReaderViewportRect[];
+		anchorPoint?: ReaderAnchorPoint;
+		segments?: ReaderHighlightSegment[];
+	};
 	const PARAGRAPH_MODE_PERSIST_DEBOUNCE_MS = 1400;
 	const PARAGRAPH_MODE_REACTIVE_REFRESH_COOLDOWN_MS = 450;
 	let rootEl = $state<HTMLDivElement | null>(null);
@@ -333,6 +349,9 @@
 	let scrolledNavSyncFrame = 0;
 	let scrolledNavResizeObserver: ResizeObserver | null = null;
 	let highlightToolbarInfo = $state<HighlightClickInfo | null>(null);
+	let highlightToolbarCanvasAttached = $state(false);
+	let highlightToolbarCanvasBusy = $state(false);
+	const manuallyDetachedCanvasHighlightKeys = new Set<string>();
 	let annotationDisambiguationAnchor = $state<HighlightClickInfo | null>(null);
 	let annotationDisambiguationCandidates = $state<AnnotationDisambiguationCandidate[]>([]);
 	let commentEditorInfo = $state<HighlightClickInfo | null>(null);
@@ -341,6 +360,7 @@
 	let referencePopoverStats = $state<ReferenceStats | null>(null);
 	let commentEditorDraft = $state('');
 	let commentEditorSaving = $state(false);
+	let commentEditorNewHighlight = $state(false);
 	const SCROLLED_NAV_FRAME_INSET_VAR = '--epub-scrolled-side-nav-frame-inset-end';
 	const SCROLLED_NAV_SCROLLBAR_VAR = '--epub-scrolled-side-nav-scrollbar-width';
 	let excerptSettings = $state<EpubExcerptSettings>({
@@ -2382,7 +2402,8 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
-		return (SEMANTIC_COLOR_HEX as Record<string, string>)[key] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
+		const canonicalKey = key === 'cyan' ? 'teal' : key === 'pink' ? 'magenta' : key === 'gray' ? 'slate' : key;
+		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}
 
 	function resolveAnnotationCandidateLabel(info: HighlightClickInfo): string {
@@ -2406,6 +2427,18 @@
 
 	function getHighlightInfoIdentity(info: HighlightClickInfo): string {
 		return getReaderHighlightIdentityKey(buildHighlightIdentityFields(info));
+	}
+
+	function getHighlightCanvasMembershipKey(info: HighlightClickInfo): string {
+		const identityKey = getHighlightInfoIdentity(info);
+		if (identityKey) {
+			return identityKey;
+		}
+		return [
+			EpubLinkService.normalizeCfi(info.cfiRange),
+			String(info.semanticId || '').trim(),
+			String(info.text || '').trim(),
+		].join('::');
 	}
 
 	function rectArea(rect: HighlightClickInfo['rect']): number {
@@ -2505,6 +2538,15 @@
 		referencePopoverStats = null;
 		closeCommentEditor();
 		highlightToolbarInfo = info;
+		highlightToolbarCanvasAttached =
+			hasCanvasExcerptCapability() &&
+			canvasService.isActive() &&
+			shouldTreatHighlightAsCanvasAttached({
+				semantic: resolveSemanticFromHighlightInfo(info),
+				canvasNodeAttached: false,
+				manuallyDetached: manuallyDetachedCanvasHighlightKeys.has(getHighlightCanvasMembershipKey(info)),
+			});
+		void refreshHighlightToolbarCanvasAttachment(info);
 	}
 
 	function handleAnnotationCandidatePreview(candidate: AnnotationDisambiguationCandidate | null): void {
@@ -2513,7 +2555,7 @@
 			return;
 		}
 		activeAnnotationPreviewCfiRange = candidate.info.cfiRange;
-		readerService.previewHighlightFocus(candidate.info.cfiRange, 'cyan', 1200);
+		readerService.previewHighlightFocus(candidate.info.cfiRange, 'teal', 1200);
 	}
 
 	function clearAnnotationPreview(): void {
@@ -4752,16 +4794,30 @@
 		if (!hasExcerptNotesCapability()) {
 			return;
 		}
-		if (canvasMode && canvasService.isActive() && hasCanvasExcerptCapability()) {
+		const canUseCanvas = hasCanvasExcerptCapability();
+		if (
+			shouldRouteSelectionOutputToCanvas({
+				semantic,
+				canvasMode,
+				canvasActive: canvasService.isActive(),
+				canUseCanvas,
+			})
+		) {
 			addToCanvas(text, cfiRange, color, style, semantic);
 			return;
 		}
 
 		const content = buildNoteContent(text, cfiRange, color, style, autoInsert, semantic);
-		if (autoInsert) {
+		if (
+			shouldInsertSelectionOutputToEditor({
+				autoInsert,
+				semantic,
+				canvasMode,
+				canvasActive: canvasService.isActive(),
+				canUseCanvas,
+			})
+		) {
 			insertToEditorAndTrack(content);
-		} else {
-			copyTextToClipboard(content);
 		}
 	}
 
@@ -4806,10 +4862,11 @@
 		cfiRange: string,
 		color?: string,
 		style?: EpubHighlightStyle,
-		semantic?: EpubAnnotationSemantic
+		semantic?: EpubAnnotationSemantic,
+		options: { silent?: boolean } = {}
 	) {
 		if (!ensureEpubPremiumFeature(app, PREMIUM_FEATURES.EPUB_CANVAS_EXCERPTS, t('epub.reader.canvasExcerptFeatureNotice'))) {
-			return;
+			return null;
 		}
 		const chapterIndex = readerService.getCurrentChapterIndex();
 		const chapterTitle = resolveExcerptChapterTitle();
@@ -4831,7 +4888,121 @@
 		if (node) {
 			rememberHighlightSourcePath(canvasService.getCanvasPath());
 			queueHighlightReload(120, { incremental: true });
-			showCanvasAddedNotice(canvasService.getLastInsertAnchorMode());
+			if (!options.silent) {
+				showCanvasAddedNotice(canvasService.getLastInsertAnchorMode());
+			}
+		}
+		return node;
+	}
+
+	async function refreshHighlightToolbarCanvasAttachment(info: HighlightClickInfo | null = highlightToolbarInfo) {
+		const targetInfo = info;
+		if (!targetInfo) {
+			highlightToolbarCanvasAttached = false;
+			return;
+		}
+		if (!hasCanvasExcerptCapability() || !canvasService.isActive()) {
+			if (highlightToolbarInfo === targetInfo) {
+				highlightToolbarCanvasAttached = false;
+			}
+			return;
+		}
+		const semantic = resolveSemanticFromHighlightInfo(targetInfo);
+		const canvasMembershipKey = getHighlightCanvasMembershipKey(targetInfo);
+		const manuallyDetached = manuallyDetachedCanvasHighlightKeys.has(canvasMembershipKey);
+		let attached = await canvasService.hasExcerptNodeForCfi(targetInfo.cfiRange);
+		if (
+			shouldBackfillAutoCanvasHighlight({
+				semantic,
+				canvasNodeAttached: attached,
+				manuallyDetached,
+				canvasMode,
+				canvasActive: canvasService.isActive(),
+				canUseCanvas: hasCanvasExcerptCapability(),
+			})
+		) {
+			const node = await addToCanvas(
+				targetInfo.text,
+				targetInfo.cfiRange,
+				targetInfo.color,
+				targetInfo.style,
+				semantic,
+				{ silent: true }
+			);
+			attached = Boolean(node) || attached;
+		}
+		if (highlightToolbarInfo === targetInfo) {
+			highlightToolbarCanvasAttached = shouldTreatHighlightAsCanvasAttached({
+				semantic,
+				canvasNodeAttached: attached,
+				manuallyDetached,
+			});
+		}
+	}
+
+	async function handleHighlightAddToCanvas(info: HighlightClickInfo) {
+		if (highlightToolbarCanvasBusy) {
+			return;
+		}
+		if (!ensureEpubPremiumFeature(app, PREMIUM_FEATURES.EPUB_CANVAS_EXCERPTS, t('epub.reader.canvasExcerptFeatureNotice'))) {
+			return;
+		}
+		if (!canvasService.isActive()) {
+			new Notice('当前书还没有绑定 Canvas，请先在读书器里创建或绑定 Canvas。');
+			return;
+		}
+		highlightToolbarCanvasBusy = true;
+		try {
+			const canvasMembershipKey = getHighlightCanvasMembershipKey(info);
+			const node = await addToCanvas(
+				info.text,
+				info.cfiRange,
+				info.color,
+				info.style,
+				resolveSemanticFromHighlightInfo(info)
+			);
+			if (node) {
+				manuallyDetachedCanvasHighlightKeys.delete(canvasMembershipKey);
+			}
+			if (node && highlightToolbarInfo === info) {
+				highlightToolbarCanvasAttached = true;
+			}
+		} finally {
+			highlightToolbarCanvasBusy = false;
+		}
+	}
+
+	async function handleHighlightRemoveFromCanvas(info: HighlightClickInfo) {
+		if (highlightToolbarCanvasBusy) {
+			return;
+		}
+		if (!ensureEpubPremiumFeature(app, PREMIUM_FEATURES.EPUB_CANVAS_EXCERPTS, t('epub.reader.canvasExcerptFeatureNotice'))) {
+			return;
+		}
+		if (!canvasService.isActive()) {
+			new Notice('当前书还没有绑定 Canvas，请先在读书器里创建或绑定 Canvas。');
+			return;
+		}
+		highlightToolbarCanvasBusy = true;
+		try {
+			const semantic = resolveSemanticFromHighlightInfo(info);
+			const canvasMembershipKey = getHighlightCanvasMembershipKey(info);
+			const removed = await canvasService.removeExcerptNodesByCfi(info.cfiRange);
+			manuallyDetachedCanvasHighlightKeys.add(canvasMembershipKey);
+			if (removed > 0) {
+				highlightToolbarCanvasAttached = false;
+				rememberHighlightSourcePath(canvasService.getCanvasPath());
+				queueHighlightReload(120, { incremental: true });
+				new Notice('已从脑图移除');
+			} else if (shouldAutoAddSemanticToCanvas(semantic)) {
+				highlightToolbarCanvasAttached = false;
+				new Notice('已取消自动入脑图');
+			} else {
+				await refreshHighlightToolbarCanvasAttachment(info);
+				new Notice('当前脑图中没有这条摘录');
+			}
+		} finally {
+			highlightToolbarCanvasBusy = false;
 		}
 	}
 
@@ -5950,9 +6121,52 @@
 		referencePopoverInfo = null;
 		referencePopoverStats = null;
 		commentEditorInfo = info;
+		commentEditorNewHighlight = false;
 		commentEditorDraft = resolveCommentDraftFromMemory(info);
 		commentEditorSaving = false;
 		void hydrateCommentEditorDraft(info);
+	}
+
+	async function openSelectionThoughtEditor(draft: SelectionThoughtDraft) {
+		if (!hasExcerptNotesCapability()) {
+			return;
+		}
+		if (!ensureAnnotationCompareWritable()) {
+			return;
+		}
+		if (!book) {
+			new Notice(t('epub.reader.bookNotReady'));
+			return;
+		}
+		const baseHighlight: ReaderHighlight = {
+			cfiRange: draft.cfiRange,
+			color: 'yellow',
+			text: draft.text,
+			...(draft.segments && draft.segments.length > 1 ? { segments: draft.segments } : {}),
+			chapterIndex: readerService.getCurrentChapterIndex(),
+			chapterTitle: resolveExcerptChapterTitle(),
+			createdTime: Date.now(),
+			presentation: 'thought',
+		};
+		const chapterMetadata = await resolveSelectionChapterMetadata(draft.cfiRange);
+		const highlight = applyAnnotationChapterMetadata(baseHighlight, chapterMetadata);
+		highlightToolbarInfo = null;
+		highlightToolbarCanvasAttached = false;
+		footnotePreviewInfo = null;
+		referencePopoverInfo = null;
+		referencePopoverStats = null;
+		commentEditorInfo = buildHighlightClickInfoFromReaderHighlight(
+			highlight,
+			{
+				rect: draft.rect,
+				rects: draft.rects && draft.rects.length > 0 ? draft.rects : [draft.rect],
+				anchorPoint: draft.anchorPoint,
+			},
+			'highlight'
+		);
+		commentEditorNewHighlight = true;
+		commentEditorDraft = '';
+		commentEditorSaving = false;
 	}
 
 	async function hydrateCommentEditorDraft(info: HighlightClickInfo) {
@@ -5998,6 +6212,7 @@
 		commentEditorInfo = null;
 		commentEditorDraft = '';
 		commentEditorSaving = false;
+		commentEditorNewHighlight = false;
 	}
 
 	function closeReferencePopover() {
@@ -6501,6 +6716,7 @@
 			semanticGroup: semantic.group || 'study',
 			semanticDescription: semantic.description,
 			semanticSource: semantic.source || 'preset',
+			presentation: 'highlight',
 		};
 		const annotationBookId = getCurrentAnnotationBookId();
 		await enqueueAnnotationMutation(async () => {
@@ -6515,6 +6731,57 @@
 			queueOpenAnnotationNoteRefresh(annotationBookId);
 			highlightToolbarInfo = null;
 			new Notice(t('epub.reader.semanticChanged'));
+		});
+	}
+
+	async function handleThoughtConvertToSemantic(
+		info: HighlightClickInfo,
+		semantic: EpubAnnotationSemantic
+	) {
+		if (!hasExcerptNotesCapability() || !book) {
+			return;
+		}
+		if (!ensureAnnotationCompareWritable()) {
+			return;
+		}
+		const previous = buildReaderHighlightFromInfo(info);
+		const nextStyle = toReaderHighlightStyle(semantic.style);
+		const draft = commentEditorDraft.trim();
+		const next: ReaderHighlight = {
+			...previous,
+			color: semantic.color || previous.color || 'yellow',
+			...(nextStyle ? { style: nextStyle } : { style: undefined }),
+			semanticId: semantic.id,
+			semanticLabel: semantic.label,
+			semanticGroup: semantic.group || 'study',
+			semanticDescription: semantic.description,
+			semanticSource: semantic.source || 'preset',
+			commentText: commentEditorDraft,
+			hasCommentDivider: draft.length > 0,
+			presentation: 'highlight',
+		};
+		const annotationBookId = getCurrentAnnotationBookId();
+		commentEditorSaving = true;
+		await enqueueAnnotationMutation(async () => {
+			try {
+				const result = await annotationService.replacePortableHighlight(annotationBookId, previous, next);
+				if (!result?.current) {
+					new Notice(t('epub.reader.changeSemanticFailed'));
+					return;
+				}
+				removeHighlightFromCurrentView(result.previous || previous);
+				addHighlightToCurrentView(result.current);
+				if (result.previous) {
+					annotationUndoStack.pushUpdate(annotationBookId, result.previous, result.current);
+				} else {
+					annotationUndoStack.pushCreate(annotationBookId, result.current);
+				}
+				queueOpenAnnotationNoteRefresh(annotationBookId);
+				new Notice(t('epub.reader.semanticChanged'));
+				closeCommentEditor();
+			} finally {
+				commentEditorSaving = false;
+			}
 		});
 	}
 
@@ -6677,8 +6944,12 @@
 		if (!info) {
 			return;
 		}
+		if (commentEditorNewHighlight && commentEditorDraft.trim().length === 0) {
+			closeCommentEditor();
+			return;
+		}
 		const source = await resolveHighlightSource(info);
-		if (!source?.sourceFile) {
+		if (shouldUsePortableAnnotationMutationForHighlight(info, source)) {
 			if (book) {
 				const annotationBookId = getCurrentAnnotationBookId();
 				const previous = buildReaderHighlightFromInfo(info);
@@ -6697,7 +6968,11 @@
 						}
 						removeHighlightFromCurrentView(result.previous || previous);
 						addHighlightToCurrentView(result.current);
-						annotationUndoStack.pushUpdate(annotationBookId, result.previous || previous, result.current);
+						if (result.previous) {
+							annotationUndoStack.pushUpdate(annotationBookId, result.previous, result.current);
+						} else {
+							annotationUndoStack.pushCreate(annotationBookId, result.current);
+						}
 						queueOpenAnnotationNoteRefresh(annotationBookId);
 						new Notice(t('epub.reader.commentSaved'));
 						closeCommentEditor();
@@ -7228,7 +7503,7 @@
 			}
 			readerService.previewHighlightFocus(
 				cfiRange,
-				'cyan',
+				'teal',
 				detail.phase === 'click' ? 2400 : 10000,
 				{
 					textHint: annotationText,
@@ -7877,12 +8152,19 @@
 					readerUiMode={readerUiMode}
 					semanticSettings={semanticSettings}
 					info={canEditAnnotationsInPane ? highlightToolbarInfo : null}
+					canvasAttached={highlightToolbarCanvasAttached}
+					canvasActionBusy={highlightToolbarCanvasBusy}
 					onDelete={handleHighlightDelete}
 					onTemporarilyReveal={handleTemporarilyRevealConcealed}
 					onChangeSemantic={handleHighlightChangeSemantic}
+					onAddToCanvas={handleHighlightAddToCanvas}
+					onRemoveFromCanvas={handleHighlightRemoveFromCanvas}
 					onCopyText={handleHighlightCopyText}
 					onEditComment={handleHighlightEditComment}
-					onDismiss={() => highlightToolbarInfo = null}
+					onDismiss={() => {
+						highlightToolbarInfo = null;
+						highlightToolbarCanvasAttached = false;
+					}}
 				/>
 			{/if}
 
@@ -7894,8 +8176,10 @@
 				readingLockEl={readingViewportLockEl}
 				draftText={commentEditorDraft}
 				saving={commentEditorSaving}
+				semanticSettings={semanticSettings}
 				onDraftTextChange={(value) => commentEditorDraft = value}
 				onSave={saveHighlightComment}
+				onConvertToSemantic={handleThoughtConvertToSemantic}
 				onClose={closeCommentEditor}
 			/>
 
@@ -7942,6 +8226,7 @@
 					}
 					onExtractToCard={canEditAnnotationsInPane ? handleExtractToCard : undefined}
 					onCreateReadingPoint={canEditAnnotationsInPane && hasCreateReadingPointCapability() ? handleCreateReadingPoint : undefined}
+					onEditThought={canEditAnnotationsInPane ? openSelectionThoughtEditor : undefined}
 					onAutoInsert={canEditAnnotationsInPane ? handleAutoInsertSelection : undefined}
 					onOpenAIMenu={showSelectedTextAIMenu}
 				/>

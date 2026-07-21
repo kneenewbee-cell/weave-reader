@@ -506,4 +506,52 @@ describe('EpubCanvasService', () => {
 		);
 		expect(saved.nodes[0]?.text).toContain('&sid=epubsrc-demo&eid=');
 	});
+
+	it('finds and removes canvas excerpt nodes by EPUB CFI without touching unrelated nodes', async () => {
+		const canvasPath = 'Linked.canvas';
+		const targetNode = {
+			...createNode('target', 0, 160),
+			text: '> [!EPUB|green] [[Books/demo.epub#weave-cfi=readium:target|Demo]]\n> selected text',
+		};
+		const siblingNode = {
+			...createNode('sibling', 350, 160),
+			text: '> [!EPUB|yellow] [[Books/demo.epub#weave-cfi=readium:other|Demo]]\n> other text',
+		};
+		const rootNode = createNode('root', 0, 0);
+		const { app, files } = createMockApp({
+			[canvasPath]: JSON.stringify({
+				nodes: [rootNode, targetNode, siblingNode],
+				edges: [
+					{
+						id: 'edge-target',
+						fromNode: 'root',
+						toNode: 'target',
+						fromSide: 'bottom',
+						toSide: 'top',
+					},
+					{
+						id: 'edge-sibling',
+						fromNode: 'root',
+						toNode: 'sibling',
+						fromSide: 'bottom',
+						toSide: 'top',
+					},
+				],
+			} satisfies CanvasData),
+		});
+		const service = new EpubCanvasService(app);
+		service.setCanvasPath(canvasPath);
+
+		expect(await service.hasExcerptNodeForCfi('readium:target')).toBe(true);
+		expect(await service.hasExcerptNodeForCfi('readium:missing')).toBe(false);
+
+		const removed = await service.removeExcerptNodesByCfi('readium:target');
+
+		expect(removed).toBe(1);
+		const saved = readCanvas(files, canvasPath);
+		expect(saved.nodes.map((node) => node.id)).toEqual(['root', 'sibling']);
+		expect(saved.edges).toEqual([
+			expect.objectContaining({ id: 'edge-sibling', toNode: 'sibling' }),
+		]);
+	});
 });

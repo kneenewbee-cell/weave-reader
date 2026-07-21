@@ -399,10 +399,14 @@ describe('EpubLinkService legacy link compatibility', () => {
 
 	it('builds and parses combined highlight color and style metadata', () => {
 		expect(EpubLinkService.buildHighlightCalloutMeta('blue', 'underline')).toBe('blue+underline');
-		expect(EpubLinkService.buildHighlightCalloutMeta('pink', 'wavy')).toBe('pink+wavy');
+		expect(EpubLinkService.buildHighlightCalloutMeta('pink', 'wavy')).toBe('magenta+wavy');
 		expect(EpubLinkService.buildHighlightCalloutMeta('orange', undefined, 'exam point')).toBe('orange+semantic:exam%20point');
 		expect(EpubLinkService.parseHighlightCalloutMeta('purple+wavy')).toEqual({
 			color: 'purple',
+			style: 'wavy',
+		});
+		expect(EpubLinkService.parseHighlightCalloutMeta('cyan+wavy')).toEqual({
+			color: 'teal',
 			style: 'wavy',
 		});
 		expect(EpubLinkService.parseHighlightCalloutMeta('orange+semantic:exam%20point')).toEqual({

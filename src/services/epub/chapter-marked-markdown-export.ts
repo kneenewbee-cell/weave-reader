@@ -3,15 +3,19 @@ import type { EpubHighlightStyle } from "./types";
 import { normalizeTocHref } from "../../utils/epub-toc-reading-position";
 
 export const CHAPTER_MARKED_HIGHLIGHT_COLORS: Record<string, string> = {
-	yellow: "rgba(255, 235, 59, 0.4)",
-	green: "rgba(76, 175, 80, 0.3)",
-	blue: "rgba(33, 150, 243, 0.3)",
+	yellow: "rgba(250, 204, 21, 0.36)",
+	orange: "rgba(249, 115, 22, 0.32)",
 	red: "rgba(239, 68, 68, 0.3)",
-	purple: "rgba(171, 71, 188, 0.3)",
-	orange: "rgba(255, 152, 0, 0.3)",
-	cyan: "rgba(0, 188, 212, 0.3)",
-	pink: "rgba(244, 114, 182, 0.3)",
-	gray: "rgba(156, 163, 175, 0.3)",
+	magenta: "rgba(236, 72, 153, 0.3)",
+	purple: "rgba(139, 92, 246, 0.3)",
+	indigo: "rgba(79, 70, 229, 0.26)",
+	blue: "rgba(14, 165, 233, 0.28)",
+	teal: "rgba(20, 184, 166, 0.28)",
+	green: "rgba(34, 197, 94, 0.28)",
+	slate: "rgba(100, 116, 139, 0.25)",
+	cyan: "rgba(20, 184, 166, 0.28)",
+	pink: "rgba(236, 72, 153, 0.3)",
+	gray: "rgba(100, 116, 139, 0.25)",
 };
 
 export interface ChapterMarkedSpan {

@@ -13,6 +13,7 @@ export {
 	type EpubReaderUiMode,
 } from "./reader-ui-mode";
 export * from "./semantic/profiles";
+export * from "./semantic-canvas-policy";
 export {
 	EPUB_PORTABLE_DATA_ROOT,
 	EPUB_SEMANTIC_PROFILE_CHANGED_EVENT,
@@ -51,6 +52,7 @@ export type {
 	HighlightSourceLocator,
 	HighlightClickInfo,
 	NavigateAndHighlightOptions,
+	ReaderAnchorPoint,
 	ReaderHighlightPresentation,
 	ReaderNavigateOptions,
 	ReaderAppearanceOptions,
@@ -65,6 +67,7 @@ export type {
 	ReaderRandomParagraphPick,
 	ReaderRenderOptions,
 	ReaderSelectionChange,
+	ReaderViewportRect,
 	ReaderViewportGeometry,
 } from "./reader-engine-types";
 export { EpubStorageService, flushEpubStoragePendingProgress } from "./EpubStorageService";

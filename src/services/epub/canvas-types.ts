@@ -42,12 +42,16 @@ export interface CanvasAnchor {
 
 export const HIGHLIGHT_TO_CANVAS_COLOR: Record<string, string> = {
 	yellow: "4",
-	green: "5",
-	blue: "6",
-	red: "1",
-	purple: "3",
 	orange: "2",
-	cyan: "6",
+	red: "1",
+	magenta: "1",
+	purple: "3",
+	indigo: "6",
+	blue: "6",
+	teal: "5",
+	green: "5",
+	slate: "0",
+	cyan: "5",
 	pink: "1",
 	gray: "0",
 };

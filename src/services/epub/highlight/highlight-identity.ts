@@ -3,7 +3,7 @@ import type { HighlightSourceLocator, ReaderHighlight } from "../reader-engine-t
 
 export type HighlightIdentityFields = Pick<
 	ReaderHighlight,
-	"cfiRange" | "excerptId" | "sourceFile" | "sourceRef" | "createdTime" | "text" | "semanticId"
+	"cfiRange" | "excerptId" | "sourceFile" | "sourceRef" | "createdTime" | "text" | "semanticId" | "presentation"
 >;
 
 /** Normalizes excerpt quote text for stable identity comparison. */
@@ -78,19 +78,20 @@ export function getReaderHighlightIdentityKey(highlight: HighlightIdentityFields
 
 	const semanticId = String(highlight.semanticId || "").trim();
 	const textKey = normalizeHighlightQuoteText(highlight.text);
+	const presentationKey = highlight.presentation === "thought" ? "\0presentation:thought" : "";
 	if (textKey) {
 		if (semanticId) {
-			return `${cfiKey}\0semantic:${semanticId}\0text:${textKey}`;
+			return `${cfiKey}${presentationKey}\0semantic:${semanticId}\0text:${textKey}`;
 		}
-		return `${cfiKey}\0text:${textKey}`;
+		return `${cfiKey}${presentationKey}\0text:${textKey}`;
 	}
 
 	const sourceFile = String(highlight.sourceFile || "").trim();
 	const sourceRef = String(highlight.sourceRef || "").trim();
 	if (semanticId) {
-		return `${cfiKey}\0semantic:${semanticId}\0src:${sourceFile}\0${sourceRef}\0${highlight.createdTime ?? ""}`;
+		return `${cfiKey}${presentationKey}\0semantic:${semanticId}\0src:${sourceFile}\0${sourceRef}\0${highlight.createdTime ?? ""}`;
 	}
-	return `${cfiKey}\0src:${sourceFile}\0${sourceRef}\0${highlight.createdTime ?? ""}`;
+	return `${cfiKey}${presentationKey}\0src:${sourceFile}\0${sourceRef}\0${highlight.createdTime ?? ""}`;
 }
 
 function mergeHighlightSourceLocators(

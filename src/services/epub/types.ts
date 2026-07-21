@@ -93,11 +93,15 @@ export interface Highlight {
 
 export type HighlightColor =
 	| "yellow"
-	| "green"
-	| "blue"
-	| "red"
-	| "purple"
 	| "orange"
+	| "red"
+	| "magenta"
+	| "purple"
+	| "indigo"
+	| "blue"
+	| "teal"
+	| "green"
+	| "slate"
 	| "cyan"
 	| "pink"
 	| "gray";

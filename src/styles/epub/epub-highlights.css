@@ -1023,14 +1023,14 @@
 
 /* ========================================
    EPUB Callout Colors (Obsidian callout)
-   [!EPUB|yellow] / [!EPUB|green] / etc.
+   [!EPUB|yellow] / [!EPUB|teal] / etc.
    ======================================== */
 
 .callout[data-callout="epub"] {
-	--callout-color: 255, 235, 59;
+	--callout-color: 250, 204, 21;
 	--callout-icon: lucide-book-open;
 	--epub-callout-accent: rgb(var(--callout-color));
-	--epub-callout-title: #6b4f00;
+	--epub-callout-title: #854d0e;
 	--epub-callout-body: var(--text-normal);
 	--epub-callout-time: color-mix(in srgb, var(--epub-callout-title) 72%, var(--text-muted) 28%);
 	--epub-callout-link: color-mix(in srgb, var(--epub-callout-title) 82%, var(--text-normal) 18%);
@@ -1038,56 +1038,68 @@
 
 .callout[data-callout="epub"][data-callout-metadata="yellow"],
 .callout[data-callout="epub"][data-weave-epub-color="yellow"] {
-	--callout-color: 255, 235, 59;
-	--epub-callout-title: #6b4f00;
+	--callout-color: 250, 204, 21;
+	--epub-callout-title: #854d0e;
 }
 
-.callout[data-callout="epub"][data-callout-metadata="green"],
-.callout[data-callout="epub"][data-weave-epub-color="green"] {
-	--callout-color: 76, 175, 80;
-	--epub-callout-title: #1f6a33;
-}
-
-.callout[data-callout="epub"][data-callout-metadata="blue"],
-.callout[data-callout="epub"][data-weave-epub-color="blue"] {
-	--callout-color: 66, 165, 245;
-	--epub-callout-title: #165d9a;
+.callout[data-callout="epub"][data-callout-metadata="orange"],
+.callout[data-callout="epub"][data-weave-epub-color="orange"] {
+	--callout-color: 249, 115, 22;
+	--epub-callout-title: #9a3412;
 }
 
 .callout[data-callout="epub"][data-callout-metadata="red"],
 .callout[data-callout="epub"][data-weave-epub-color="red"] {
 	--callout-color: 239, 68, 68;
-	--epub-callout-title: #9f1f1f;
+	--epub-callout-title: #991b1b;
+}
+
+.callout[data-callout="epub"][data-callout-metadata="magenta"],
+.callout[data-callout="epub"][data-callout-metadata="pink"],
+.callout[data-callout="epub"][data-weave-epub-color="magenta"],
+.callout[data-callout="epub"][data-weave-epub-color="pink"] {
+	--callout-color: 236, 72, 153;
+	--epub-callout-title: #9d174d;
 }
 
 .callout[data-callout="epub"][data-callout-metadata="purple"],
 .callout[data-callout="epub"][data-weave-epub-color="purple"] {
-	--callout-color: 171, 71, 188;
-	--epub-callout-title: #6b2e93;
+	--callout-color: 139, 92, 246;
+	--epub-callout-title: #6d28d9;
 }
 
-.callout[data-callout="epub"][data-callout-metadata="orange"],
-.callout[data-callout="epub"][data-weave-epub-color="orange"] {
-	--callout-color: 255, 152, 0;
-	--epub-callout-title: #8a4d00;
+.callout[data-callout="epub"][data-callout-metadata="indigo"],
+.callout[data-callout="epub"][data-weave-epub-color="indigo"] {
+	--callout-color: 79, 70, 229;
+	--epub-callout-title: #4338ca;
 }
 
+.callout[data-callout="epub"][data-callout-metadata="blue"],
+.callout[data-callout="epub"][data-weave-epub-color="blue"] {
+	--callout-color: 14, 165, 233;
+	--epub-callout-title: #0369a1;
+}
+
+.callout[data-callout="epub"][data-callout-metadata="teal"],
 .callout[data-callout="epub"][data-callout-metadata="cyan"],
+.callout[data-callout="epub"][data-weave-epub-color="teal"],
 .callout[data-callout="epub"][data-weave-epub-color="cyan"] {
-	--callout-color: 0, 188, 212;
-	--epub-callout-title: #006c78;
+	--callout-color: 20, 184, 166;
+	--epub-callout-title: #0f766e;
 }
 
-.callout[data-callout="epub"][data-callout-metadata="pink"],
-.callout[data-callout="epub"][data-weave-epub-color="pink"] {
-	--callout-color: 244, 114, 182;
-	--epub-callout-title: #9d174d;
+.callout[data-callout="epub"][data-callout-metadata="green"],
+.callout[data-callout="epub"][data-weave-epub-color="green"] {
+	--callout-color: 34, 197, 94;
+	--epub-callout-title: #15803d;
 }
 
+.callout[data-callout="epub"][data-callout-metadata="slate"],
 .callout[data-callout="epub"][data-callout-metadata="gray"],
+.callout[data-callout="epub"][data-weave-epub-color="slate"],
 .callout[data-callout="epub"][data-weave-epub-color="gray"] {
-	--callout-color: 156, 163, 175;
-	--epub-callout-title: #4b5563;
+	--callout-color: 100, 116, 139;
+	--epub-callout-title: #475569;
 }
 
 .callout[data-callout="epub"] .callout-title,
