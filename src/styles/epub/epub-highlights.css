@@ -204,11 +204,46 @@
 	-webkit-backdrop-filter: none;
 }
 
+.epub-highlight-toolbar .highlight-inline-semantic-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-content: center;
+	justify-content: flex-start;
+	gap: 1px;
+	width: max-content;
+	max-width: min(520px, calc(100vw - 24px));
+	padding: 4px 6px 0;
+	overflow: visible;
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+}
+
 .epub-highlight-toolbar .highlight-actions-shell {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
 	overflow: visible;
+}
+
+.epub-highlight-toolbar .highlight-actions-shell.highlight-actions-shell--inline-semantics {
+	flex-direction: row;
+	align-items: center;
+	gap: 7px;
+	box-sizing: border-box;
+	padding: 5px 8px;
+}
+
+.epub-highlight-toolbar .highlight-actions-shell--inline-semantics .highlight-inline-semantic-row {
+	flex: 0 1 auto;
+	max-width: min(360px, calc(100vw - 120px));
+	padding: 0;
+}
+
+.epub-highlight-toolbar .highlight-actions-shell--inline-semantics .highlight-actions-row {
+	flex: 0 0 auto;
 }
 
 .epub-highlight-toolbar:not(.below-target) .highlight-semantic-picker-row {

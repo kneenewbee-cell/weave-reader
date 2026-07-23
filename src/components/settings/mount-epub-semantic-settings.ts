@@ -529,7 +529,6 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 
 			const list = body.createDiv({ cls: "weave-epub-semantic-settings-list" });
 			const standardIds = new Set(currentSettings.standardSemanticIds);
-			const standardFull = standardIds.size >= 4;
 			for (const semantic of activeSemantics) {
 				const row = list.createDiv({ cls: "weave-epub-semantic-setting-row" });
 				const preview = row.createDiv({ cls: "weave-epub-semantic-setting-preview" });
@@ -612,7 +611,7 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 				});
 				const checkbox = standardLabel.createEl("input", { type: "checkbox" });
 				checkbox.checked = standardIds.has(semantic.id);
-				checkbox.disabled = !canEdit || (!checkbox.checked && standardFull);
+				checkbox.disabled = !canEdit;
 				standardLabel.createSpan({ text: "普通模式" });
 				checkbox.addEventListener("change", async () => {
 					const draft = getCurrentDraft();
@@ -624,8 +623,7 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 					}
 					draft.standardSemanticIds = draft.annotationSemantics
 						.filter((entry) => nextIds.has(entry.id) && entry.active !== false)
-						.map((entry) => entry.id)
-						.slice(0, 4);
+						.map((entry) => entry.id);
 					draft.annotationSemantics = draft.annotationSemantics.map((entry) => ({
 						...entry,
 						showInStandard: draft.standardSemanticIds.includes(entry.id),

@@ -132,7 +132,7 @@
 	let t = $derived($tr);
 	let canUseAiSplit = $derived(isWeaveMainPluginEnabled(app));
 	let showExpertControls = $derived(readerUiMode === 'expert');
-	let showStandardHighlight = $derived(readerUiMode === 'standard');
+	let showStandardSemanticControls = $derived(readerUiMode === 'standard');
 	let activeSemantics = $derived(
 		semanticSettings?.annotationSemanticsEnabled === false
 			? []
@@ -143,7 +143,7 @@
 			return [];
 		}
 		const standardIds = new Set(semanticSettings.standardSemanticIds || []);
-		return activeSemantics.filter((semantic) => standardIds.has(semantic.id)).slice(0, 4);
+		return activeSemantics.filter((semantic) => standardIds.has(semantic.id));
 	});
 	let expertSemantics = $derived(activeSemantics);
 
@@ -1032,12 +1032,11 @@
 				</div>
 				<div class="selection-actions-divider"></div>
 			{/if}
-			<div class="toolbar-row actions-row selection-actions-row">
-				{#if showStandardHighlight && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
-					<button class="clickable-icon action-item weave-epub-standard-highlight-btn" onclick={() => handleHighlight('yellow')} title={t('epub.selectionToolbar.highlight')} aria-label={t('epub.selectionToolbar.highlight')}>
-						<span class="action-icon weave-epub-standard-highlight-dot"></span>
-						<span class="action-label">{t('epub.selectionToolbar.highlight')}</span>
-					</button>
+			<div
+				class="toolbar-row actions-row selection-actions-row"
+				class:selection-standard-semantic-row={showStandardSemanticControls}
+			>
+				{#if showStandardSemanticControls && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
 					{#each standardSemantics as semantic (semantic.id)}
 						<button
 							class="clickable-icon action-item weave-epub-standard-semantic-btn weave-epub-semantic-chip"
@@ -1053,62 +1052,64 @@
 						</button>
 					{/each}
 				{/if}
-				<button class="clickable-icon action-item" onclick={handleVaultSearch} title={t('epub.selectionToolbar.vaultSearchTitle')} aria-label={t('epub.selectionToolbar.vaultSearch')}>
-					<span class="action-icon" use:icon={'search'}></span>
-					<span class="action-label">{t('epub.selectionToolbar.vaultSearch')}</span>
-				</button>
-
-				{#if onEditThought && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
-					<button class="clickable-icon action-item comment-action" onclick={handleEditThought} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
-						<span class="action-icon" use:icon={'message-square-plus'}></span>
-						<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
+				{#if showExpertControls}
+					<button class="clickable-icon action-item" onclick={handleVaultSearch} title={t('epub.selectionToolbar.vaultSearchTitle')} aria-label={t('epub.selectionToolbar.vaultSearch')}>
+						<span class="action-icon" use:icon={'search'}></span>
+						<span class="action-label">{t('epub.selectionToolbar.vaultSearch')}</span>
 					</button>
-				{/if}
 
-				{#if onExtractToCard && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
-					<div class="row-divider"></div>
-				{/if}
+					{#if onEditThought && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
+						<button class="clickable-icon action-item comment-action" onclick={handleEditThought} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
+							<span class="action-icon" use:icon={'message-square-plus'}></span>
+							<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
+						</button>
+					{/if}
 
-				{#if onExtractToCard}
-					<button class="clickable-icon action-item accent" onclick={handleExtractToCard} title={t('epub.selectionToolbar.createCardTitle')} aria-label={t('epub.selectionToolbar.createCardTitle')}>
-						<span class="action-icon" use:icon={'scissors'}></span>
-						<span class="action-label">{t('epub.selectionToolbar.createCard')}</span>
-					</button>
-				{/if}
+					{#if onExtractToCard && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
+						<div class="row-divider"></div>
+					{/if}
 
-				{#if onCreateReadingPoint}
-					<button class="clickable-icon action-item accent" onclick={handleCreateReadingPoint} title={t('epub.selectionToolbar.readingPointTitle')} aria-label={t('epub.selectionToolbar.readingPointTitle')}>
-						<span class="action-icon" use:icon={'book-plus'}></span>
-						<span class="action-label">{t('epub.selectionToolbar.readingPoint')}</span>
-					</button>
-				{/if}
-				{#if showExpertControls && (canUseExcerptNotes || canPreviewLockedExcerptFeature())}
+					{#if onExtractToCard}
+						<button class="clickable-icon action-item accent" onclick={handleExtractToCard} title={t('epub.selectionToolbar.createCardTitle')} aria-label={t('epub.selectionToolbar.createCardTitle')}>
+							<span class="action-icon" use:icon={'scissors'}></span>
+							<span class="action-label">{t('epub.selectionToolbar.createCard')}</span>
+						</button>
+					{/if}
+
+					{#if onCreateReadingPoint}
+						<button class="clickable-icon action-item accent" onclick={handleCreateReadingPoint} title={t('epub.selectionToolbar.readingPointTitle')} aria-label={t('epub.selectionToolbar.readingPointTitle')}>
+							<span class="action-icon" use:icon={'book-plus'}></span>
+							<span class="action-label">{t('epub.selectionToolbar.readingPoint')}</span>
+						</button>
+					{/if}
+					{#if canUseExcerptNotes || canPreviewLockedExcerptFeature()}
+						<button
+							class="clickable-icon action-item weave-epub-expert-strikethrough-btn"
+							data-style="strikethrough"
+							onclick={() => handleHighlight('yellow', 'strikethrough')}
+							title={t('epub.selectionToolbar.strikethrough')}
+							aria-label={t('epub.selectionToolbar.strikethrough')}
+						>
+							<span class="action-icon style-icon strikethrough-style-icon" use:icon={'strikethrough'}></span>
+							<span class="action-label">{t('epub.selectionToolbar.strikethrough')}</span>
+						</button>
+					{/if}
+					{#if canUseAiSplit}
+						<button class="clickable-icon action-item ai" onclick={handleOpenAIMenu} title="AI" aria-label="AI">
+							<span class="action-icon" use:icon={'sparkles'}></span>
+							<span class="action-label">AI</span>
+						</button>
+					{/if}
 					<button
-						class="clickable-icon action-item weave-epub-expert-strikethrough-btn"
-						data-style="strikethrough"
-						onclick={() => handleHighlight('yellow', 'strikethrough')}
-						title={t('epub.selectionToolbar.strikethrough')}
-						aria-label={t('epub.selectionToolbar.strikethrough')}
+						class="clickable-icon action-item selection-actions-more"
+						onclick={handleOpenMoreMenu}
+						title={t('epub.selectionToolbar.moreMenuTitle')}
+						aria-label={t('epub.selectionToolbar.moreMenu')}
 					>
-						<span class="action-icon style-icon strikethrough-style-icon" use:icon={'strikethrough'}></span>
-						<span class="action-label">{t('epub.selectionToolbar.strikethrough')}</span>
+						<span class="action-icon" use:icon={'more-horizontal'}></span>
+						<span class="action-label">{t('epub.selectionToolbar.moreMenu')}</span>
 					</button>
 				{/if}
-				{#if canUseAiSplit}
-					<button class="clickable-icon action-item ai" onclick={handleOpenAIMenu} title="AI" aria-label="AI">
-						<span class="action-icon" use:icon={'sparkles'}></span>
-						<span class="action-label">AI</span>
-					</button>
-				{/if}
-				<button
-					class="clickable-icon action-item selection-actions-more"
-					onclick={handleOpenMoreMenu}
-					title={t('epub.selectionToolbar.moreMenuTitle')}
-					aria-label={t('epub.selectionToolbar.moreMenu')}
-				>
-					<span class="action-icon" use:icon={'more-horizontal'}></span>
-					<span class="action-label">{t('epub.selectionToolbar.moreMenu')}</span>
-				</button>
 			</div>
 		</div>
 	</div>

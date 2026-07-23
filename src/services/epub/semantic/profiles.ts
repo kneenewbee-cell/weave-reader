@@ -68,24 +68,24 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     [
       schemeSemantic("important", "重点", "yellow", "highlight", "general", "值得保留或反复阅读的内容", true),
       schemeSemantic("favorite", "摘句", "teal", "underline", "general", "喜欢的表达、句子或段落", true),
-      schemeSemantic("reflection", "感想", "purple", "highlight", "thinking", "阅读时产生的联想或个人回应", true),
       schemeSemantic("question", "疑问", "purple", "wavy", "thinking", "需要回看、查证或继续思考的内容", true),
+      schemeSemantic("reflection", "感想", "purple", "highlight", "thinking", "阅读时产生的联想或个人回应", true),
       schemeSemantic("review", "待回看", "slate", "wavy", "thinking", "暂时标出、之后再判断是否保留的内容")
     ],
-    ["important", "favorite", "reflection", "question"]
+    ["important", "favorite", "question", "reflection"]
   ),
   scheme(
     "literature-humanities",
     "文学与人文",
     [
       schemeSemantic("theme", "主题/观点", "yellow", "highlight", "humanities", "作品主题或作者核心观点", true),
+      schemeSemantic("quote", "引文/史料", "teal", "highlight", "humanities", "值得引用的文本、史料或原话", true),
       schemeSemantic("character", "人物", "magenta", "underline", "humanities", "人物、身份及人物关系", true),
       schemeSemantic("event", "事件/情节", "orange", "underline", "humanities", "关键事件、情节推进或历史节点", true),
-      schemeSemantic("quote", "引文/史料", "teal", "highlight", "humanities", "值得引用的文本、史料或原话", true),
       schemeSemantic("conflict", "冲突/争议", "red", "wavy", "humanities", "矛盾、争议或需要辨析的内容"),
       schemeSemantic("reflection", "感想", "purple", "highlight", "thinking", "个人感受、解释或延伸思考")
     ],
-    ["theme", "character", "event", "quote"]
+    ["theme", "quote", "character", "event"]
   ),
   scheme(
     "study-exam",
@@ -93,27 +93,27 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     [
       schemeSemantic("important", "重点", "yellow", "highlight", "study", "必须掌握的核心内容", true),
       schemeSemantic("definition", "定义", "blue", "underline", "study", "术语、定义或概念说明", true),
-      schemeSemantic("example", "例题/案例", "green", "highlight", "study", "帮助理解和迁移的例题或案例"),
       schemeSemantic("method", "方法/公式", "teal", "underline", "study", "解题方法、公式或操作步骤"),
+      schemeSemantic("example", "例题/案例", "green", "highlight", "study", "帮助理解和迁移的例题或案例"),
       schemeSemantic("mistake", "易错点", "red", "wavy", "exam", "容易混淆或答错的内容", true),
-      schemeSemantic("exam", "必考点", "orange", "highlight", "exam", "考试和复习中高频出现的内容"),
-      schemeSemantic("question", "未掌握", "purple", "wavy", "thinking", "尚未理解或需要回看的内容", true)
+      schemeSemantic("question", "未掌握", "purple", "wavy", "thinking", "尚未理解或需要回看的内容", true),
+      schemeSemantic("exam", "必考点", "orange", "highlight", "exam", "考试和复习中高频出现的内容")
     ],
-    ["important", "definition", "mistake", "question"]
+    ["important", "definition", "method", "example"]
   ),
   scheme(
     "academic-research",
     "学术研究",
     [
       schemeSemantic("research-question", "研究问题", "purple", "highlight", "research", "论文试图回答的问题", true),
-      schemeSemantic("related-work", "相关工作", "slate", "underline", "research", "前人研究与理论背景"),
-      schemeSemantic("method", "研究方法", "blue", "underline", "research", "研究设计、方法和分析过程", true),
-      schemeSemantic("evidence", "数据/证据", "green", "highlight", "research", "实验数据、材料和论据", true),
       schemeSemantic("result", "结果/结论", "yellow", "highlight", "research", "研究发现与主要结论", true),
-      schemeSemantic("limitation", "局限", "red", "wavy", "research", "研究边界、缺陷和限制"),
-      schemeSemantic("citation", "引用/跟进", "teal", "underline", "research", "值得引用或进一步查阅的来源")
+      schemeSemantic("evidence", "数据/证据", "green", "highlight", "research", "实验数据、材料和论据", true),
+      schemeSemantic("method", "研究方法", "blue", "underline", "research", "研究设计、方法和分析过程", true),
+      schemeSemantic("citation", "引用/跟进", "teal", "underline", "research", "值得引用或进一步查阅的来源"),
+      schemeSemantic("related-work", "相关工作", "slate", "underline", "research", "前人研究与理论背景"),
+      schemeSemantic("limitation", "局限", "red", "wavy", "research", "研究边界、缺陷和限制")
     ],
-    ["research-question", "method", "evidence", "result"]
+    ["research-question", "result", "evidence", "method"]
   ),
   scheme(
     "math-science",
@@ -122,12 +122,12 @@ const SYSTEM_SEMANTIC_SCHEMES = [
       schemeSemantic("theorem", "定理/结论", "yellow", "highlight", "science", "定理、规律与关键结论", true),
       schemeSemantic("definition", "定义", "blue", "underline", "science", "概念、符号和定义", true),
       schemeSemantic("formula", "公式", "teal", "underline", "science", "公式、方程和计算关系", true),
-      schemeSemantic("proof", "证明/推导", "purple", "highlight", "science", "证明步骤、推导过程和思路"),
       schemeSemantic("example", "例题/实验", "green", "highlight", "science", "例题、实验或直观例子"),
+      schemeSemantic("proof", "证明/推导", "purple", "highlight", "science", "证明步骤、推导过程和思路"),
       schemeSemantic("mistake", "条件/易错", "red", "wavy", "science", "适用条件、边界和易错点", true),
       schemeSemantic("question", "疑问", "purple", "wavy", "thinking", "待证明、待验证或未理解的内容")
     ],
-    ["theorem", "definition", "formula", "mistake"]
+    ["theorem", "definition", "formula", "example"]
   ),
   scheme(
     "programming-engineering",
@@ -141,7 +141,7 @@ const SYSTEM_SEMANTIC_SCHEMES = [
       schemeSemantic("performance-security", "性能/安全", "orange", "highlight", "engineering", "性能、安全和可靠性要点"),
       schemeSemantic("question", "待验证", "purple", "wavy", "thinking", "需要实验、调试或进一步确认的内容")
     ],
-    ["concept", "api-syntax", "code-example", "pitfall"]
+    ["concept", "api-syntax", "code-example", "implementation"]
   ),
   scheme(
     "medical-life-science",
@@ -149,14 +149,14 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     [
       schemeSemantic("diagnosis", "诊断要点", "yellow", "highlight", "medical", "诊断标准和关键判断依据", true),
       schemeSemantic("symptom", "症状/体征", "blue", "underline", "medical", "症状、体征和临床表现", true),
-      schemeSemantic("mechanism", "机制/病理", "purple", "underline", "medical", "作用机制、病理过程和生理关系"),
-      schemeSemantic("evidence", "证据/检查", "green", "highlight", "medical", "检查结果、研究证据和鉴别依据"),
       schemeSemantic("treatment", "治疗", "teal", "highlight", "medical", "治疗原则、方案和随访"),
       schemeSemantic("drug-dose", "药物/剂量", "orange", "underline", "medical", "药物名称、剂量和用法"),
+      schemeSemantic("evidence", "证据/检查", "green", "highlight", "medical", "检查结果、研究证据和鉴别依据"),
+      schemeSemantic("mechanism", "机制/病理", "purple", "underline", "medical", "作用机制、病理过程和生理关系"),
       schemeSemantic("contraindication", "禁忌/风险", "red", "wavy", "medical", "禁忌、不良反应和高风险情况", true),
       schemeSemantic("question", "疑点", "purple", "wavy", "thinking", "证据不足或需要进一步确认的内容", true)
     ],
-    ["diagnosis", "symptom", "contraindication", "question"]
+    ["diagnosis", "symptom", "treatment", "drug-dose"]
   ),
   scheme(
     "law-policy",
@@ -164,26 +164,26 @@ const SYSTEM_SEMANTIC_SCHEMES = [
     [
       schemeSemantic("rule", "规则/法条", "yellow", "highlight", "law", "法律规则、政策条文和裁判规范", true),
       schemeSemantic("element", "构成要件", "blue", "underline", "law", "概念、主体和构成要件", true),
-      schemeSemantic("case-evidence", "案例/证据", "green", "highlight", "law", "案例事实、证据和适用材料"),
-      schemeSemantic("exception", "例外/风险", "red", "wavy", "law", "例外、限制和法律风险", true),
+      schemeSemantic("issue", "争点", "purple", "wavy", "law", "争议焦点和待解决问题", true),
       schemeSemantic("reasoning", "论证/推理", "purple", "underline", "law", "法律论证和适用路径"),
+      schemeSemantic("case-evidence", "案例/证据", "green", "highlight", "law", "案例事实、证据和适用材料"),
       schemeSemantic("conclusion", "结论", "orange", "highlight", "law", "裁判结论、政策结果和主张"),
-      schemeSemantic("issue", "争点", "purple", "wavy", "law", "争议焦点和待解决问题", true)
+      schemeSemantic("exception", "例外/风险", "red", "wavy", "law", "例外、限制和法律风险", true)
     ],
-    ["rule", "element", "exception", "issue"]
+    ["rule", "element", "issue", "reasoning"]
   ),
   scheme(
     "tools-practice",
     "工具与实践",
     [
-      schemeSemantic("term-parameter", "术语/参数", "blue", "underline", "practice", "参数、选项、术语和输入要求", true),
       schemeSemantic("steps", "步骤", "yellow", "highlight", "practice", "操作流程和执行步骤", true),
+      schemeSemantic("term-parameter", "术语/参数", "blue", "underline", "practice", "参数、选项、术语和输入要求", true),
       schemeSemantic("example", "示例", "green", "highlight", "practice", "可直接参考的示例和结果", true),
       schemeSemantic("warning", "警告", "red", "wavy", "practice", "风险、限制和禁止事项", true),
       schemeSemantic("best-practice", "最佳实践", "teal", "highlight", "practice", "推荐做法和经验规则"),
       schemeSemantic("todo", "待处理", "purple", "wavy", "practice", "需要执行、验证或继续处理的事项")
     ],
-    ["term-parameter", "steps", "example", "warning"]
+    ["steps", "term-parameter", "example", "warning"]
   )
 ];
 
@@ -213,6 +213,19 @@ function getSemanticScheme(id) {
     (candidate) => candidate.id === normalized
   );
   return found ? clone(found) : null;
+}
+
+function sortSemanticEntriesForScheme(entries, schemeId) {
+  const selected = getSemanticScheme(schemeId);
+  if (!selected) return entries;
+  const rank = new Map(
+    selected.semantics.map((entry, index) => [entry.id, index])
+  );
+  return [...entries].sort((a, b) => {
+    const aRank = rank.has(a.id) ? rank.get(a.id) : Number.MAX_SAFE_INTEGER;
+    const bRank = rank.has(b.id) ? rank.get(b.id) : Number.MAX_SAFE_INTEGER;
+    return aRank - bRank;
+  });
 }
 
 const DEFAULT_EPUB_SEMANTIC_SCHEME_ID = "general-reading";
@@ -281,6 +294,8 @@ function normalizeSemanticEntry(entry, index = 0) {
 }
 
 function normalizeSemanticSettings(settings = {}) {
+  const semanticSchemeId =
+    String(settings.semanticSchemeId || "custom").trim() || "custom";
   const inputEntries = Array.isArray(settings.annotationSemantics)
     ? settings.annotationSemantics
     : DEFAULT_EPUB_ANNOTATION_SEMANTICS;
@@ -300,6 +315,10 @@ function normalizeSemanticSettings(settings = {}) {
       normalizedEntries.push(normalized);
     });
   }
+  const orderedEntries = sortSemanticEntriesForScheme(
+    normalizedEntries,
+    semanticSchemeId
+  );
   const requestedStandardIds = new Set(
     (Array.isArray(settings.standardSemanticIds)
       ? settings.standardSemanticIds
@@ -308,23 +327,21 @@ function normalizeSemanticSettings(settings = {}) {
       .map((id) => String(id || "").trim())
       .filter(Boolean)
   );
-  const standardSemanticIds = normalizedEntries
+  const standardSemanticIds = orderedEntries
     .filter(
       (entry) =>
         entry.active !== false &&
         (requestedStandardIds.has(entry.id) || entry.showInStandard)
     )
-    .map((entry) => entry.id)
-    .slice(0, 4);
+    .map((entry) => entry.id);
   return {
     annotationSemanticsEnabled: settings.annotationSemanticsEnabled !== false,
-    semanticSchemeId:
-      String(settings.semanticSchemeId || "custom").trim() || "custom",
-    annotationSemantics: normalizedEntries,
+    semanticSchemeId,
+    annotationSemantics: orderedEntries,
     standardSemanticIds:
       standardSemanticIds.length > 0
         ? standardSemanticIds
-        : normalizedEntries
+        : orderedEntries
             .filter((entry) => entry.active !== false)
             .slice(0, 3)
             .map((entry) => entry.id)

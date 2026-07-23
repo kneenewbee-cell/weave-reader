@@ -72,6 +72,13 @@
 			? []
 			: (activeSemanticEntries(semanticSettings || {}) as EpubAnnotationSemantic[])
 	);
+	let inlineSemantics = $derived.by(() => {
+		if (readerUiMode === 'expert') {
+			return activeSemantics;
+		}
+		const standardIds = new Set(semanticSettings?.standardSemanticIds || []);
+		return activeSemantics.filter((semantic) => standardIds.has(semantic.id));
+	});
 	let isThought = $derived(Boolean(info && info.presentation === 'thought'));
 	const isMobileToolbar = Platform.isMobile || activeDocument.body.classList.contains('is-mobile');
 	const LEGACY_SEMANTIC_COLOR_ALIASES: Record<string, string> = {
@@ -348,35 +355,39 @@
 			</div>
 		{:else}
 			<div class="highlight-main-row">
-				{#if semanticPickerOpen}
-					<div
-						class="toolbar-row highlight-semantic-picker-row"
-						class:weave-epub-expert-semantic-row={readerUiMode === 'expert'}
-						class:weave-epub-standard-semantic-row={readerUiMode !== 'expert'}
-					>
-						{#each activeSemantics as semantic (semantic.id)}
-							<button
-								class="clickable-icon action-item weave-epub-semantic-chip"
-								class:weave-epub-standard-semantic-btn={readerUiMode !== 'expert'}
-								class:accent={semantic.id === info.semanticId}
-								data-semantic-id={semantic.id}
-								data-semantic-style={getSemanticPreviewStyle(semantic)}
-								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
-								title={getSemanticTitle(semantic)}
-								aria-label={semantic.label || semantic.id}
-								onclick={() => handleSemanticClick(info, semantic)}
-							>
-								<span class="action-icon weave-epub-semantic-dot"></span>
-								<span class="action-label weave-epub-semantic-label">{semantic.label}</span>
-							</button>
-						{/each}
-					</div>
-				{/if}
-				<div class="highlight-actions-shell">
+				<div
+					class="highlight-actions-shell"
+					class:highlight-actions-shell--inline-semantics={semanticPickerOpen && inlineSemantics.length > 0}
+				>
+					{#if semanticPickerOpen && inlineSemantics.length > 0}
+						<div
+							class="toolbar-row highlight-inline-semantic-row"
+							class:weave-epub-expert-semantic-row={readerUiMode === 'expert'}
+							class:weave-epub-standard-semantic-row={readerUiMode !== 'expert'}
+						>
+							{#each inlineSemantics as semantic (semantic.id)}
+								<button
+									class="clickable-icon action-item weave-epub-semantic-chip"
+									class:weave-epub-standard-semantic-btn={readerUiMode !== 'expert'}
+									class:accent={semantic.id === info.semanticId}
+									data-semantic-id={semantic.id}
+									data-semantic-style={getSemanticPreviewStyle(semantic)}
+									style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
+									title={getSemanticTitle(semantic)}
+									aria-label={semantic.label || semantic.id}
+									onclick={() => handleSemanticClick(info, semantic)}
+								>
+									<span class="action-icon weave-epub-semantic-dot"></span>
+									<span class="action-label weave-epub-semantic-label">{semantic.label}</span>
+								</button>
+							{/each}
+						</div>
+					{/if}
 					<div class="toolbar-row actions-row highlight-actions-row">
 						<button
 							class="clickable-icon action-item semantic-action"
 							class:accent={semanticPickerOpen}
+							disabled={inlineSemantics.length === 0}
 							onclick={() => void toggleSemanticPicker()}
 							title={t('epub.highlightToolbar.changeSemanticTitle')}
 							aria-label={t('epub.highlightToolbar.changeSemanticTitle')}
@@ -384,22 +395,24 @@
 							<span class="action-icon" use:icon={'tags'}></span>
 							<span class="action-label">{t('epub.highlightToolbar.changeSemantic')}</span>
 						</button>
-						<button class="clickable-icon action-item comment-action" class:accent={Boolean(info.hasCommentDivider)} onclick={() => onEditComment(info)} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
-							<span class="action-icon" use:icon={'message-square'}></span>
-							<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
-						</button>
-						{#if onAddToCanvas || onRemoveFromCanvas}
-							<button
-								class="clickable-icon action-item canvas-action"
-								class:accent={canvasAttached}
-								disabled={canvasActionBusy}
-								onclick={() => canvasAttached ? void onRemoveFromCanvas?.(info) : void onAddToCanvas?.(info)}
-								title={canvasAttached ? '取消加入脑图' : '加入脑图'}
-								aria-label={canvasAttached ? '取消加入脑图' : '加入脑图'}
-							>
-								<span class="action-icon" use:icon={canvasAttached ? 'unlink' : 'network'}></span>
-								<span class="action-label">{canvasAttached ? '取消脑图' : '加入脑图'}</span>
+						{#if readerUiMode === 'expert'}
+							<button class="clickable-icon action-item comment-action" class:accent={Boolean(info.hasCommentDivider)} onclick={() => onEditComment(info)} title={t('epub.highlightToolbar.commentTitle')} aria-label={t('epub.highlightToolbar.commentTitle')}>
+								<span class="action-icon" use:icon={'message-square'}></span>
+								<span class="action-label">{t('epub.highlightToolbar.comment')}</span>
 							</button>
+							{#if onAddToCanvas || onRemoveFromCanvas}
+								<button
+									class="clickable-icon action-item canvas-action"
+									class:accent={canvasAttached}
+									disabled={canvasActionBusy}
+									onclick={() => canvasAttached ? void onRemoveFromCanvas?.(info) : void onAddToCanvas?.(info)}
+									title={canvasAttached ? '取消加入脑图' : '加入脑图'}
+									aria-label={canvasAttached ? '取消加入脑图' : '加入脑图'}
+								>
+									<span class="action-icon" use:icon={canvasAttached ? 'unlink' : 'network'}></span>
+									<span class="action-label">{canvasAttached ? '取消脑图' : '加入脑图'}</span>
+								</button>
+							{/if}
 						{/if}
 						<div class="row-divider"></div>
 						<button class="clickable-icon action-item delete delete-action" onclick={() => onDelete(info)} title={t('epub.highlightToolbar.deleteTitle')}>

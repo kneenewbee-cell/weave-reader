@@ -4,10 +4,12 @@ import {
 	applySemanticScheme,
 	DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
 	mergeProfiles,
+	normalizeSemanticSettings,
 	PROFILE_FORMAT,
 	PROFILE_VERSION,
 	profileToSettings,
 	SEMANTIC_COLOR_HEX,
+	SYSTEM_SEMANTIC_SCHEMES,
 	type EpubSemanticSettings,
 } from "../semantic/profiles";
 import {
@@ -109,6 +111,64 @@ describe("semantic color palette", () => {
 		]);
 	});
 
+	it("preserves more than four semantics in standard reader mode", () => {
+		const ids = ["s1", "s2", "s3", "s4", "s5", "s6"];
+		const settings = normalizeSemanticSettings({
+			annotationSemantics: ids.map((id) => ({
+				id,
+				label: id,
+				color: "yellow",
+				style: "highlight",
+			})),
+			standardSemanticIds: ids,
+		});
+
+		expect(settings.standardSemanticIds).toEqual(ids);
+	});
+
+	it("orders every built-in semantic scheme by common-use priority", () => {
+		const expectedOrders: Record<string, string[]> = {
+			"general-reading": ["important", "favorite", "question", "reflection", "review"],
+			"literature-humanities": ["theme", "quote", "character", "event", "conflict", "reflection"],
+			"study-exam": ["important", "definition", "method", "example", "mistake", "question", "exam"],
+			"academic-research": ["research-question", "result", "evidence", "method", "citation", "related-work", "limitation"],
+			"math-science": ["theorem", "definition", "formula", "example", "proof", "mistake", "question"],
+			"programming-engineering": ["concept", "api-syntax", "code-example", "implementation", "pitfall", "performance-security", "question"],
+			"medical-life-science": ["diagnosis", "symptom", "treatment", "drug-dose", "evidence", "mechanism", "contraindication", "question"],
+			"law-policy": ["rule", "element", "issue", "reasoning", "case-evidence", "conclusion", "exception"],
+			"tools-practice": ["steps", "term-parameter", "example", "warning", "best-practice", "todo"],
+		};
+
+		for (const scheme of SYSTEM_SEMANTIC_SCHEMES) {
+			const expected = expectedOrders[scheme.id];
+			expect(expected).toBeDefined();
+			expect(scheme.semantics.map((semantic) => semantic.id)).toEqual(expected);
+			expect(scheme.standardSemanticIds).toEqual(expected.slice(0, Math.min(4, expected.length)));
+			expect(activeSemanticEntries(applySemanticScheme({}, scheme.id)).map((semantic) => semantic.id)).toEqual(expected);
+		}
+	});
+
+	it("normalizes stored built-in scheme entries into the common-use order", () => {
+		const settings = normalizeSemanticSettings({
+			semanticSchemeId: "law-policy",
+			annotationSemantics: [
+				{ id: "exception", label: "例外/风险", color: "red", style: "wavy" },
+				{ id: "issue", label: "争点", color: "purple", style: "wavy" },
+				{ id: "rule", label: "规则/法条", color: "yellow", style: "highlight" },
+				{ id: "element", label: "构成要件", color: "blue", style: "underline" },
+			],
+			standardSemanticIds: ["exception", "issue", "rule", "element"],
+		});
+
+		expect(settings.annotationSemantics.map((semantic) => semantic.id)).toEqual([
+			"rule",
+			"element",
+			"issue",
+			"exception",
+		]);
+		expect(settings.standardSemanticIds).toEqual(["rule", "element", "issue", "exception"]);
+	});
+
 	it("defaults semantic canvas auto-add to false and preserves explicit opt-in", () => {
 		const settings = applySemanticScheme({}, "literature-humanities");
 
@@ -149,10 +209,10 @@ describe("loadEffectiveEpubSemanticProfile", () => {
 		expect(activeSemanticEntries(effective).map((semantic) => semantic.id)).toEqual([
 			"diagnosis",
 			"symptom",
-			"mechanism",
-			"evidence",
 			"treatment",
 			"drug-dose",
+			"evidence",
+			"mechanism",
 			"contraindication",
 			"question",
 		]);
@@ -187,11 +247,11 @@ describe("loadEffectiveEpubSemanticProfile", () => {
 		expect(activeSemanticEntries(result.settings).map((semantic) => semantic.id)).toEqual([
 			"rule",
 			"element",
-			"case-evidence",
-			"exception",
-			"reasoning",
-			"conclusion",
 			"issue",
+			"reasoning",
+			"case-evidence",
+			"conclusion",
+			"exception",
 		]);
 	});
 
@@ -224,11 +284,11 @@ describe("loadEffectiveEpubSemanticProfile", () => {
 		expect(activeSemanticEntries(result.settings).map((semantic) => semantic.id)).toEqual([
 			"important",
 			"definition",
-			"example",
 			"method",
+			"example",
 			"mistake",
-			"exam",
 			"question",
+			"exam",
 		]);
 	});
 

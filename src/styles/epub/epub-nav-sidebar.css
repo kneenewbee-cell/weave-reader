@@ -1097,6 +1097,20 @@ body.is-mobile .epub-highlight-toolbar:not(.mobile-docked) {
 	display: none;
 }
 
+.epub-reader-root[data-reader-ui-mode="standard"] .epub-selection-toolbar .selection-standard-semantic-row {
+	flex-wrap: wrap;
+	align-content: center;
+	align-items: center;
+	justify-content: flex-start;
+	column-gap: 2px;
+	row-gap: 1px;
+	width: 178px;
+	max-width: min(178px, calc(100vw - 24px));
+	max-height: 52px;
+	padding: 0;
+	overflow: visible;
+}
+
 .epub-selection-toolbar .weave-epub-standard-highlight-btn {
 	height: 40px;
 	gap: 3px;
@@ -1254,6 +1268,14 @@ body.is-mobile .epub-highlight-toolbar:not(.mobile-docked) {
 	min-width: auto;
 	padding-inline: 5px;
 	gap: 0;
+}
+
+.epub-reader-root[data-reader-ui-mode="standard"] .epub-selection-toolbar .selection-standard-semantic-row .weave-epub-standard-semantic-btn {
+	width: 28px;
+	min-width: 28px;
+	height: 22px;
+	min-height: 22px;
+	padding: 2px;
 }
 
 .epub-reader-root[data-reader-ui-mode="expert"] .epub-selection-toolbar .selection-main-row {

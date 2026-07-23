@@ -137,7 +137,7 @@ describe('EpubHighlightToolbar', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('uses the selection semantic row structure when changing an existing annotation semantic', async () => {
+  it('reveals inline selection-style semantic chips only after requesting semantic changes', async () => {
     const onChangeSemantic = vi.fn();
     const { container } = render(EpubHighlightToolbar, {
       props: {
@@ -154,12 +154,20 @@ describe('EpubHighlightToolbar', () => {
       },
     });
 
-    await fireEvent.click(container.querySelector('.semantic-action') as HTMLElement);
+    await waitFor(() => {
+      expect(container.querySelector('.epub-highlight-toolbar.visible')).toBeInTheDocument();
+    });
 
-    const semanticRow = container.querySelector('.highlight-semantic-picker-row');
+    const actionsShell = container.querySelector('.highlight-actions-shell');
+    expect(container.querySelector('.highlight-inline-semantic-row')).toBeNull();
+    const semanticAction = container.querySelector('.semantic-action') as HTMLButtonElement;
+    expect(semanticAction).toBeInTheDocument();
+    await fireEvent.click(semanticAction);
+
+    const semanticRow = container.querySelector('.highlight-inline-semantic-row');
     expect(semanticRow).toHaveClass('weave-epub-expert-semantic-row');
-    expect(semanticRow).not.toHaveClass('actions-row');
-    expect(semanticRow?.closest('.highlight-actions-shell')).toBeNull();
+    expect(semanticRow?.closest('.highlight-actions-shell')).toBe(actionsShell);
+    expect(actionsShell?.firstElementChild).toBe(semanticRow);
     const definitionButton = container.querySelector('[data-semantic-id="definition"]') as HTMLButtonElement;
     expect(definitionButton).toHaveClass('weave-epub-semantic-chip');
     expect(definitionButton).toHaveAttribute('data-semantic-style', 'highlight');
@@ -175,6 +183,49 @@ describe('EpubHighlightToolbar', () => {
 
     await fireEvent.click(definitionButton);
 
+    expect(onChangeSemantic).toHaveBeenCalledWith(
+      expect.objectContaining({ semanticId: 'theorem' }),
+      expect.objectContaining({ id: 'definition' })
+    );
+  });
+
+  it('keeps standard mode focused on annotation controls before changing semantic highlights', async () => {
+    const onChangeSemantic = vi.fn();
+    const { container } = render(EpubHighlightToolbar, {
+      props: {
+        info: { ...createInfo(), semanticId: 'theorem', hasCommentDivider: true },
+        readerService: createReaderService(),
+        readerUiMode: 'standard',
+        semanticSettings: createSemanticSettings(),
+        canvasAttached: true,
+        onDelete: vi.fn(),
+        onTemporarilyReveal: vi.fn(),
+        onChangeSemantic,
+        onEditComment: vi.fn(),
+        onAddToCanvas: vi.fn(),
+        onRemoveFromCanvas: vi.fn(),
+        onCopyText: vi.fn(),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.epub-highlight-toolbar.visible')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.highlight-inline-semantic-row')).toBeNull();
+    const semanticAction = container.querySelector('.semantic-action') as HTMLButtonElement;
+    expect(semanticAction).toBeInTheDocument();
+    expect(container.querySelector('.delete-action')).toBeInTheDocument();
+    expect(container.querySelector('.comment-action')).toBeNull();
+    expect(container.querySelector('.canvas-action')).toBeNull();
+
+    await fireEvent.click(semanticAction);
+
+    const semanticRow = container.querySelector('.highlight-inline-semantic-row');
+    expect(semanticRow).toHaveClass('weave-epub-standard-semantic-row');
+    expect(container.querySelectorAll('.weave-epub-standard-semantic-btn')).toHaveLength(1);
+    await fireEvent.click(container.querySelector('[data-semantic-id="definition"]') as HTMLElement);
     expect(onChangeSemantic).toHaveBeenCalledWith(
       expect.objectContaining({ semanticId: 'theorem' }),
       expect.objectContaining({ id: 'definition' })
