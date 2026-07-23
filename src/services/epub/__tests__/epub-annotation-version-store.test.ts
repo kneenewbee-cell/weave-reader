@@ -79,6 +79,26 @@ function createAppHarness(initialFiles: Record<string, unknown> = {}) {
 		rmdir: vi.fn(async (path: string) => {
 			await adapter.remove(path);
 		}),
+		rename: vi.fn(async (from: string, to: string) => {
+			const normalizedFrom = normalizePath(from);
+			const normalizedTo = normalizePath(to);
+			for (const filePath of Array.from(files.keys())) {
+				if (filePath === normalizedFrom || filePath.startsWith(`${normalizedFrom}/`)) {
+					const nextPath = normalizePath(`${normalizedTo}${filePath.slice(normalizedFrom.length)}`);
+					files.set(nextPath, files.get(filePath) ?? "");
+					files.delete(filePath);
+				}
+			}
+			for (const folderPath of Array.from(folders)) {
+				if (folderPath === normalizedFrom || folderPath.startsWith(`${normalizedFrom}/`)) {
+					const nextPath = normalizePath(`${normalizedTo}${folderPath.slice(normalizedFrom.length)}`);
+					folders.add(nextPath);
+					folders.delete(folderPath);
+				}
+			}
+			folders.add(normalizedTo);
+			addParentFolders(normalizedTo);
+		}),
 	};
 	const app = {
 		vault: {
@@ -343,26 +363,175 @@ describe("epub-annotation-version-store", () => {
 		});
 	});
 
-	it("lists and renames annotation versions without changing their folder id", async () => {
+	it("copies annotations and semantic profile from a requested existing version", async () => {
 		const bookId = "epub-book-demo";
-		const { app } = createAppHarness();
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files } = createAppHarness({
+			[`${root}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			},
+			[`${root}/versions/default/version.json`]: {
+				format: "weave-reader-annotation-version/v1",
+				version: 1,
+				bookId,
+				versionId: "default",
+				name: "默认标注",
+				createdAt: 10,
+				updatedAt: 10,
+			},
+			[`${root}/versions/default/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 10,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "active-note" }],
+			},
+			[`${root}/versions/review/version.json`]: {
+				format: "weave-reader-annotation-version/v1",
+				version: 1,
+				bookId,
+				versionId: "review",
+				name: "复习版",
+				createdAt: 20,
+				updatedAt: 20,
+			},
+			[`${root}/versions/review/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 20,
+				annotations: [{ cfiRange: "epubcfi(/6/4)", semanticId: "review-note" }],
+			},
+			[`${root}/versions/review/semantic-profile.json`]: {
+				format: "weave-reader-semantic-profile/v1",
+				version: 1,
+				scope: "version",
+				bookId,
+				versionId: "review",
+				annotationSemanticsEnabled: true,
+				semanticSchemeId: "review-scheme",
+				semantics: [
+					{
+						id: "review-note",
+						label: "Review",
+						color: "orange",
+						style: "wavy",
+						group: "study",
+						source: "custom",
+						active: true,
+					},
+				],
+				standardSemanticIds: ["review-note"],
+			},
+		});
+
+		const copied = await createEpubAnnotationVersion(app, bookId, "复习版副本", {
+			copyFromVersionId: "review",
+			setActive: true,
+		});
+
+		expect(readJson(files, `${root}/versions/${copied.versionId}/annotations.json`)).toMatchObject({
+			annotations: [{ semanticId: "review-note" }],
+		});
+		expect(readJson(files, `${root}/versions/${copied.versionId}/semantic-profile.json`)).toMatchObject({
+			format: "weave-reader-semantic-profile/v1",
+			scope: "version",
+			bookId,
+			versionId: copied.versionId,
+			semanticSchemeId: "review-scheme",
+			semantics: [expect.objectContaining({ id: "review-note", color: "orange", style: "wavy" })],
+		});
+		expect(readJson(files, `${root}/annotations.json`)).toMatchObject({
+			annotations: [{ semanticId: "review-note" }],
+		});
+	});
+
+	it("renames annotation versions by moving their backend folder id", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files } = createAppHarness();
 
 		await createEpubAnnotationVersion(app, bookId, "课堂版", {
+			setActive: true,
 			initialAnnotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "important" }],
 		});
+		files.set(`${root}/semantic-profile.json`, JSON.stringify({
+			format: "weave-reader-semantic-profile/v1",
+			version: 1,
+			scope: "book",
+			bookId,
+			sourceVersionId: "课堂版",
+			semanticSchemeId: "classroom",
+		}));
 		await renameEpubAnnotationVersion(app, bookId, "课堂版", "课堂版 v2");
 
 		await expect(listEpubAnnotationVersions(app, bookId)).resolves.toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ versionId: "default", name: "默认标注", active: true }),
+				expect.objectContaining({ versionId: "default", name: "默认标注", active: false }),
 				expect.objectContaining({
-					versionId: "课堂版",
+					versionId: "课堂版 v2",
 					name: "课堂版 v2",
 					annotationCount: 1,
-					active: false,
+					active: true,
 				}),
 			]),
 		);
+		expect(files.has(`${root}/versions/课堂版/version.json`)).toBe(false);
+		expect(readJson(files, `${root}/versions/课堂版 v2/version.json`)).toMatchObject({
+			versionId: "课堂版 v2",
+			name: "课堂版 v2",
+		});
+		expect(readJson(files, `${root}/active-version.json`)).toMatchObject({
+			activeVersionId: "课堂版 v2",
+		});
+		expect(readJson(files, `${root}/semantic-profile.json`)).toMatchObject({
+			sourceVersionId: "课堂版 v2",
+		});
+	});
+
+	it("keeps renaming stable when the adapter folder rename fails", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files, adapter } = createAppHarness();
+
+		await createEpubAnnotationVersion(app, bookId, "review", {
+			setActive: true,
+			initialAnnotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "important" }],
+		});
+		files.set(`${root}/versions/review/semantic-profile.json`, JSON.stringify({
+			format: "weave-reader-semantic-profile/v1",
+			version: 1,
+			scope: "version",
+			bookId,
+			versionId: "review",
+			sourceVersionId: "review",
+			semanticSchemeId: "review-scheme",
+		}));
+		adapter.rename.mockRejectedValueOnce(new Error("folder locked"));
+
+		await expect(renameEpubAnnotationVersion(app, bookId, "review", "review v2")).resolves.toBe(true);
+
+		expect(files.has(`${root}/versions/review/version.json`)).toBe(false);
+		expect(files.has(`${root}/versions/review/annotations.json`)).toBe(false);
+		expect(readJson(files, `${root}/versions/review v2/version.json`)).toMatchObject({
+			versionId: "review v2",
+			name: "review v2",
+		});
+		expect(readJson(files, `${root}/versions/review v2/annotations.json`)).toMatchObject({
+			annotations: [{ semanticId: "important" }],
+		});
+		expect(readJson(files, `${root}/versions/review v2/semantic-profile.json`)).toMatchObject({
+			versionId: "review v2",
+			sourceVersionId: "review v2",
+			semanticSchemeId: "review-scheme",
+		});
+		expect(readJson(files, `${root}/active-version.json`)).toMatchObject({
+			activeVersionId: "review v2",
+		});
 	});
 
 	it("falls back to default and refreshes the root mirror when deleting the active version", async () => {
@@ -399,5 +568,91 @@ describe("epub-annotation-version-store", () => {
 			annotations: [{ semanticId: "default-note" }],
 		});
 		expect(files.has(`${root}/versions/${temporary.versionId}/annotations.json`)).toBe(false);
+	});
+
+	it("uses recursive directory removal when adapter remove leaves a version folder behind", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files, adapter } = createAppHarness();
+
+		const temporary = await createEpubAnnotationVersion(app, bookId, "temporary", {
+			initialAnnotations: [{ cfiRange: "epubcfi(/6/4)", semanticId: "temporary-note" }],
+		});
+		adapter.remove.mockImplementationOnce(async () => undefined);
+
+		await expect(deleteEpubAnnotationVersion(app, bookId, temporary.versionId)).resolves.toBe(true);
+
+		expect(adapter.rmdir).toHaveBeenCalledWith(`${root}/versions/${temporary.versionId}`, true);
+		expect(files.has(`${root}/versions/${temporary.versionId}/version.json`)).toBe(false);
+		expect(files.has(`${root}/versions/${temporary.versionId}/annotations.json`)).toBe(false);
+	});
+
+	it("resets the default version instead of deleting its backend folder", async () => {
+		const bookId = "epub-book-demo";
+		const root = `weave/epub-data/books/${bookId}`;
+		const { app, files } = createAppHarness({
+			[`${root}/active-version.json`]: {
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId,
+				activeVersionId: "default",
+				updatedAt: 10,
+			},
+			[`${root}/versions/default/version.json`]: {
+				format: "weave-reader-annotation-version/v1",
+				version: 1,
+				bookId,
+				versionId: "default",
+				name: "6",
+				createdAt: 10,
+				updatedAt: 20,
+			},
+			[`${root}/versions/default/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 20,
+				authoritative: true,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "default-note" }],
+			},
+			[`${root}/annotations.json`]: {
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId,
+				updatedAt: 20,
+				authoritative: true,
+				annotations: [{ cfiRange: "epubcfi(/6/2)", semanticId: "default-note" }],
+			},
+			[`${root}/versions/default/semantic-profile.json`]: {
+				format: "weave-reader-semantic-profile/v1",
+				version: 1,
+				scope: "version",
+				bookId,
+				versionId: "default",
+				sourceVersionId: "default",
+				semanticSchemeId: "keep-me",
+			},
+		});
+
+		await expect(deleteEpubAnnotationVersion(app, bookId, "default")).resolves.toBe(true);
+
+		expect(readJson(files, `${root}/versions/default/version.json`)).toMatchObject({
+			versionId: "default",
+			name: "默认标注",
+			createdAt: 10,
+		});
+		expect(readJson(files, `${root}/versions/default/annotations.json`)).toMatchObject({
+			bookId,
+			authoritative: true,
+			annotations: [],
+		});
+		expect(readJson(files, `${root}/annotations.json`)).toMatchObject({
+			bookId,
+			authoritative: true,
+			annotations: [],
+		});
+		expect(readJson(files, `${root}/versions/default/semantic-profile.json`)).toMatchObject({
+			semanticSchemeId: "keep-me",
+		});
 	});
 });

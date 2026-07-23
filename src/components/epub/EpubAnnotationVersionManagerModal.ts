@@ -1,4 +1,4 @@
-import { App, Modal, Notice, normalizePath, setIcon } from "obsidian";
+import { App, Modal, Notice, Platform, normalizePath, setIcon } from "obsidian";
 import { copyTextToClipboard } from "../../utils/clipboard-copy";
 import {
 	createEpubAnnotatedBookPackage,
@@ -21,7 +21,12 @@ import {
 	summarizeEpubImportResult,
 } from "../../services/epub/epub-import-diagnostics";
 import { epubActiveDocumentStore } from "../../stores/epub-active-document-store";
+import { DirectoryUtils } from "../../utils/directory-utils";
 import { shouldOfferOpenImportedBookAction } from "../modals/epub-annotated-book-package-import-result-options";
+import {
+	openEpubAnnotationVersionCreateMenu,
+	type EpubAnnotationVersionCreateMenuHandle,
+} from "./epub-annotation-version-create-menu";
 
 export interface EpubAnnotationVersionManagerModalOptions {
 	bookTitle?: string;
@@ -37,7 +42,7 @@ function appendIconButton(
 	parent: HTMLElement,
 	icon: string,
 	label: string,
-	onClick: () => void | Promise<void>,
+	onClick: (event: MouseEvent) => void | Promise<void>,
 	extraClass = "",
 ): HTMLButtonElement {
 	const button = parent.createEl("button", {
@@ -47,8 +52,10 @@ function appendIconButton(
 	const iconEl = button.createSpan({ cls: "weave-annotation-version-action__icon" });
 	setIcon(iconEl, icon);
 	button.createSpan({ text: label });
-	button.addEventListener("click", () => {
-		void onClick();
+	button.addEventListener("click", (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		void onClick(event);
 	});
 	return button;
 }
@@ -73,8 +80,336 @@ function formatDateTime(value: number): string {
 	}
 }
 
+const DEFAULT_VERSION_ID = "default";
+const DEFAULT_VERSION_DISPLAY_NAME = "\u9ed8\u8ba4";
+const DEFAULT_VERSION_ORIGINAL_NAMES = new Set([
+	"",
+	"\u9ed8\u8ba4",
+	"\u9ed8\u8ba4\u6807\u6ce8",
+]);
+const DEFAULT_VERSION_MARKER = "\uff08\u9ed8\u8ba4\uff09";
+const CURRENT_VERSION_MARKER = "\uff08\u5f53\u524d\uff09";
+
+function formatVersionDisplayTitle(version: EpubAnnotationVersionSummary): string {
+	const rawName = String(version.name || "").trim();
+	const baseTitle = version.versionId === DEFAULT_VERSION_ID
+		? (DEFAULT_VERSION_ORIGINAL_NAMES.has(rawName)
+			? DEFAULT_VERSION_DISPLAY_NAME
+			: `${rawName || DEFAULT_VERSION_DISPLAY_NAME}${DEFAULT_VERSION_MARKER}`)
+		: (rawName || version.versionId);
+	return version.active ? `${baseTitle}${CURRENT_VERSION_MARKER}` : baseTitle;
+}
+
+interface ElectronShellLike {
+	openPath?: (path: string) => Promise<string>;
+	showItemInFolder?: (path: string) => void;
+}
+
+interface ChildProcessLike {
+	execFile?: (
+		file: string,
+		args: string[],
+		options: { windowsHide?: boolean },
+		callback?: (error?: unknown) => void
+	) => unknown;
+}
+
+function getWindowRequire(): ((id: string) => unknown) | null {
+	try {
+		const requireFn = (window as unknown as { require?: (id: string) => unknown }).require;
+		return typeof requireFn === "function" ? requireFn : null;
+	} catch {
+		return null;
+	}
+}
+
+function getElectronShell(): ElectronShellLike | null {
+	try {
+		const requireFn = getWindowRequire();
+		const electron = typeof requireFn === "function"
+			? requireFn("electron") as { shell?: ElectronShellLike }
+			: null;
+		return electron?.shell || null;
+	} catch {
+		return null;
+	}
+}
+
+function getChildProcess(): ChildProcessLike | null {
+	try {
+		const requireFn = getWindowRequire();
+		return typeof requireFn === "function"
+			? requireFn("child_process") as ChildProcessLike
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function resolveVaultSystemPath(app: App, vaultPath: string): string {
+	const normalizedPath = normalizePath(vaultPath || "");
+	const adapter = app.vault.adapter as typeof app.vault.adapter & {
+		getFullPath?: (path: string) => string;
+	};
+	if (typeof adapter.getFullPath === "function") {
+		try {
+			return adapter.getFullPath(normalizedPath);
+		} catch {
+			return normalizedPath;
+		}
+	}
+	return normalizedPath;
+}
+
+function toWindowsExplorerPath(systemPath: string): string {
+	return String(systemPath || "").replace(/\//g, "\\");
+}
+
+function openWindowsExplorerPath(systemPath: string, revealSystemPath = ""): boolean {
+	if (!Platform.isWin) {
+		return false;
+	}
+	const childProcess = getChildProcess();
+	if (!childProcess || typeof childProcess.execFile !== "function") {
+		return false;
+	}
+	const normalizedSystemPath = toWindowsExplorerPath(systemPath);
+	const normalizedRevealPath = toWindowsExplorerPath(revealSystemPath || "");
+	const args = normalizedRevealPath && normalizedRevealPath !== normalizedSystemPath
+		? [`/select,${normalizedRevealPath}`]
+		: [normalizedSystemPath];
+	try {
+		childProcess.execFile("explorer.exe", args, { windowsHide: false }, () => undefined);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function openSystemFolderForVaultPath(
+	app: App,
+	vaultPath: string,
+	revealVaultPath = ""
+): Promise<boolean> {
+	const systemPath = resolveVaultSystemPath(app, vaultPath);
+	const revealSystemPath = resolveVaultSystemPath(app, revealVaultPath || vaultPath);
+	if (openWindowsExplorerPath(systemPath, revealSystemPath)) {
+		return true;
+	}
+
+	const shell = getElectronShell();
+	if (!shell) {
+		return false;
+	}
+	if (typeof shell.openPath === "function") {
+		try {
+			const errorMessage = await shell.openPath(systemPath);
+			if (!errorMessage) {
+				if (typeof shell.showItemInFolder === "function") {
+					shell.showItemInFolder(revealSystemPath);
+				}
+				return true;
+			}
+		} catch {
+			// Fall through to showItemInFolder when available.
+		}
+	}
+	if (typeof shell.showItemInFolder === "function") {
+		try {
+			shell.showItemInFolder(revealSystemPath);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	return false;
+}
+
+interface EpubAnnotationVersionNameModalOptions {
+	title: string;
+	label: string;
+	initialName: string;
+	confirmLabel: string;
+	cancelLabel: string;
+}
+
+class EpubAnnotationVersionNameModal extends Modal {
+	private readonly modalOptions: EpubAnnotationVersionNameModalOptions;
+	private nextName = "";
+	private confirmed = false;
+	private resolver: ((value: string | null) => void) | null = null;
+	private confirmButton: HTMLButtonElement | null = null;
+	private nameInput: HTMLInputElement | null = null;
+
+	constructor(app: App, options: EpubAnnotationVersionNameModalOptions) {
+		super(app);
+		this.modalOptions = options;
+		this.nextName = options.initialName;
+	}
+
+	openAndWait(): Promise<string | null> {
+		return new Promise((resolve) => {
+			this.resolver = resolve;
+			this.open();
+		});
+	}
+
+	onOpen(): void {
+		this.modalEl.addClass("weave-annotation-version-name-modal");
+		this.setTitle(this.modalOptions.title);
+		this.contentEl.empty();
+
+		const shell = this.contentEl.createDiv({ cls: "weave-annotation-version-name-shell" });
+		const field = shell.createDiv({ cls: "weave-annotation-version-name-field" });
+		field.createDiv({ cls: "weave-annotation-version-name-label", text: this.modalOptions.label });
+
+		this.nameInput = field.createEl("input", {
+			cls: "weave-annotation-version-name-input",
+			type: "text",
+			attr: {
+				spellcheck: "false",
+			},
+		});
+		this.nameInput.value = this.modalOptions.initialName;
+		this.nameInput.addEventListener("input", () => {
+			this.nextName = this.nameInput?.value ?? "";
+			this.syncConfirmState();
+		});
+		this.nameInput.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				this.tryConfirm();
+			}
+		});
+
+		const actions = shell.createDiv({ cls: "weave-annotation-version-name-actions" });
+		const cancelButton = actions.createEl("button", {
+			attr: { type: "button" },
+			text: this.modalOptions.cancelLabel,
+		});
+		cancelButton.addEventListener("click", () => this.close());
+
+		this.confirmButton = actions.createEl("button", {
+			cls: "mod-cta",
+			attr: { type: "button" },
+			text: this.modalOptions.confirmLabel,
+		});
+		this.confirmButton.addEventListener("click", () => this.tryConfirm());
+
+		this.syncConfirmState();
+		window.setTimeout(() => {
+			this.nameInput?.focus();
+			this.nameInput?.select();
+		}, 0);
+	}
+
+	onClose(): void {
+		this.modalEl.removeClass("weave-annotation-version-name-modal");
+		this.contentEl.empty();
+		const trimmed = this.nextName.trim();
+		this.resolver?.(this.confirmed && trimmed ? trimmed : null);
+		this.resolver = null;
+		this.confirmButton = null;
+		this.nameInput = null;
+	}
+
+	private syncConfirmState(): void {
+		if (!this.confirmButton) {
+			return;
+		}
+		this.confirmButton.disabled = !this.nextName.trim();
+	}
+
+	private tryConfirm(): void {
+		if (!this.nextName.trim()) {
+			return;
+		}
+		this.confirmed = true;
+		this.close();
+	}
+}
+
+function requestEpubAnnotationVersionName(
+	app: App,
+	options: EpubAnnotationVersionNameModalOptions,
+): Promise<string | null> {
+	return new EpubAnnotationVersionNameModal(app, options).openAndWait();
+}
+
+interface EpubAnnotationVersionConfirmModalOptions {
+	title: string;
+	message: string;
+	confirmLabel: string;
+	cancelLabel: string;
+}
+
+class EpubAnnotationVersionConfirmModal extends Modal {
+	private readonly modalOptions: EpubAnnotationVersionConfirmModalOptions;
+	private confirmed = false;
+	private resolver: ((value: boolean) => void) | null = null;
+
+	constructor(app: App, options: EpubAnnotationVersionConfirmModalOptions) {
+		super(app);
+		this.modalOptions = options;
+	}
+
+	openAndWait(): Promise<boolean> {
+		return new Promise((resolve) => {
+			this.resolver = resolve;
+			this.open();
+		});
+	}
+
+	onOpen(): void {
+		this.modalEl.addClass("weave-annotation-version-confirm-modal");
+		this.setTitle(this.modalOptions.title);
+		this.contentEl.empty();
+
+		const shell = this.contentEl.createDiv({ cls: "weave-annotation-version-confirm-shell" });
+		shell.createDiv({
+			cls: "weave-annotation-version-confirm-message",
+			text: this.modalOptions.message,
+		});
+
+		const actions = shell.createDiv({ cls: "weave-annotation-version-confirm-actions" });
+		const cancelButton = actions.createEl("button", {
+			attr: { type: "button" },
+			text: this.modalOptions.cancelLabel,
+		});
+		cancelButton.addEventListener("click", () => this.close());
+
+		const confirmButton = actions.createEl("button", {
+			cls: "mod-warning",
+			attr: { type: "button" },
+			text: this.modalOptions.confirmLabel,
+		});
+		confirmButton.addEventListener("click", () => {
+			this.confirmed = true;
+			this.close();
+		});
+		window.setTimeout(() => confirmButton.focus(), 0);
+	}
+
+	onClose(): void {
+		this.modalEl.removeClass("weave-annotation-version-confirm-modal");
+		this.contentEl.empty();
+		this.resolver?.(this.confirmed);
+		this.resolver = null;
+	}
+}
+
+function requestEpubAnnotationVersionConfirmation(
+	app: App,
+	options: EpubAnnotationVersionConfirmModalOptions,
+): Promise<boolean> {
+	return new EpubAnnotationVersionConfirmModal(app, options).openAndWait();
+}
+
 export class EpubAnnotationVersionManagerModal extends Modal {
 	private readonly options: EpubAnnotationVersionManagerModalOptions;
+	private createVersionMenu: EpubAnnotationVersionCreateMenuHandle | null = null;
+	private lastOpenDataFolderKey = "";
+	private lastOpenDataFolderAt = 0;
 
 	constructor(app: App, options: EpubAnnotationVersionManagerModalOptions) {
 		super(app);
@@ -87,6 +422,7 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 	}
 
 	private async render(): Promise<void> {
+		this.closeCreateVersionMenu();
 		const {
 			bookTitle = "当前书籍",
 			bookId = "",
@@ -111,44 +447,17 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 		appendInfoRow(current, "数据目录", bookDataDir);
 		appendInfoRow(current, "当前标注镜像", annotationsPath);
 
+		const versions = await listEpubAnnotationVersions(this.app, bookId);
 		const topActions = root.createDiv({ cls: "weave-annotation-version-actions" });
-		appendIconButton(topActions, "plus", "新建空白版本", async () => {
-			const name = window.prompt("请输入新标注版本名称", "新标注版本");
-			if (!name?.trim()) {
-				return;
-			}
-			const version = await createEpubAnnotationVersion(this.app, bookId, name, { setActive: true });
-			notifyEpubAnnotationVersionChanged(bookId, {
-				reason: "create",
-				filePath,
-				versionId: version.versionId,
-			});
-			await this.notifyVersionChanged("已新建并切换标注版本");
-			await this.render();
-		});
-		appendIconButton(topActions, "copy-plus", "复制当前为新版本", async () => {
-			const name = window.prompt("请输入新标注版本名称", "当前标注副本");
-			if (!name?.trim()) {
-				return;
-			}
-			const version = await createEpubAnnotationVersion(this.app, bookId, name, {
-				setActive: true,
-				copyFromActive: true,
-			});
-			notifyEpubAnnotationVersionChanged(bookId, {
-				reason: "create",
-				filePath,
-				versionId: version.versionId,
-			});
-			await this.notifyVersionChanged("已复制并切换标注版本");
-			await this.render();
+		appendIconButton(topActions, "plus", "新建一个版本", (event) => {
+			this.openCreateVersionMenu(event.currentTarget as HTMLElement, bookId, filePath, versions);
 		});
 		appendIconButton(topActions, "folder-open", "打开数据目录", async () => {
 			if (this.options.onOpenDataFolder) {
 				await this.options.onOpenDataFolder();
 				return;
 			}
-			new Notice("当前入口只能显示数据路径");
+			await this.openDataFolder(bookDataDir, annotationsPath);
 		});
 		appendIconButton(topActions, "clipboard-copy", "复制标注数据路径", async () => {
 			const copied = await copyTextToClipboard(annotationsPath);
@@ -162,12 +471,184 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 			await this.importAnnotatedBookPackage(bookId, filePath);
 		});
 
-		const versions = await listEpubAnnotationVersions(this.app, bookId);
 		const list = root.createDiv({ cls: "weave-annotation-version-list" });
 		list.createEl("h3", { text: "版本列表" });
 		for (const version of versions) {
 			this.renderVersionRow(list, version);
 		}
+	}
+
+	private openCreateVersionMenu(
+		anchor: HTMLElement,
+		bookId: string,
+		filePath: string,
+		versions: EpubAnnotationVersionSummary[],
+	): void {
+		this.closeCreateVersionMenu();
+		this.createVersionMenu = openEpubAnnotationVersionCreateMenu(anchor, versions, {
+			createBlank: () => this.createBlankVersion(bookId, filePath),
+			copyFromVersion: (version) => this.createVersionFromExistingVersion(bookId, filePath, version),
+		});
+	}
+
+	private closeCreateVersionMenu(): void {
+		this.createVersionMenu?.close();
+		this.createVersionMenu = null;
+	}
+
+	private async createBlankVersion(bookId: string, filePath: string): Promise<void> {
+		this.closeCreateVersionMenu();
+		if (!bookId) {
+			new Notice("当前书籍数据还没有准备好");
+			return;
+		}
+		const name = await requestEpubAnnotationVersionName(this.app, {
+			title: "新建空白版本",
+			label: "版本名称",
+			initialName: "新标注版本",
+			confirmLabel: "创建",
+			cancelLabel: "取消",
+		});
+		if (!name) {
+			return;
+		}
+		const version = await createEpubAnnotationVersion(this.app, bookId, name, { setActive: true });
+		notifyEpubAnnotationVersionChanged(bookId, {
+			reason: "create",
+			filePath,
+			versionId: version.versionId,
+		});
+		await this.notifyVersionChanged("已新建并切换空白标注版本");
+		await this.render();
+	}
+
+	private async createVersionFromExistingVersion(
+		bookId: string,
+		filePath: string,
+		sourceVersion: EpubAnnotationVersionSummary,
+	): Promise<void> {
+		this.closeCreateVersionMenu();
+		if (!bookId) {
+			new Notice("当前书籍数据还没有准备好");
+			return;
+		}
+		const name = await requestEpubAnnotationVersionName(this.app, {
+			title: "从已有版本复制",
+			label: `复制来源：${sourceVersion.name}`,
+			initialName: `${sourceVersion.name} 副本`,
+			confirmLabel: "复制",
+			cancelLabel: "取消",
+		});
+		if (!name) {
+			return;
+		}
+		const version = await createEpubAnnotationVersion(this.app, bookId, name, {
+			setActive: true,
+			copyFromVersionId: sourceVersion.versionId,
+		});
+		notifyEpubAnnotationVersionChanged(bookId, {
+			reason: "create",
+			filePath,
+			versionId: version.versionId,
+		});
+		await this.notifyVersionChanged(`已从「${sourceVersion.name}」复制并切换标注版本`);
+		await this.render();
+	}
+
+	private async openDataFolder(bookDataDir: string, revealPath = ""): Promise<void> {
+		const normalizedDir = normalizePath(String(bookDataDir || "").trim());
+		if (!normalizedDir) {
+			new Notice("当前书籍数据目录还没有准备好");
+			return;
+		}
+		const openKey = `${normalizedDir}\n${normalizePath(String(revealPath || "").trim())}`;
+		const timestamp = Date.now();
+		if (openKey === this.lastOpenDataFolderKey && timestamp - this.lastOpenDataFolderAt < 2500) {
+			new Notice("数据目录已打开");
+			return;
+		}
+		this.lastOpenDataFolderKey = openKey;
+		this.lastOpenDataFolderAt = timestamp;
+		try {
+			await DirectoryUtils.ensureDirRecursive(this.app.vault.adapter, normalizedDir);
+			if (await openSystemFolderForVaultPath(this.app, normalizedDir, revealPath)) {
+				new Notice("已打开数据目录");
+				return;
+			}
+			const copied = await copyTextToClipboard(normalizedDir);
+			new Notice(copied ? "无法直接打开，已复制数据目录路径" : "打开数据目录失败");
+		} catch (error) {
+			this.lastOpenDataFolderAt = 0;
+			console.warn("[WeaveReader] Failed to open EPUB annotation data folder:", error);
+			new Notice("打开数据目录失败");
+		}
+	}
+
+	private async renameVersion(version: EpubAnnotationVersionSummary): Promise<void> {
+		const name = await requestEpubAnnotationVersionName(this.app, {
+			title: "重命名标注版本",
+			label: "版本名称",
+			initialName: version.name,
+			confirmLabel: "重命名",
+			cancelLabel: "取消",
+		});
+		const trimmedName = name?.trim();
+		if (!trimmedName || trimmedName === version.name) {
+			return;
+		}
+		let renamed = false;
+		try {
+			renamed = await renameEpubAnnotationVersion(this.app, this.options.bookId, version.versionId, trimmedName);
+		} catch (error) {
+			console.warn("[WeaveReader] Failed to rename EPUB annotation version:", error);
+		}
+		if (!renamed) {
+			new Notice("重命名标注版本失败");
+			return;
+		}
+		notifyEpubAnnotationVersionChanged(this.options.bookId, {
+			reason: "rename",
+			filePath: this.options.filePath,
+			versionId: version.versionId,
+		});
+		await this.notifyVersionChanged(
+			version.versionId === "default"
+				? "已重命名显示名称；默认版本文件夹固定为 default"
+				: "已重命名标注版本"
+		);
+		await this.render();
+	}
+
+	private async deleteVersion(version: EpubAnnotationVersionSummary): Promise<void> {
+		const isDefaultVersion = version.versionId === DEFAULT_VERSION_ID;
+		const confirmed = await requestEpubAnnotationVersionConfirmation(this.app, {
+			title: isDefaultVersion ? "重置默认版本" : "删除标注版本",
+			message: isDefaultVersion
+				? "重置默认版本？显示名会恢复为默认，默认版本下的标注会被清空。"
+				: `删除「${version.name}」？此操作会删除这个版本下的标注数据。`,
+			confirmLabel: isDefaultVersion ? "重置" : "删除",
+			cancelLabel: "取消",
+		});
+		if (!confirmed) {
+			return;
+		}
+		let deleted = false;
+		try {
+			deleted = await deleteEpubAnnotationVersion(this.app, this.options.bookId, version.versionId);
+		} catch (error) {
+			console.warn("[WeaveReader] Failed to delete EPUB annotation version:", error);
+		}
+		if (!deleted) {
+			new Notice("删除标注版本失败");
+			return;
+		}
+		notifyEpubAnnotationVersionChanged(this.options.bookId, {
+			reason: isDefaultVersion ? "reset-default" : "delete",
+			filePath: this.options.filePath,
+			versionId: version.versionId,
+		});
+		await this.notifyVersionChanged(isDefaultVersion ? "已重置默认版本" : "已删除标注版本");
+		await this.render();
 	}
 
 	private async exportAnnotatedBookPackage(
@@ -323,7 +804,7 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 		const main = row.createDiv({ cls: "weave-annotation-version-item__main" });
 		main.createDiv({
 			cls: "weave-annotation-version-item__title",
-			text: version.active ? `${version.name}（当前）` : version.name,
+			text: formatVersionDisplayTitle(version),
 		});
 		main.createDiv({
 			cls: "weave-annotation-version-item__meta",
@@ -347,33 +828,17 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 			});
 		}
 		appendIconButton(actions, "pencil", "重命名", async () => {
-			const name = window.prompt("请输入新的版本名称", version.name);
-			if (!name?.trim() || name.trim() === version.name) {
-				return;
-			}
-			await renameEpubAnnotationVersion(this.app, this.options.bookId, version.versionId, name.trim());
-			new Notice("已重命名标注版本");
-			await this.render();
+			await this.renameVersion(version);
 		});
-		if (version.versionId !== "default") {
-			appendIconButton(actions, "trash-2", "删除", async () => {
-				if (!window.confirm(`删除「${version.name}」？此操作会删除这个版本下的标注数据。`)) {
-					return;
-				}
-				const deleted = await deleteEpubAnnotationVersion(this.app, this.options.bookId, version.versionId);
-				if (deleted) {
-					notifyEpubAnnotationVersionChanged(this.options.bookId, {
-						reason: "delete",
-						filePath: this.options.filePath,
-						versionId: version.versionId,
-					});
-					await this.notifyVersionChanged("已删除标注版本");
-					await this.render();
-				} else {
-					new Notice("删除标注版本失败");
-				}
-			}, "is-danger");
-		}
+		appendIconButton(
+			actions,
+			"trash-2",
+			version.versionId === DEFAULT_VERSION_ID ? "重置" : "删除",
+			async () => {
+				await this.deleteVersion(version);
+			},
+			"is-danger",
+		);
 	}
 
 	private async notifyVersionChanged(message: string): Promise<void> {
@@ -384,6 +849,7 @@ export class EpubAnnotationVersionManagerModal extends Modal {
 	}
 
 	onClose(): void {
+		this.closeCreateVersionMenu();
 		this.contentEl.empty();
 	}
 }

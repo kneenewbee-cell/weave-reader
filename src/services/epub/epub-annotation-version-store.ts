@@ -444,15 +444,15 @@ async function ensureVersionSemanticProfileFromRootMirror(
 	}
 }
 
-async function copyActiveSemanticProfileToVersion(
+async function copySemanticProfileToVersion(
 	app: App,
 	bookId: string,
-	activeVersionId: string,
+	sourceVersionId: string,
 	nextVersionId: string
 ): Promise<void> {
 	const source =
-		(await readVersionSemanticProfile(app, bookId, activeVersionId)) ||
-		(await readRootSemanticProfileForVersion(app, bookId, activeVersionId));
+		(await readVersionSemanticProfile(app, bookId, sourceVersionId)) ||
+		(await readRootSemanticProfileForVersion(app, bookId, sourceVersionId));
 	if (source) {
 		await writeVersionSemanticProfile(app, bookId, nextVersionId, source);
 	}
@@ -637,6 +637,238 @@ async function getUniqueVersionId(app: App, bookId: string, baseName: string): P
 	return `${baseId}-${now().toString(36)}`;
 }
 
+async function getUniqueRenamedVersionId(
+	app: App,
+	bookId: string,
+	currentVersionId: string,
+	nextName: string
+): Promise<string> {
+	const adapter = getAdapter(app);
+	const baseId = safeEpubAnnotationVersionId(nextName || currentVersionId);
+	if (baseId === currentVersionId) {
+		return currentVersionId;
+	}
+	if (!adapter || typeof adapter.exists !== "function") {
+		return baseId;
+	}
+	for (let index = 0; index < 500; index += 1) {
+		const candidate = index === 0 ? baseId : `${baseId}-${index + 1}`;
+		if (candidate === currentVersionId || !(await adapter.exists(versionDir(bookId, candidate)))) {
+			return candidate;
+		}
+	}
+	return `${baseId}-${now().toString(36)}`;
+}
+
+async function updateActiveVersionIdReference(
+	app: App,
+	bookId: string,
+	fromVersionId: string,
+	toVersionId: string,
+	timestamp: number
+): Promise<void> {
+	const activePath = bookPath(bookId, "active-version.json");
+	const active = normalizeActiveVersionPayload(await readJson(app, activePath), bookId);
+	if (active?.activeVersionId !== fromVersionId) {
+		return;
+	}
+	await writeJson(app, activePath, {
+		...active,
+		activeVersionId: toVersionId,
+		updatedAt: timestamp,
+	});
+}
+
+async function updateRootSemanticProfileSourceVersionId(
+	app: App,
+	bookId: string,
+	fromVersionId: string,
+	toVersionId: string
+): Promise<void> {
+	const rootProfilePath = bookPath(bookId, "semantic-profile.json");
+	const rootProfile = await readJson(app, rootProfilePath);
+	if (!isRecord(rootProfile) || rootProfile.format !== SEMANTIC_PROFILE_FORMAT) {
+		return;
+	}
+	const sourceVersionId = rootProfile.sourceVersionId
+		? safeEpubAnnotationVersionId(rootProfile.sourceVersionId)
+		: "";
+	if (sourceVersionId !== fromVersionId) {
+		return;
+	}
+	await writeJson(app, rootProfilePath, {
+		...rootProfile,
+		sourceVersionId: toVersionId,
+	});
+}
+
+type VersionDirectoryAdapter = DataAdapter & {
+	list?: (normalizedPath: string) => Promise<{ files?: string[]; folders?: string[] }>;
+	rename?: (normalizedPath: string, normalizedNewPath: string) => Promise<void>;
+	remove?: (normalizedPath: string) => Promise<void>;
+	rmdir?: (normalizedPath: string, recursive?: boolean) => Promise<void>;
+};
+
+async function adapterPathExists(adapter: VersionDirectoryAdapter, filePath: string): Promise<boolean> {
+	try {
+		return typeof adapter.exists === "function" ? await adapter.exists(normalizePath(filePath)) : false;
+	} catch {
+		return false;
+	}
+}
+
+function relativeChildPath(parentPath: string, childPath: string): string {
+	const parent = normalizePath(parentPath);
+	const child = normalizePath(childPath);
+	const prefix = `${parent}/`;
+	if (child.startsWith(prefix)) {
+		return child.slice(prefix.length);
+	}
+	return child.split("/").pop() || "";
+}
+
+async function copyVersionDirectoryFile(
+	adapter: VersionDirectoryAdapter,
+	sourceFile: string,
+	targetFile: string
+): Promise<boolean> {
+	const normalizedSource = normalizePath(sourceFile);
+	if (!(await adapterPathExists(adapter, normalizedSource))) {
+		return false;
+	}
+	const normalizedTarget = normalizePath(targetFile);
+	await DirectoryUtils.ensureDirForFile(adapter, normalizedTarget);
+	await adapter.write(normalizedTarget, await adapter.read(normalizedSource));
+	return true;
+}
+
+async function copyKnownVersionFiles(
+	adapter: VersionDirectoryAdapter,
+	sourceDir: string,
+	targetDir: string
+): Promise<boolean> {
+	let copied = 0;
+	for (const fileName of ["version.json", "annotations.json", "semantic-profile.json"]) {
+		if (await copyVersionDirectoryFile(
+			adapter,
+			normalizePath(`${sourceDir}/${fileName}`),
+			normalizePath(`${targetDir}/${fileName}`)
+		)) {
+			copied += 1;
+		}
+	}
+	return copied > 0;
+}
+
+async function copyVersionDirectoryContents(
+	adapter: VersionDirectoryAdapter,
+	sourceDir: string,
+	targetDir: string
+): Promise<boolean> {
+	const normalizedSource = normalizePath(sourceDir);
+	const normalizedTarget = normalizePath(targetDir);
+	if (!(await adapterPathExists(adapter, normalizedSource))) {
+		return false;
+	}
+	await DirectoryUtils.ensureDirRecursive(adapter, normalizedTarget);
+	if (typeof adapter.list !== "function") {
+		return copyKnownVersionFiles(adapter, normalizedSource, normalizedTarget);
+	}
+
+	const listing = await adapter.list(normalizedSource);
+	for (const filePath of Array.isArray(listing.files) ? listing.files : []) {
+		const relative = relativeChildPath(normalizedSource, filePath);
+		if (relative) {
+			await copyVersionDirectoryFile(
+				adapter,
+				filePath,
+				normalizePath(`${normalizedTarget}/${relative}`)
+			);
+		}
+	}
+	for (const folderPath of Array.isArray(listing.folders) ? listing.folders : []) {
+		const relative = relativeChildPath(normalizedSource, folderPath);
+		if (relative) {
+			await copyVersionDirectoryContents(
+				adapter,
+				folderPath,
+				normalizePath(`${normalizedTarget}/${relative}`)
+			);
+		}
+	}
+	return true;
+}
+
+async function removeVersionDirectory(
+	adapter: VersionDirectoryAdapter,
+	targetDir: string
+): Promise<boolean> {
+	const normalizedTarget = normalizePath(targetDir);
+	if (!(await adapterPathExists(adapter, normalizedTarget))) {
+		return true;
+	}
+	if (typeof adapter.remove === "function") {
+		try {
+			await adapter.remove(normalizedTarget);
+			if (!(await adapterPathExists(adapter, normalizedTarget))) {
+				return true;
+			}
+		} catch {
+			// Try rmdir below when remove cannot delete folders.
+		}
+	}
+	if (typeof adapter.rmdir === "function") {
+		try {
+			await adapter.rmdir(normalizedTarget, true);
+			if (!(await adapterPathExists(adapter, normalizedTarget))) {
+				return true;
+			}
+		} catch {
+			return false;
+		}
+	}
+	return !(await adapterPathExists(adapter, normalizedTarget));
+}
+
+async function moveVersionDirectory(
+	app: App,
+	bookId: string,
+	fromVersionId: string,
+	toVersionId: string
+): Promise<boolean> {
+	const adapter = getAdapter(app) as VersionDirectoryAdapter | null;
+	if (!adapter) {
+		return false;
+	}
+	const sourceDir = versionDir(bookId, fromVersionId);
+	const targetDir = versionDir(bookId, toVersionId);
+	if (await adapterPathExists(adapter, targetDir)) {
+		return false;
+	}
+	if (typeof adapter.rename === "function") {
+		try {
+			await adapter.rename(sourceDir, targetDir);
+			return true;
+		} catch {
+			// Fall back to copy + remove. Some Windows vault adapters fail on folder rename.
+		}
+	}
+
+	try {
+		if (!(await copyVersionDirectoryContents(adapter, sourceDir, targetDir))) {
+			return false;
+		}
+		if (await removeVersionDirectory(adapter, sourceDir)) {
+			return true;
+		}
+		await removeVersionDirectory(adapter, targetDir);
+		return false;
+	} catch {
+		await removeVersionDirectory(adapter, targetDir);
+		return false;
+	}
+}
+
 export async function createEpubAnnotationVersion(
 	app: App,
 	bookId: unknown,
@@ -644,6 +876,7 @@ export async function createEpubAnnotationVersion(
 	options: {
 		setActive?: boolean;
 		copyFromActive?: boolean;
+		copyFromVersionId?: unknown;
 		initialAnnotations?: unknown[];
 		source?: string;
 	} = {}
@@ -653,6 +886,10 @@ export async function createEpubAnnotationVersion(
 	const versionId = await getUniqueVersionId(app, safeId, name || "version");
 	const timestamp = now();
 	const source = cleanString(options.source);
+	const copyFromVersionId = cleanString(options.copyFromVersionId)
+		? safeEpubAnnotationVersionId(options.copyFromVersionId)
+		: "";
+	const sourceVersionId = copyFromVersionId || (options.copyFromActive ? active.activeVersionId : "");
 	const metadata: AnnotationVersionPayload = {
 		format: ANNOTATION_VERSION_FORMAT,
 		version: 1,
@@ -663,8 +900,8 @@ export async function createEpubAnnotationVersion(
 		updatedAt: timestamp,
 		...(source ? { source } : {}),
 	};
-	const copied = options.copyFromActive
-		? await readActiveEpubAnnotationVersionAnnotations(app, safeId)
+	const copied = sourceVersionId
+		? await readVersionAnnotations(app, safeId, sourceVersionId)
 		: null;
 	const payload: PortableAnnotationsPayload = {
 		format: ANNOTATIONS_FORMAT,
@@ -679,8 +916,8 @@ export async function createEpubAnnotationVersion(
 
 	await writeVersionMetadata(app, metadata);
 	await writeVersionAnnotations(app, safeId, versionId, payload);
-	if (options.copyFromActive) {
-		await copyActiveSemanticProfileToVersion(app, safeId, active.activeVersionId, versionId);
+	if (sourceVersionId) {
+		await copySemanticProfileToVersion(app, safeId, sourceVersionId, versionId);
 	}
 	if (options.setActive) {
 		await switchEpubAnnotationVersion(app, safeId, versionId);
@@ -760,11 +997,61 @@ export async function renameEpubAnnotationVersion(
 	if (!metadata) {
 		return false;
 	}
+	const timestamp = now();
+	const nextName = cleanString(name) || metadata.name;
+	let targetVersionId = safeVersionId === DEFAULT_VERSION_ID
+		? safeVersionId
+		: await getUniqueRenamedVersionId(app, safeId, safeVersionId, nextName);
+	if (targetVersionId !== safeVersionId) {
+		if (!(await moveVersionDirectory(app, safeId, safeVersionId, targetVersionId))) {
+			return false;
+		}
+		await updateActiveVersionIdReference(app, safeId, safeVersionId, targetVersionId, timestamp);
+		await updateRootSemanticProfileSourceVersionId(app, safeId, safeVersionId, targetVersionId);
+		const semanticProfile = await readVersionSemanticProfile(app, safeId, targetVersionId);
+		if (semanticProfile) {
+			await writeVersionSemanticProfile(app, safeId, targetVersionId, semanticProfile);
+		}
+	}
 	await writeVersionMetadata(app, {
 		...metadata,
-		name: cleanString(name) || metadata.name,
-		updatedAt: now(),
+		versionId: targetVersionId,
+		name: nextName,
+		updatedAt: timestamp,
 	});
+	return true;
+}
+
+async function resetDefaultEpubAnnotationVersion(app: App, bookId: string): Promise<boolean> {
+	const timestamp = now();
+	const metadata = await ensureVersionMetadata(app, bookId, DEFAULT_VERSION_ID, DEFAULT_VERSION_NAME);
+	const emptyAnnotations = createEmptyAnnotationsPayload(bookId, timestamp);
+
+	await writeVersionMetadata(app, {
+		...metadata,
+		versionId: DEFAULT_VERSION_ID,
+		name: DEFAULT_VERSION_NAME,
+		updatedAt: timestamp,
+	});
+	await writeVersionAnnotations(app, bookId, DEFAULT_VERSION_ID, emptyAnnotations);
+
+	const active = normalizeActiveVersionPayload(
+		await readJson(app, bookPath(bookId, "active-version.json")),
+		bookId
+	);
+	if (!active || active.activeVersionId === DEFAULT_VERSION_ID) {
+		await writeJson(app, bookPath(bookId, "active-version.json"), {
+			...(active || {
+				format: ACTIVE_VERSION_FORMAT,
+				version: 1,
+				bookId,
+				activeVersionId: DEFAULT_VERSION_ID,
+			}),
+			activeVersionId: DEFAULT_VERSION_ID,
+			updatedAt: timestamp,
+		});
+		await writeRootAnnotations(app, bookId, emptyAnnotations);
+	}
 	return true;
 }
 
@@ -775,13 +1062,13 @@ export async function deleteEpubAnnotationVersion(
 ): Promise<boolean> {
 	const safeId = await resolveCanonicalEpubAnnotationBookId(app, bookId);
 	const safeVersionId = safeEpubAnnotationVersionId(versionId);
-	if (!safeVersionId || safeVersionId === DEFAULT_VERSION_ID) {
+	if (!safeVersionId) {
 		return false;
 	}
-	const adapter = getAdapter(app) as (DataAdapter & {
-		remove?: (normalizedPath: string) => Promise<void>;
-		rmdir?: (normalizedPath: string, recursive?: boolean) => Promise<void>;
-	}) | null;
+	if (safeVersionId === DEFAULT_VERSION_ID) {
+		return resetDefaultEpubAnnotationVersion(app, safeId);
+	}
+	const adapter = getAdapter(app) as VersionDirectoryAdapter | null;
 	if (!adapter) {
 		return false;
 	}
@@ -795,11 +1082,7 @@ export async function deleteEpubAnnotationVersion(
 	if (!exists) {
 		return false;
 	}
-	if (typeof adapter.remove === "function") {
-		await adapter.remove(targetDir);
-	} else if (typeof adapter.rmdir === "function") {
-		await adapter.rmdir(targetDir, true);
-	} else {
+	if (!(await removeVersionDirectory(adapter, targetDir))) {
 		return false;
 	}
 	if (active?.activeVersionId === safeVersionId) {

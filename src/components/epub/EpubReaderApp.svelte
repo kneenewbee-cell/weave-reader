@@ -2537,6 +2537,7 @@
 		referencePopoverInfo = null;
 		referencePopoverStats = null;
 		closeCommentEditor();
+		previewThoughtAnchor(info);
 		highlightToolbarInfo = info;
 		highlightToolbarCanvasAttached =
 			hasCanvasExcerptCapability() &&
@@ -2564,6 +2565,16 @@
 		}
 		readerService.clearHighlightFocus(activeAnnotationPreviewCfiRange);
 		activeAnnotationPreviewCfiRange = null;
+	}
+
+	function previewThoughtAnchor(info: HighlightClickInfo, durationMs = 5000): void {
+		if (info.presentation !== 'thought' || !info.cfiRange) {
+			return;
+		}
+		readerService.previewHighlightFocus(info.cfiRange, '#111111', durationMs, {
+			textHint: info.text,
+			chapterIndex: info.chapterIndex
+		});
 	}
 
 	function handleAnnotationCandidateSelect(candidate: AnnotationDisambiguationCandidate): void {
@@ -6012,6 +6023,7 @@
 				closeAnnotationDisambiguation();
 				referencePopoverInfo = null;
 				referencePopoverStats = null;
+				previewThoughtAnchor(info, 7000);
 				openCommentEditor(info);
 				return;
 			}

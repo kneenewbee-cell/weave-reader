@@ -72,6 +72,7 @@
 			? []
 			: (activeSemanticEntries(semanticSettings || {}) as EpubAnnotationSemantic[])
 	);
+	let isThought = $derived(Boolean(info && info.presentation === 'thought'));
 	const isMobileToolbar = Platform.isMobile || activeDocument.body.classList.contains('is-mobile');
 	const LEGACY_SEMANTIC_COLOR_ALIASES: Record<string, string> = {
 		cyan: 'teal',
@@ -286,6 +287,61 @@
 						<button class="clickable-icon action-item accent concealment-reset" onclick={() => onDelete(info)} title={t('epub.highlightToolbar.resetHiddenTitle')}>
 							<span class="action-icon" use:icon={'eye'}></span>
 							<span class="action-label">{t('epub.highlightToolbar.resetHidden')}</span>
+						</button>
+					</div>
+				</div>
+			</div>
+		{:else if isThought}
+			<div class="highlight-main-row">
+				{#if semanticPickerOpen}
+					<div
+						class="toolbar-row highlight-semantic-picker-row"
+						class:weave-epub-expert-semantic-row={readerUiMode === 'expert'}
+						class:weave-epub-standard-semantic-row={readerUiMode !== 'expert'}
+					>
+						{#each activeSemantics as semantic (semantic.id)}
+							<button
+								class="clickable-icon action-item weave-epub-semantic-chip"
+								class:weave-epub-standard-semantic-btn={readerUiMode !== 'expert'}
+								data-semantic-id={semantic.id}
+								data-semantic-style={getSemanticPreviewStyle(semantic)}
+								style={`--weave-semantic-color: ${getSemanticColorHex(semantic.color)};`}
+								title={getSemanticTitle(semantic)}
+								aria-label={semantic.label || semantic.id}
+								onclick={() => handleSemanticClick(info, semantic)}
+							>
+								<span class="action-icon weave-epub-semantic-dot"></span>
+								<span class="action-label weave-epub-semantic-label">{semantic.label}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
+				<div class="highlight-actions-shell">
+					<div class="toolbar-row actions-row highlight-actions-row thought-actions-row">
+						<button
+							class="clickable-icon action-item comment-action thought-edit-action accent"
+							onclick={() => onEditComment(info)}
+							title={t('epub.highlightToolbar.commentTitle')}
+							aria-label={t('epub.highlightToolbar.commentTitle')}
+						>
+							<span class="action-icon" use:icon={'message-square'}></span>
+							<span class="action-label">编辑想法</span>
+						</button>
+						<button
+							class="clickable-icon action-item thought-convert-action"
+							class:accent={semanticPickerOpen}
+							disabled={activeSemantics.length === 0}
+							onclick={() => void toggleSemanticPicker()}
+							title="转为标注"
+							aria-label="转为标注"
+						>
+							<span class="action-icon" use:icon={'tags'}></span>
+							<span class="action-label">转为标注</span>
+						</button>
+						<div class="row-divider"></div>
+						<button class="clickable-icon action-item delete delete-action" onclick={() => onDelete(info)} title={t('epub.highlightToolbar.deleteTitle')}>
+							<span class="action-icon" use:icon={'trash-2'}></span>
+							<span class="action-label">删除想法</span>
 						</button>
 					</div>
 				</div>

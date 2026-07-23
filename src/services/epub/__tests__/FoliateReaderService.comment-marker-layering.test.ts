@@ -301,6 +301,42 @@ describe("FoliateReaderService comment marker layering", () => {
 		).toBe("#111111");
 	});
 
+	it("places standalone thought markers beside the final text rect instead of inside the text", () => {
+		const renderer = new ReaderAnnotationOverlayRenderer({
+			resolveHighlightTint: vi.fn((color?: string) => color || "rgb(250, 204, 21)"),
+			getObsidianCSSVar: vi.fn((_name: string, fallback: string) => fallback),
+			getConcealmentPalette: vi.fn(() => ({
+				base: "#ffffff",
+				border: "#111111",
+				stripe: "#dddddd",
+			})),
+			onCommentMarkerClick: vi.fn(),
+			onReferenceBadgeClick: vi.fn(),
+		});
+
+		const overlay = renderer.createCompositeAnnotationOverlay(
+			createReaderFoliateAnnotation({
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Thought source",
+				commentText: "Thought body",
+				hasCommentDivider: true,
+				presentation: "thought",
+			}),
+			[
+				{ left: 10, top: 10, width: 64, height: 18 },
+				{ left: 10, top: 32, width: 84, height: 18 },
+			]
+		);
+
+		const bubble = overlay.querySelector('[data-weave-comment-marker="bubble"]');
+		const hitArea = overlay.querySelector('[data-weave-comment-marker="hit-area"]');
+		expect(bubble).not.toBeNull();
+		expect(hitArea).not.toBeNull();
+		expect(Number(bubble?.getAttribute("x"))).toBeGreaterThanOrEqual(96);
+		expect(Number(hitArea?.getAttribute("x"))).toBeGreaterThanOrEqual(94);
+	});
+
 	it("draws source-locate focus as a visible translucent box over an existing styled annotation", () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {

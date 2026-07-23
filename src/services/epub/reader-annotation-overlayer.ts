@@ -238,12 +238,13 @@ export class ReaderAnnotationOverlayRenderer {
 		group.setAttribute("data-weave-comment-marker", "group");
 		const rectList = rects as RawViewportRect[];
 		const anchorRect = createViewportRectFromRawRectList(rectList);
+		const isThought = annotation.presentation === "thought";
 		const targetRect = [...rectList].reverse().find((rect) => rect.width > 0 && rect.height > 0);
 		if (!targetRect) {
 			return group;
 		}
 
-		const accentColor = annotation.presentation === "thought"
+		const accentColor = isThought
 			? THOUGHT_MARKER_COLOR
 			: annotation.color
 			? this.ports.resolveHighlightTint(annotation.color)
@@ -267,11 +268,16 @@ export class ReaderAnnotationOverlayRenderer {
 			availableWidth
 		);
 		const cornerRadius = Math.max(4.2, Math.min(6.6, bubbleBodyHeight * 0.5));
-		const badgeX = Math.max(
-			targetRect.left + inset,
-			targetRect.left + targetRect.width - badgeWidth - inset
-		);
-		const badgeY = targetRect.top + inset;
+		const outsideGap = Math.max(2, Math.min(4, targetRect.height * 0.18));
+		const badgeX = isThought
+			? targetRect.left + targetRect.width + outsideGap
+			: Math.max(
+				targetRect.left + inset,
+				targetRect.left + targetRect.width - badgeWidth - inset
+			);
+		const badgeY = isThought
+			? Math.max(0, targetRect.top - Math.max(1, bubbleBodyHeight * 0.28))
+			: targetRect.top + inset;
 		const bubbleBackdrop = activeDocument.createElementNS(SVG_NS, "rect");
 		bubbleBackdrop.setAttribute("data-weave-comment-marker", "backdrop");
 		bubbleBackdrop.setAttribute("x", String(badgeX));
@@ -362,10 +368,14 @@ export class ReaderAnnotationOverlayRenderer {
 		stickerHighlight.setAttribute("fill-opacity", "0.78");
 		setSvgInteractionAttributes(stickerHighlight, { pointerEvents: "none" });
 
-		const hitAreaX = Math.max(targetRect.left, badgeX - 1.5);
-		const hitAreaY = Math.max(targetRect.top, badgeY - 1.5);
-		const hitAreaRight = Math.min(targetRect.left + targetRect.width, badgeX + badgeWidth + 1.5);
-		const hitAreaBottom = Math.min(targetRect.top + targetRect.height, badgeY + bubbleHeight + 2);
+		const hitAreaX = isThought ? badgeX - 2 : Math.max(targetRect.left, badgeX - 1.5);
+		const hitAreaY = isThought ? Math.max(0, badgeY - 2) : Math.max(targetRect.top, badgeY - 1.5);
+		const hitAreaRight = isThought
+			? badgeX + badgeWidth + 2
+			: Math.min(targetRect.left + targetRect.width, badgeX + badgeWidth + 1.5);
+		const hitAreaBottom = isThought
+			? badgeY + bubbleHeight + 2
+			: Math.min(targetRect.top + targetRect.height, badgeY + bubbleHeight + 2);
 		const hitArea = activeDocument.createElementNS(SVG_NS, "rect");
 		hitArea.setAttribute("data-weave-comment-marker", "hit-area");
 		hitArea.setAttribute("x", String(hitAreaX));

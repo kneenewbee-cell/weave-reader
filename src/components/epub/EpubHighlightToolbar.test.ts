@@ -180,4 +180,54 @@ describe('EpubHighlightToolbar', () => {
       expect.objectContaining({ id: 'definition' })
     );
   });
+
+  it('shows thought-specific actions without normal annotation controls for standalone thoughts', async () => {
+    const onChangeSemantic = vi.fn();
+    const onEditComment = vi.fn();
+    const onDelete = vi.fn();
+    const { container } = render(EpubHighlightToolbar, {
+      props: {
+        info: {
+          ...createInfo(),
+          presentation: 'thought',
+          commentText: '独立想法',
+          hasCommentDivider: true,
+        },
+        readerService: createReaderService(),
+        semanticSettings: createSemanticSettings(),
+        canvasAttached: true,
+        onDelete,
+        onTemporarilyReveal: vi.fn(),
+        onChangeSemantic,
+        onEditComment,
+        onAddToCanvas: vi.fn(),
+        onRemoveFromCanvas: vi.fn(),
+        onCopyText: vi.fn(),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.epub-highlight-toolbar.visible')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.semantic-action')).toBeNull();
+    expect(container.querySelector('.canvas-action')).toBeNull();
+    expect(container.querySelector('.thought-edit-action')).toBeInTheDocument();
+    expect(container.querySelector('.thought-convert-action')).toBeInTheDocument();
+    expect(container.querySelector('.delete-action')).toBeInTheDocument();
+
+    await fireEvent.click(container.querySelector('.thought-edit-action') as HTMLElement);
+    expect(onEditComment).toHaveBeenCalledWith(expect.objectContaining({ presentation: 'thought' }));
+
+    await fireEvent.click(container.querySelector('.thought-convert-action') as HTMLElement);
+    const semanticRow = container.querySelector('.highlight-semantic-picker-row');
+    expect(semanticRow).toBeInTheDocument();
+
+    await fireEvent.click(container.querySelector('[data-semantic-id="definition"]') as HTMLElement);
+    expect(onChangeSemantic).toHaveBeenCalledWith(
+      expect.objectContaining({ presentation: 'thought' }),
+      expect.objectContaining({ id: 'definition' })
+    );
+  });
 });

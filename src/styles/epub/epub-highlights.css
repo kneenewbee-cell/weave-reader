@@ -3215,6 +3215,147 @@ body.is-mobile .epub-selected-text-ai-panel-slot :global(.weave-ai-card-panel .c
 	color: var(--text-error);
 }
 
+.weave-annotation-version-recursive-menu {
+	position: fixed;
+	z-index: 100000;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-sizing: border-box;
+	min-width: 220px;
+	max-width: min(320px, calc(100vw - 16px));
+	padding: 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.weave-annotation-version-recursive-menu[hidden] {
+	display: none;
+}
+
+.weave-annotation-version-recursive-menu__item {
+	appearance: none;
+	-webkit-appearance: none;
+	display: grid;
+	grid-template-columns: 18px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 34px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.3;
+	text-align: left;
+}
+
+.weave-annotation-version-recursive-menu__item:hover,
+.weave-annotation-version-recursive-menu__item:focus-visible {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.weave-annotation-version-recursive-menu__icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	color: var(--text-muted);
+}
+
+.weave-annotation-version-recursive-menu__icon .svg-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.weave-annotation-version-recursive-menu__label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.weave-annotation-version-recursive-menu__trailing {
+	color: var(--text-muted);
+	font-size: 16px;
+	line-height: 1;
+}
+
+.weave-annotation-version-recursive-menu__empty {
+	padding: 8px 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+}
+
+.weave-annotation-version-name-modal .modal {
+	width: min(100%, 420px);
+}
+
+.weave-annotation-version-name-shell {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-4);
+}
+
+.weave-annotation-version-name-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+
+.weave-annotation-version-name-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+}
+
+.weave-annotation-version-name-input {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: var(--input-height);
+	padding: var(--size-2-3) var(--size-4-2);
+	border: var(--input-border-width) solid var(--background-modifier-border);
+	border-radius: var(--input-radius);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-medium);
+	line-height: 1.45;
+}
+
+.weave-annotation-version-name-input:hover {
+	border-color: var(--background-modifier-border-hover);
+}
+
+.weave-annotation-version-name-input:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.weave-annotation-version-name-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--size-4-2);
+}
+
+.weave-annotation-version-name-actions button {
+	min-width: 72px;
+}
+
+.weave-annotation-version-name-actions button.mod-cta:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
 .weave-annotation-version-list {
 	display: flex;
 	flex-direction: column;
