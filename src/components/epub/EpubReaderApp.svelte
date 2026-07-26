@@ -125,6 +125,7 @@
 	import { shouldIgnoreEpubReaderShortcut } from '../../utils/epub-reader-keyboard-guards';
 	import { shouldDismissToolbarOnPointerDown } from './toolbar-positioning';
 	import { buildEpubMarkdownLocateCandidates } from '../../services/ui/source-locate-candidates';
+	import type { AIConfigHost } from '../../services/ai/ai-host';
 	import { attachExternalHighlightSyncReload } from './external-highlight-sync-reload';
 	import {
 		attachEpubCardHighlightSyncBridge,
@@ -142,6 +143,8 @@
 	interface Props {
 		app: App;
 		filePath: string;
+		aiConfigHost?: AIConfigHost | null;
+		aiReadingEnvPaths?: string[];
 		annotationCompare?: EpubAnnotationCompareContext | null;
 		annotationCompareContextSourceId?: string;
 		pendingLocate?: PendingLocateState | null;
@@ -170,6 +173,7 @@
 			navigateToCfi: (cfi: string, linkTextHint?: string) => void;
 			toggleTutorial: () => void;
 			addBookmark: () => Promise<void>;
+			openAiReading: () => Promise<void>;
 			canUseReadingProgress?: () => boolean;
 			canUseReadingReference?: () => boolean;
 			canUseParagraphMode?: () => boolean;
@@ -207,6 +211,8 @@
 	let { 
 		app, 
 		filePath, 
+		aiConfigHost = null,
+		aiReadingEnvPaths = [],
 		annotationCompare = null,
 		annotationCompareContextSourceId = '',
 		pendingLocate = null,
@@ -5327,6 +5333,50 @@
 		}
 	}
 
+	async function openAiReading() {
+		try {
+			if (!book) {
+				new Notice(t('epub.reader.bookNotReady'));
+				return;
+			}
+			const chapterHref = readerService.getCurrentChapterHref?.() || '';
+			const titleHint = readerService.getCurrentChapterTitle() || book.metadata.title || t('epub.reader.epubChapterDefaultTitle');
+			if (!chapterHref) {
+				new Notice(t('epub.reader.chapterLocateFailed'));
+				return;
+			}
+			const draft = await readerService.getChapterReadingPointDraft?.(chapterHref, titleHint);
+			if (!draft?.text?.trim()) {
+				new Notice(t('epub.reader.chapterExtractFailed'));
+				return;
+			}
+			const tocItems = await getAnnotationTocItems();
+			const { EpubAiReadingModal } = await import('./EpubAiReadingModal');
+			new EpubAiReadingModal(app, {
+				configHost: aiConfigHost,
+				envPathCandidates: aiReadingEnvPaths,
+				input: {
+					filePath,
+					bookTitle: book.metadata.title,
+					author: book.metadata.author,
+					chapterTitle: draft.title || titleHint,
+					chapterHref: draft.chapterHref || chapterHref,
+					chapterText: draft.text,
+					chapterMarkdown: draft.markdown,
+					tocItems,
+					sourceLink: buildChapterReadingPointSourceLink(
+						draft.title || titleHint,
+						draft.cfi,
+						draft.chapterIndex
+					),
+				},
+			}).open();
+		} catch (error) {
+			logger.error('[EpubReaderApp] Failed to open AI reading:', error);
+			new Notice(`AI阅读打开失败：${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	async function exportChapterMarkedDraftToMarkdown(
 		draft: EpubChapterReadingPointDraft,
 		titleHint: string,
@@ -7734,6 +7784,7 @@
 			navigateToCfi,
 			toggleTutorial,
 			addBookmark,
+			openAiReading,
 			canUseReadingProgress: hasReadingProgressCapability,
 			canUseReadingReference: hasReadingReferenceCapability,
 			canUseParagraphMode: hasParagraphModeCapability,

@@ -1,0 +1,207 @@
+.weave-epub-ai-reading-modal-host {
+	width: min(920px, calc(100vw - 48px)) !important;
+	max-width: calc(100vw - 48px) !important;
+	overflow-x: hidden !important;
+}
+
+.weave-epub-ai-reading-modal-host .modal-content,
+.weave-epub-ai-reading-modal-host .weave-epub-ai-reading-modal {
+	max-width: 100% !important;
+	overflow-x: hidden !important;
+}
+
+.weave-epub-ai-reading-modal {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	width: 100%;
+	max-width: 100%;
+	max-height: 82vh;
+	overflow-x: hidden;
+	box-sizing: border-box;
+	min-width: 0;
+}
+
+.weave-epub-ai-reading-modal * {
+	box-sizing: border-box;
+}
+
+.weave-epub-ai-reading-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.weave-epub-ai-reading-title-wrap {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.weave-epub-ai-reading-title-wrap h2 {
+	margin: 0;
+	font-size: 18px;
+	line-height: 1.3;
+}
+
+.weave-epub-ai-reading-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--interactive-accent);
+}
+
+.weave-epub-ai-reading-close {
+	width: 32px;
+	height: 32px;
+}
+
+.weave-epub-ai-reading-status,
+.weave-epub-ai-reading-meta {
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.5;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.weave-epub-ai-reading-meta {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 2px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+	min-width: 0;
+	max-width: 100%;
+	white-space: normal;
+	overflow-x: hidden;
+}
+
+.weave-epub-ai-reading-meta > * {
+	min-width: 0;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+.weave-epub-ai-reading-source-link {
+	width: fit-content;
+	max-width: 100%;
+	color: var(--text-accent);
+	text-decoration: none;
+	overflow-wrap: anywhere;
+}
+
+.weave-epub-ai-reading-source-link:hover {
+	text-decoration: underline;
+}
+
+.weave-epub-ai-reading-result {
+	min-height: 220px;
+	max-height: min(56vh, 620px);
+	overflow-x: hidden;
+	overflow-y: auto;
+	padding: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+	min-width: 0;
+	max-width: 100%;
+}
+
+.weave-epub-ai-reading-result > * {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.weave-epub-ai-reading-result h1,
+.weave-epub-ai-reading-result h2,
+.weave-epub-ai-reading-result h3 {
+	line-height: 1.35;
+}
+
+.weave-epub-ai-reading-result :where(p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, a) {
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+.weave-epub-ai-reading-result :where(ul, ol) {
+	padding-inline-start: 1.5em;
+}
+
+.weave-epub-ai-reading-result table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+}
+
+.weave-epub-ai-reading-result th,
+.weave-epub-ai-reading-result td {
+	white-space: normal;
+}
+
+.weave-epub-ai-reading-result pre {
+	max-width: 100%;
+	overflow-x: auto;
+	white-space: pre;
+}
+
+.weave-epub-ai-reading-result pre code {
+	white-space: pre;
+	word-break: normal;
+	overflow-wrap: normal;
+}
+
+.weave-epub-ai-reading-result :not(pre) > code {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+.weave-epub-ai-reading-error {
+	color: var(--text-error);
+}
+
+.weave-epub-ai-reading-fallback,
+.weave-epub-ai-reading-stream {
+	margin: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-family: var(--font-text);
+	font-size: var(--font-text-size);
+	line-height: 1.6;
+}
+
+.weave-epub-ai-reading-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+	.weave-epub-ai-reading-modal-host {
+		width: 94vw !important;
+		max-width: 94vw !important;
+	}
+
+	.weave-epub-ai-reading-modal {
+		width: 100%;
+		max-height: 88vh;
+	}
+
+	.weave-epub-ai-reading-actions {
+		justify-content: stretch;
+	}
+
+	.weave-epub-ai-reading-actions button {
+		flex: 1 1 160px;
+	}
+}

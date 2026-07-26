@@ -10,6 +10,7 @@ function enhanceDiv<T extends HTMLDivElement>(div: T) {
 	const el = div as T & {
 		empty: () => void;
 		addClass: (...classes: string[]) => void;
+		toggleClass: (name: string, force?: boolean) => void;
 		createDiv: (options?: string | { cls?: string | string[]; text?: string | DocumentFragment }) => HTMLDivElement;
 	};
 	el.empty = () => {
@@ -17,6 +18,9 @@ function enhanceDiv<T extends HTMLDivElement>(div: T) {
 	};
 	el.addClass = (...classes: string[]) => {
 		el.classList.add(...classes);
+	};
+	el.toggleClass = (name: string, force?: boolean) => {
+		el.classList.toggle(name, force);
 	};
 	el.createDiv = (options) => {
 		const child = enhanceDiv(document.createElement('div'));
@@ -127,6 +131,7 @@ vi.mock('obsidian', () => {
 		Platform: { isMobile: true },
 		TFile: class {},
 		WorkspaceLeaf: class {},
+		normalizePath: (path: string) => path.replace(/\\/g, '/'),
 		setIcon: vi.fn(),
 	};
 });
@@ -188,7 +193,7 @@ describe('EpubView', () => {
 		expect(button.classList.contains('epub-view-action-hidden')).toBe(false);
 	});
 
-	it('hides canvas actions when canvas excerpt premium capability is unavailable', () => {
+	it('keeps canvas preview actions visible when canvas excerpt capability is unavailable', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		const applyActionButtonState = vi.spyOn(view as any, 'applyActionButtonState');
 
@@ -199,14 +204,14 @@ describe('EpubView', () => {
 		(view as any).updateCanvasBtn();
 
 		expect(applyActionButtonState).toHaveBeenCalledWith((view as any).canvasBtn, expect.objectContaining({
-			visible: false,
+			visible: true,
 		}));
 		expect(applyActionButtonState).toHaveBeenCalledWith((view as any).inlineCanvasBtn, expect.objectContaining({
-			visible: false,
+			visible: true,
 		}));
 	});
 
-	it('shows paragraph mode as a premium preview action when capability is unavailable', () => {
+	it('shows paragraph mode preview action without a locked suffix when capability is unavailable', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		const applyActionButtonState = vi.spyOn(view as any, 'applyActionButtonState');
 
@@ -222,7 +227,7 @@ describe('EpubView', () => {
 			expect.objectContaining({
 				active: false,
 				visible: true,
-				label: expect.stringContaining('🔒'),
+				label: 'views.epubView.label.paragraphModeOn',
 			})
 		);
 		expect(applyActionButtonState).toHaveBeenCalledWith(
@@ -230,7 +235,7 @@ describe('EpubView', () => {
 			expect.objectContaining({
 				active: false,
 				visible: true,
-				label: expect.stringContaining('🔒'),
+				label: 'views.epubView.label.paragraphModeOn',
 			})
 		);
 	});
@@ -286,5 +291,54 @@ describe('EpubView', () => {
 		expect(showPremiumFeaturePreview).toHaveBeenCalledWith(PREMIUM_FEATURES.EPUB_PARAGRAPH_MODE);
 		expect(toggleParagraphMode).not.toHaveBeenCalled();
 		expect((view as any).paragraphModeEnabled).toBe(false);
+	});
+
+	it('adds AI reading to the top level pane menu', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		const openAiReading = vi.fn();
+		const items: Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+			setTitle: (title: string) => unknown;
+			setIcon: (icon: string) => unknown;
+			setChecked: (checked: boolean) => unknown;
+			onClick: (callback: () => void) => unknown;
+		}> = [];
+		const menu = {
+			addSeparator: vi.fn(),
+			addItem: vi.fn((callback: (item: any) => void) => {
+				const item = {
+					setTitle(title: string) {
+						this.title = title;
+						return this;
+					},
+					setIcon(icon: string) {
+						this.icon = icon;
+						return this;
+					},
+					setChecked() {
+						return this;
+					},
+					onClick(click: () => void) {
+						this.click = click;
+						return this;
+					},
+				};
+				items.push(item);
+				callback(item);
+			}),
+		};
+		(view as any).actionHandlers = {
+			openAiReading,
+		};
+
+		(view as any).appendAiReadingPaneMenu(menu);
+
+		const aiMenuItem = items.find((item) => item.title === 'AI阅读');
+		expect(aiMenuItem?.icon).toBe('sparkles');
+		expect(menu.addSeparator).toHaveBeenCalled();
+		aiMenuItem?.click?.();
+		expect(openAiReading).toHaveBeenCalledOnce();
 	});
 });

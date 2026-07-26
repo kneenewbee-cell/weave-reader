@@ -153,6 +153,7 @@ export class EpubView extends ItemView {
 		navigateToCfi?: (cfi: string, linkTextHint?: string) => void;
 		toggleTutorial?: () => void;
 		openAnnotationVersions?: () => Promise<void>;
+		openAiReading?: () => Promise<void>;
 		addBookmark?: () => Promise<void>;
 		canUseReadingProgress?: () => boolean;
 		canUseReadingReference?: () => boolean;
@@ -517,6 +518,8 @@ export class EpubView extends ItemView {
 		const excerptSettings = this.actionHandlers.getExcerptSettings?.();
 		const readerSettings = this.actionHandlers.getReaderSettings?.();
 
+		this.appendAiReadingPaneMenu(menu);
+
 		this.appendDualWindowPaneMenu(menu);
 
 		if (readerSettings && this.actionHandlers.updateReaderSettings) {
@@ -565,6 +568,20 @@ export class EpubView extends ItemView {
 		if (typeof menu.close === "function") {
 			menu.close();
 		}
+	}
+
+	private appendAiReadingPaneMenu(menu: Menu): void {
+		if (!this.actionHandlers.openAiReading) {
+			return;
+		}
+		menu.addItem((item) => {
+			item.setTitle("AI阅读");
+			item.setIcon("sparkles");
+			item.onClick(() => {
+				void this.actionHandlers.openAiReading?.();
+			});
+		});
+		menu.addSeparator();
 	}
 
 	private appendDualWindowPaneMenu(menu: Menu): void {
@@ -1797,14 +1814,29 @@ export class EpubView extends ItemView {
 		}
 	}
 
+	private getAiReadingEnvPaths(): string[] {
+		const app = this.app || this.plugin.app;
+		const configDir = normalizePath(String(app?.vault?.configDir || ".obsidian").trim() || ".obsidian");
+		const pluginId = String(
+			(this.plugin as { manifest?: { id?: string } }).manifest?.id || "weave-reader"
+		).trim();
+		return Array.from(new Set([
+			`${configDir}/plugins/${pluginId}/.env`,
+			`${configDir}/plugins/weave-reader/.env`,
+		].map((path) => normalizePath(path))));
+	}
+
 	private buildReaderAppProps(
 		initialPendingLocate: PendingLocateState | null,
 		initialPendingCfi: string,
 		initialPendingText: string
 	) {
+		const app = this.app || this.plugin.app;
 		return {
-			app: this.app,
+			app,
 			filePath: this.filePath,
+			aiConfigHost: this.plugin,
+			aiReadingEnvPaths: this.getAiReadingEnvPaths(),
 			annotationCompare: this.annotationCompare,
 			annotationCompareContextSourceId: this.readerDisplaySyncSourceId,
 			onTitleChange: (title: string) => {
