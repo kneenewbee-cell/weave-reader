@@ -31,6 +31,15 @@ interface EpubAiReadingSection {
 	markdown: string;
 }
 
+interface EpubAiReadingModalDragState {
+	startX: number;
+	startY: number;
+	originLeft: number;
+	originTop: number;
+	width: number;
+	height: number;
+}
+
 const EPUB_AI_READING_SECTION_DEFINITIONS: Array<{
 	key: EpubAiReadingSectionKey;
 	label: string;
@@ -77,6 +86,13 @@ export class EpubAiReadingModal extends Modal {
 	private activeSectionKey: EpubAiReadingSectionKey | null = null;
 	private sectionTabsEl: HTMLElement | null = null;
 	private sectionBodyEl: HTMLElement | null = null;
+	private dragState: EpubAiReadingModalDragState | null = null;
+	private readonly handleDocumentDragMove = (event: MouseEvent): void => {
+		this.updateModalDrag(event);
+	};
+	private readonly handleDocumentDragEnd = (): void => {
+		this.stopModalDrag();
+	};
 
 	constructor(app: App, options: EpubAiReadingModalOptions) {
 		super(app);
@@ -95,6 +111,7 @@ export class EpubAiReadingModal extends Modal {
 
 	onClose(): void {
 		this.getModalHostEl()?.removeClass("weave-epub-ai-reading-modal-host");
+		this.stopModalDrag();
 		this.releaseMarkdownRenderComponent();
 	}
 
@@ -104,6 +121,7 @@ export class EpubAiReadingModal extends Modal {
 
 	private renderShell(): void {
 		const header = this.contentEl.createDiv({ cls: "weave-epub-ai-reading-header" });
+		header.addEventListener("mousedown", (event) => this.startModalDrag(event));
 		const titleWrap = header.createDiv({ cls: "weave-epub-ai-reading-title-wrap" });
 		const iconEl = titleWrap.createSpan({ cls: "weave-epub-ai-reading-icon" });
 		setIcon(iconEl, "sparkles");
@@ -130,6 +148,7 @@ export class EpubAiReadingModal extends Modal {
 			});
 		}
 		this.resultEl = this.contentEl.createDiv({ cls: "weave-epub-ai-reading-result" });
+		this.resultEl.addEventListener("click", (event) => this.handleRenderedSourceLinkClick(event));
 		this.actionsEl = this.contentEl.createDiv({ cls: "weave-epub-ai-reading-actions" });
 		this.renderActions();
 	}
@@ -149,6 +168,12 @@ export class EpubAiReadingModal extends Modal {
 		regenerateButton.addEventListener("click", () => {
 			void this.generateReading();
 		});
+		if (this.noteFile) {
+			const openNoteButton = this.actionsEl.createEl("button", { text: "打开笔记" });
+			openNoteButton.addEventListener("click", () => {
+				void this.openGeneratedNote();
+			});
+		}
 		const noteButton = this.actionsEl.createEl("button", {
 			text: this.noteFile ? "更新并打开笔记" : "生成并打开笔记",
 			cls: "mod-cta",
@@ -348,6 +373,94 @@ export class EpubAiReadingModal extends Modal {
 		this.resultEl.scrollTop = this.resultEl.scrollHeight;
 	}
 
+	private shouldIgnoreDragStart(target: EventTarget | null): boolean {
+		return (
+			target instanceof Element &&
+			Boolean(target.closest("button, a, input, textarea, select, [contenteditable='true']"))
+		);
+	}
+
+	private startModalDrag(event: MouseEvent): void {
+		if (event.button !== 0 || this.shouldIgnoreDragStart(event.target)) {
+			return;
+		}
+		const hostEl = this.getModalHostEl();
+		if (!hostEl) {
+			return;
+		}
+		const rect = hostEl.getBoundingClientRect();
+		this.dragState = {
+			startX: event.clientX,
+			startY: event.clientY,
+			originLeft: rect.left,
+			originTop: rect.top,
+			width: rect.width,
+			height: rect.height,
+		};
+		hostEl.addClass("is-dragging");
+		hostEl.style.position = "fixed";
+		hostEl.style.left = `${Math.round(rect.left)}px`;
+		hostEl.style.top = `${Math.round(rect.top)}px`;
+		hostEl.style.right = "auto";
+		hostEl.style.bottom = "auto";
+		hostEl.style.margin = "0";
+		hostEl.style.transform = "none";
+		document.addEventListener("mousemove", this.handleDocumentDragMove);
+		document.addEventListener("mouseup", this.handleDocumentDragEnd);
+		event.preventDefault();
+	}
+
+	private updateModalDrag(event: MouseEvent): void {
+		if (!this.dragState) {
+			return;
+		}
+		const hostEl = this.getModalHostEl();
+		if (!hostEl) {
+			return;
+		}
+		const maxLeft = Math.max(0, window.innerWidth - this.dragState.width);
+		const maxTop = Math.max(0, window.innerHeight - this.dragState.height);
+		const nextLeft = this.dragState.originLeft + event.clientX - this.dragState.startX;
+		const nextTop = this.dragState.originTop + event.clientY - this.dragState.startY;
+		hostEl.style.left = `${Math.round(Math.min(Math.max(nextLeft, 0), maxLeft))}px`;
+		hostEl.style.top = `${Math.round(Math.min(Math.max(nextTop, 0), maxTop))}px`;
+	}
+
+	private stopModalDrag(): void {
+		if (!this.dragState) {
+			return;
+		}
+		this.dragState = null;
+		this.getModalHostEl()?.removeClass("is-dragging");
+		document.removeEventListener("mousemove", this.handleDocumentDragMove);
+		document.removeEventListener("mouseup", this.handleDocumentDragEnd);
+	}
+
+	private handleRenderedSourceLinkClick(event: MouseEvent): void {
+		const target = event.target;
+		if (!(target instanceof Element)) {
+			return;
+		}
+		const link = target.closest<HTMLAnchorElement>("a");
+		if (!link || !this.isEpubSourceLink(link)) {
+			return;
+		}
+		window.setTimeout(() => this.close(), 0);
+	}
+
+	private isEpubSourceLink(link: HTMLAnchorElement): boolean {
+		const href = link.getAttribute("href") || "";
+		const label = (link.textContent || "").trim();
+		return (
+			/^P\d{3}$/.test(label) ||
+			href.includes("weave-loc=") ||
+			href.includes("weave-cfi=") ||
+			href.includes("weave-epub") ||
+			href.includes("epubcfi(") ||
+			href.includes("sid=epubsrc-")
+		);
+	}
+
 	private openSourceLink(event: MouseEvent): void {
 		const sourceLink = this.input.sourceLink;
 		if (!sourceLink) {
@@ -359,6 +472,7 @@ export class EpubAiReadingModal extends Modal {
 		} catch (error) {
 			logger.warn("[EpubAiReadingModal] Failed to open EPUB source link:", error);
 		}
+		this.close();
 	}
 
 	private resetMarkdownRenderComponent(): Component {
@@ -372,6 +486,22 @@ export class EpubAiReadingModal extends Modal {
 	private releaseMarkdownRenderComponent(): void {
 		this.markdownRenderComponent?.unload();
 		this.markdownRenderComponent = null;
+	}
+
+	private async openGeneratedNote(): Promise<void> {
+		if (!this.noteFile) {
+			return;
+		}
+		try {
+			await openFileWithExistingLeaf(this.app, this.noteFile, {
+				openInNewTab: true,
+				focus: true,
+			});
+			this.setStatus(`已打开 AI 阅读笔记：${this.noteFile.path}`);
+		} catch (error) {
+			logger.error("[EpubAiReadingModal] Failed to open AI reading note:", error);
+			new Notice(`AI 阅读笔记打开失败：${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	private async writeAndOpenNote(): Promise<void> {

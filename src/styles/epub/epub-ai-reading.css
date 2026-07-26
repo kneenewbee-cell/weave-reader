@@ -31,6 +31,16 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
+	cursor: move;
+	user-select: none;
+}
+
+.weave-epub-ai-reading-modal-host.is-dragging {
+	cursor: move;
+}
+
+.weave-epub-ai-reading-modal-host.is-dragging * {
+	user-select: none;
 }
 
 .weave-epub-ai-reading-title-wrap {
