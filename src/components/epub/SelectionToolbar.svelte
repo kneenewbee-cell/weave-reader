@@ -9,6 +9,7 @@
 	import {
 		activeSemanticEntries,
 		normalizeAnnotationStyle,
+		resolveExpertSemanticShortcutEntries,
 		SEMANTIC_COLOR_HEX,
 	} from '../../services/epub';
 	import type {
@@ -145,7 +146,9 @@
 		const standardIds = new Set(semanticSettings.standardSemanticIds || []);
 		return activeSemantics.filter((semantic) => standardIds.has(semantic.id));
 	});
-	let expertSemantics = $derived(activeSemantics);
+	let expertSemantics = $derived.by(() =>
+		resolveExpertSemanticShortcutEntries(activeSemantics, semanticSettings?.expertSemanticLimit) as EpubAnnotationSemantic[]
+	);
 
 	let toolbarEl: HTMLDivElement | undefined = $state(undefined);
 	let isVisible = $state(false);
@@ -380,6 +383,9 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
+		if (key === 'other') {
+			return '#111827';
+		}
 		const canonicalKey = LEGACY_SEMANTIC_COLOR_ALIASES[key] || key;
 		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow;
 	}

@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -16,10 +16,11 @@ import { App } from 'obsidian';
 import SelectionToolbar from './SelectionToolbar.svelte';
 import type { EpubReaderEngine, EpubSemanticSettings } from '../../services/epub';
 
-function createReaderService(): EpubReaderEngine {
+function createReaderService(addHighlight: ReturnType<typeof vi.fn> = vi.fn()): EpubReaderEngine {
   return {
     onSelectionChange: () => () => undefined,
     onHighlightClick: () => () => undefined,
+    addHighlight,
   } as unknown as EpubReaderEngine;
 }
 
@@ -36,6 +37,7 @@ function createSemanticSettings(): EpubSemanticSettings {
   return {
     annotationSemanticsEnabled: true,
     semanticSchemeId: 'test',
+    expertSemanticLimit: 'all',
     standardSemanticIds: entries.map(([id]) => id),
     annotationSemantics: entries.map(([id, label, color, style]) => ({
       id,
@@ -96,14 +98,135 @@ describe('SelectionToolbar', () => {
     expect(container.querySelectorAll('.selection-actions-row > .action-item')).toHaveLength(6);
   });
 
-  it('defines a compact two-row layout for standard mode semantic chips', () => {
+  it('limits expert semantic actions using the configured common-use prefix plus other when entries are hidden', async () => {
+    const settings = {
+      ...createSemanticSettings(),
+      expertSemanticLimit: 3,
+    };
+    const { container } = render(SelectionToolbar, {
+      props: {
+        app: new App(),
+        readerService: createReaderService(),
+        book: null,
+        readerUiMode: 'expert',
+        semanticSettings: settings,
+        boundsEl: createBoundsEl(),
+        externalSelection: {
+          text: 'selected text',
+          cfiRange: '/6/2!/4/2',
+          rect: new DOMRect(120, 80, 180, 24),
+        },
+        onExtractToCard: vi.fn(),
+        onCreateReadingPoint: vi.fn(),
+        onEditThought: vi.fn(),
+        onOpenAIMenu: vi.fn(),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.epub-selection-toolbar.visible')).toBeInTheDocument();
+    });
+
+    expect(Array.from(container.querySelectorAll('.weave-epub-expert-semantic-row [data-semantic-id]')).map((button) =>
+      button.getAttribute('data-semantic-id')
+    )).toEqual(['definition', 'quote', 'theme', 'other']);
+  });
+
+  it('does not append other when the expert limit already shows every active semantic', async () => {
+    const baseSettings = createSemanticSettings();
+    const settings = {
+      ...baseSettings,
+      expertSemanticLimit: 5,
+      annotationSemantics: baseSettings.annotationSemantics.slice(0, 5),
+      standardSemanticIds: baseSettings.standardSemanticIds.slice(0, 5),
+    } satisfies EpubSemanticSettings;
+    const { container } = render(SelectionToolbar, {
+      props: {
+        app: new App(),
+        readerService: createReaderService(),
+        book: null,
+        readerUiMode: 'expert',
+        semanticSettings: settings,
+        boundsEl: createBoundsEl(),
+        externalSelection: {
+          text: 'selected text',
+          cfiRange: '/6/2!/4/2',
+          rect: new DOMRect(120, 80, 180, 24),
+        },
+        onExtractToCard: vi.fn(),
+        onCreateReadingPoint: vi.fn(),
+        onEditThought: vi.fn(),
+        onOpenAIMenu: vi.fn(),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.epub-selection-toolbar.visible')).toBeInTheDocument();
+    });
+
+    expect(Array.from(container.querySelectorAll('.weave-epub-expert-semantic-row [data-semantic-id]')).map((button) =>
+      button.getAttribute('data-semantic-id')
+    )).toEqual(['definition', 'quote', 'theme', 'person', 'event']);
+  });
+
+  it('creates a system other annotation when choosing the expert other shortcut for new text', async () => {
+    const addHighlight = vi.fn();
+    const settings = {
+      ...createSemanticSettings(),
+      expertSemanticLimit: 3,
+    };
+    const { container } = render(SelectionToolbar, {
+      props: {
+        app: new App(),
+        readerService: createReaderService(addHighlight),
+        book: { id: 'book-1' },
+        readerUiMode: 'expert',
+        semanticSettings: settings,
+        boundsEl: createBoundsEl(),
+        externalSelection: {
+          text: 'selected text',
+          cfiRange: '/6/2!/4/2',
+          rect: new DOMRect(120, 80, 180, 24),
+        },
+        onExtractToCard: vi.fn(),
+        onCreateReadingPoint: vi.fn(),
+        onEditThought: vi.fn(),
+        onOpenAIMenu: vi.fn(),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-semantic-id="other"]')).toBeInTheDocument();
+    });
+
+    await fireEvent.click(container.querySelector('[data-semantic-id="other"]') as HTMLElement);
+
+    expect(addHighlight).toHaveBeenCalledWith(expect.objectContaining({
+      cfiRange: '/6/2!/4/2',
+      text: 'selected text',
+      semanticId: 'other',
+      semanticLabel: '其他',
+      color: 'other',
+      style: 'wavy',
+    }));
+  });
+
+  it('defines compact wrapping layouts that shrink when few semantic chips are visible', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/styles/epub/epub-nav-sidebar.css'), 'utf8');
-    const match = css.match(
+    const standardMatch = css.match(
       /\.epub-reader-root\[data-reader-ui-mode="standard"\]\s+\.epub-selection-toolbar\s+\.selection-standard-semantic-row\s*\{(?<body>[^}]+)\}/
     );
+    const expertMatch = css.match(
+      /\.epub-reader-root\[data-reader-ui-mode="expert"\]\s+\.epub-selection-toolbar\s+\.weave-epub-expert-semantic-row\s*\{(?<body>[^}]+)\}/
+    );
 
-    expect(match?.groups?.body).toContain('flex-wrap: wrap');
-    expect(match?.groups?.body).toContain('width: 178px');
-    expect(match?.groups?.body).toContain('max-height: 52px');
+    expect(standardMatch?.groups?.body).toContain('flex-wrap: wrap');
+    expect(standardMatch?.groups?.body).toContain('width: max-content');
+    expect(standardMatch?.groups?.body).toContain('max-width: min(178px, calc(100vw - 24px))');
+    expect(standardMatch?.groups?.body).toContain('max-height: 52px');
+    expect(expertMatch?.groups?.body).toContain('width: max-content');
+    expect(expertMatch?.groups?.body).toContain('max-width: min(178px, calc(100vw - 24px))');
+    expect(expertMatch?.groups?.body).not.toContain('flex: 0 0 178px');
+    expect(css).toContain('.weave-epub-semantic-chip[data-semantic-id="other"]');
   });
 });

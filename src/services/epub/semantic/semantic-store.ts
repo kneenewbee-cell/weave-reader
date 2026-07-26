@@ -24,10 +24,13 @@ export interface EpubAnnotationSemantic {
 	active?: boolean;
 }
 
+export type EpubExpertSemanticLimit = 3 | 5 | "all";
+
 export interface EpubSemanticSettings {
 	annotationSemanticsEnabled: boolean;
 	semanticSchemeId: string;
 	annotationSemantics: EpubAnnotationSemantic[];
+	expertSemanticLimit: EpubExpertSemanticLimit;
 	standardSemanticIds: string[];
 }
 

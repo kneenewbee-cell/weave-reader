@@ -64,6 +64,7 @@ const COLOR_STYLES: Record<string, { highlight: string; line: string }> = {
 	teal: { highlight: "rgba(20, 184, 166, 0.28)", line: "#14b8a6" },
 	green: { highlight: "rgba(34, 197, 94, 0.28)", line: "#22c55e" },
 	slate: { highlight: "rgba(100, 116, 139, 0.25)", line: "#64748b" },
+	other: { highlight: "rgba(17, 24, 39, 0.08)", line: "#111827" },
 	cyan: { highlight: "rgba(20, 184, 166, 0.28)", line: "#14b8a6" },
 	pink: { highlight: "rgba(236, 72, 153, 0.3)", line: "#ec4899" },
 	gray: { highlight: "rgba(100, 116, 139, 0.25)", line: "#64748b" },

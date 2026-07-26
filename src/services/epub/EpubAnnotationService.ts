@@ -24,6 +24,7 @@ import {
 } from "./semantic/semantic-store";
 import {
 	activeSemanticEntries,
+	isOtherSemanticId,
 	resolveAnnotationPresentation,
 	toReaderAnnotationStyle,
 } from "./semantic/profiles";
@@ -287,6 +288,9 @@ export class EpubAnnotationService {
 		}
 		const semanticId = String((annotation as { semanticId?: unknown }).semanticId || "").trim();
 		if (!semanticId || !profile) {
+			return true;
+		}
+		if (isOtherSemanticId(semanticId)) {
 			return true;
 		}
 		return (activeSemanticEntries(profile) as Array<{ id?: unknown }>).some(

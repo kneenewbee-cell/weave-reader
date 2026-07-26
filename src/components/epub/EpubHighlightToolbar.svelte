@@ -4,6 +4,7 @@
 	import { tr } from '../../utils/i18n';
 	import {
 		activeSemanticEntries,
+		limitExpertSemanticEntries,
 		normalizeAnnotationStyle,
 		SEMANTIC_COLOR_HEX,
 	} from '../../services/epub';
@@ -74,7 +75,7 @@
 	);
 	let inlineSemantics = $derived.by(() => {
 		if (readerUiMode === 'expert') {
-			return activeSemantics;
+			return limitExpertSemanticEntries(activeSemantics, semanticSettings?.expertSemanticLimit) as EpubAnnotationSemantic[];
 		}
 		const standardIds = new Set(semanticSettings?.standardSemanticIds || []);
 		return activeSemantics.filter((semantic) => standardIds.has(semantic.id));
@@ -212,6 +213,9 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
+		if (key === 'other') {
+			return '#111827';
+		}
 		const canonicalKey = LEGACY_SEMANTIC_COLOR_ALIASES[key] || key;
 		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}
@@ -306,7 +310,7 @@
 						class:weave-epub-expert-semantic-row={readerUiMode === 'expert'}
 						class:weave-epub-standard-semantic-row={readerUiMode !== 'expert'}
 					>
-						{#each activeSemantics as semantic (semantic.id)}
+						{#each inlineSemantics as semantic (semantic.id)}
 							<button
 								class="clickable-icon action-item weave-epub-semantic-chip"
 								class:weave-epub-standard-semantic-btn={readerUiMode !== 'expert'}
@@ -337,7 +341,7 @@
 						<button
 							class="clickable-icon action-item thought-convert-action"
 							class:accent={semanticPickerOpen}
-							disabled={activeSemantics.length === 0}
+							disabled={inlineSemantics.length === 0}
 							onclick={() => void toggleSemanticPicker()}
 							title="转为标注"
 							aria-label="转为标注"

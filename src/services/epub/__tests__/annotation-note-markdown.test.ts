@@ -194,6 +194,38 @@ describe("annotation-note-markdown", () => {
 		);
 	});
 
+	it("renders the virtual other semantic as a black wavy underline", () => {
+		const markdown = renderEpubAnnotationNoteMarkdown({
+			book: {
+				title: "Other Book",
+				filePath: "Books/other.epub",
+			},
+			bookId: "epub-book-other",
+			annotations: [
+				{
+					id: "other-1",
+					cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:8)",
+					text: "folded text",
+					semanticId: "hidden-semantic",
+				},
+			],
+			semanticProfile: {
+				expertSemanticLimit: 3,
+				semantics: [
+					{ id: "a", label: "A", color: "yellow", style: "highlight" },
+					{ id: "b", label: "B", color: "orange", style: "highlight" },
+					{ id: "c", label: "C", color: "green", style: "highlight" },
+					{ id: "hidden-semantic", label: "Hidden", color: "red", style: "wavy" },
+				],
+			},
+		});
+
+		expect(markdown).toContain('data-semantic-label="其他"');
+		expect(markdown).toContain("text-decoration-style: wavy");
+		expect(markdown).toContain("text-decoration-color: #111827");
+		expect(markdown).not.toContain("text-decoration-color: #facc15");
+	});
+
 	it("renders an empty read-only note when no annotations exist", () => {
 		const markdown = renderEpubAnnotationNoteMarkdown({
 			book: {

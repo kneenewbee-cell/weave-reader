@@ -4,6 +4,20 @@ const PROFILE_VERSION = 1;
 const SEMANTIC_SCHEME_MIN_ITEMS = 1;
 const SEMANTIC_SCHEME_MAX_ITEMS = 12;
 const SEMANTIC_ANNOTATION_STYLE_TOKENS = ["highlight", "underline", "wavy"];
+const EXPERT_SEMANTIC_LIMIT_OPTIONS = [3, 5, "all"];
+const EPUB_OTHER_SEMANTIC_ID = "other";
+const EPUB_OTHER_SEMANTIC = {
+  id: EPUB_OTHER_SEMANTIC_ID,
+  label: "\u5176\u4ed6",
+  color: "other",
+  style: "wavy",
+  group: "system",
+  description: "\u4e13\u5bb6\u6a21\u5f0f\u6298\u53e0\u663e\u793a\u7684\u5176\u4ed6\u8bed\u4e49",
+  showInStandard: false,
+  autoAddToCanvas: false,
+  source: "system",
+  active: true
+};
 const ANNOTATION_STYLE_TOKENS = new Set([
   "highlight",
   "underline",
@@ -207,6 +221,76 @@ function activeSemanticEntries(profile) {
   return semanticEntries(profile).filter((entry) => entry?.active !== false);
 }
 
+function normalizeExpertSemanticLimit(value) {
+  if (value === 3 || value === "3") return 3;
+  if (value === 5 || value === "5") return 5;
+  return "all";
+}
+
+function limitExpertSemanticEntries(entries, limit) {
+  const normalizedLimit = normalizeExpertSemanticLimit(limit);
+  const source = Array.isArray(entries) ? entries : [];
+  return normalizedLimit === "all" ? source : source.slice(0, normalizedLimit);
+}
+
+function cloneOtherSemantic() {
+  return { ...EPUB_OTHER_SEMANTIC };
+}
+
+function isOtherSemanticId(id) {
+  return String(id || "").trim().toLowerCase() === EPUB_OTHER_SEMANTIC_ID;
+}
+
+function resolveExpertSemanticShortcutEntries(entries, limit) {
+  const normalizedLimit = normalizeExpertSemanticLimit(limit);
+  const source = Array.isArray(entries)
+    ? entries.filter((entry) => entry?.active !== false)
+    : [];
+  if (normalizedLimit === "all" || source.length <= normalizedLimit) {
+    return source;
+  }
+  return [...source.slice(0, normalizedLimit), cloneOtherSemantic()];
+}
+
+function resolveExpertSemanticPresentationEntry(profile, semanticId) {
+  const id = String(semanticId || "").trim();
+  if (!id) return null;
+  if (isOtherSemanticId(id)) {
+    return {
+      entry: cloneOtherSemantic(),
+      folded: false,
+      originalSemanticId: EPUB_OTHER_SEMANTIC_ID
+    };
+  }
+
+  const entries = activeSemanticEntries(profile);
+  const entry = entries.find(
+    (candidate) => String(candidate?.id || "").trim() === id
+  );
+  if (!entry) return null;
+
+  const normalizedLimit = normalizeExpertSemanticLimit(profile?.expertSemanticLimit);
+  if (normalizedLimit !== "all" && entries.length > normalizedLimit) {
+    const visible = entries
+      .slice(0, normalizedLimit)
+      .some((candidate) => String(candidate?.id || "").trim() === id);
+    if (!visible) {
+      return {
+        entry: cloneOtherSemantic(),
+        folded: true,
+        originalSemanticId: id,
+        originalEntry: clone(entry)
+      };
+    }
+  }
+
+  return {
+    entry: clone(entry),
+    folded: false,
+    originalSemanticId: id
+  };
+}
+
 function getSemanticScheme(id) {
   const normalized = String(id || "").trim();
   const found = SYSTEM_SEMANTIC_SCHEMES.find(
@@ -338,6 +422,7 @@ function normalizeSemanticSettings(settings = {}) {
     annotationSemanticsEnabled: settings.annotationSemanticsEnabled !== false,
     semanticSchemeId,
     annotationSemantics: orderedEntries,
+    expertSemanticLimit: normalizeExpertSemanticLimit(settings.expertSemanticLimit),
     standardSemanticIds:
       standardSemanticIds.length > 0
         ? standardSemanticIds
@@ -595,6 +680,10 @@ function mergeProfiles(globalProfile = {}, bookProfile = null) {
     bookProfile && hasOwn(bookProfile, "standardSemanticIds")
       ? bookProfile.standardSemanticIds
       : globalStandardIds;
+  const expertSemanticLimit =
+    bookProfile && hasOwn(bookProfile, "expertSemanticLimit")
+      ? bookProfile.expertSemanticLimit
+      : globalProfile?.expertSemanticLimit;
   const enabled =
     bookProfile && hasOwn(bookProfile, "annotationSemanticsEnabled")
       ? bookProfile.annotationSemanticsEnabled !== false
@@ -610,6 +699,7 @@ function mergeProfiles(globalProfile = {}, bookProfile = null) {
     annotationSemanticsEnabled: enabled,
     semanticSchemeId: String(source?.semanticSchemeId || "custom").trim() || "custom",
     semantics: order.map((id) => entriesById.get(id)),
+    expertSemanticLimit: normalizeExpertSemanticLimit(expertSemanticLimit),
     standardSemanticIds: Array.isArray(standardSemanticIds)
       ? standardSemanticIds.map((id) => String(id || "").trim()).filter(Boolean)
       : [],
@@ -675,9 +765,12 @@ function resolveAnnotationPresentation(annotation, profile) {
   if (!annotation || typeof annotation !== "object") return annotation;
   const semanticId = String(annotation.semanticId || "").trim();
   if (!semanticId) return clone(annotation);
-  const entry = semanticEntries(profile).find(
-    (candidate) => String(candidate?.id || "").trim() === semanticId
-  );
+  const presentation = resolveExpertSemanticPresentationEntry(profile, semanticId);
+  const entry = presentation?.entry || (isOtherSemanticId(semanticId)
+    ? cloneOtherSemantic()
+    : semanticEntries(profile).find(
+        (candidate) => String(candidate?.id || "").trim() === semanticId
+      ));
   if (!entry) return clone(annotation);
 
   const resolved = {
@@ -713,6 +806,7 @@ function profileToSettings(profile) {
       };
       return normalizedColor ? { ...normalizedEntry, color: normalizedColor } : normalizedEntry;
     }),
+    expertSemanticLimit: normalizeExpertSemanticLimit(profile?.expertSemanticLimit),
     standardSemanticIds: clone(profile?.standardSemanticIds || [])
   };
 }
@@ -724,6 +818,9 @@ export {
   DEFAULT_EPUB_SEMANTIC_SCHEME,
   DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
   DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
+  EPUB_OTHER_SEMANTIC,
+  EPUB_OTHER_SEMANTIC_ID,
+  EXPERT_SEMANTIC_LIMIT_OPTIONS,
   PROFILE_FORMAT,
   PROFILE_VERSION,
   SEMANTIC_ANNOTATION_STYLE_TOKENS,
@@ -739,11 +836,16 @@ export {
   createSemanticSaveCoordinator,
   getSemanticScheme,
   isSemanticSchemeModified,
+  isOtherSemanticId,
+  limitExpertSemanticEntries,
   mergeProfiles,
   normalizeAnnotationStyle,
+  normalizeExpertSemanticLimit,
   normalizeSemanticSettings,
   profileToSettings,
   resolveAnnotationPresentation,
+  resolveExpertSemanticPresentationEntry,
+  resolveExpertSemanticShortcutEntries,
   semanticEntries,
   toReaderAnnotationStyle,
   toStoredAnnotation

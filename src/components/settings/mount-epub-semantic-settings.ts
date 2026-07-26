@@ -22,6 +22,7 @@ import {
 	isSemanticSchemeModified,
 	loadEffectiveEpubSemanticProfile,
 	normalizeEpubSemanticSettings,
+	normalizeExpertSemanticLimit,
 	notifyEpubSemanticProfileChanged,
 	profileToSettings,
 	readBookEpubSemanticProfile,
@@ -71,6 +72,7 @@ function cloneSemanticSettings(settings: unknown): EpubSemanticSettings {
 		annotationSemanticsEnabled: normalized.annotationSemanticsEnabled,
 		semanticSchemeId: normalized.semanticSchemeId,
 		annotationSemantics: normalized.annotationSemantics.map((semantic) => ({ ...semantic })),
+		expertSemanticLimit: normalized.expertSemanticLimit,
 		standardSemanticIds: [...normalized.standardSemanticIds],
 	};
 }
@@ -202,6 +204,7 @@ async function saveSemanticSettingsForScope(
 	plugin.settings.annotationSemanticsEnabled = normalized.annotationSemanticsEnabled;
 	plugin.settings.semanticSchemeId = normalized.semanticSchemeId;
 	plugin.settings.annotationSemantics = normalized.annotationSemantics;
+	plugin.settings.expertSemanticLimit = normalized.expertSemanticLimit;
 	plugin.settings.standardSemanticIds = normalized.standardSemanticIds;
 	await plugin.saveSettings();
 	await writeGlobalEpubSemanticProfile(plugin.app, normalized);
@@ -372,6 +375,7 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 				annotationSemanticsEnabled: plugin.settings.annotationSemanticsEnabled,
 				semanticSchemeId: plugin.settings.semanticSchemeId || DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
 				annotationSemantics: plugin.settings.annotationSemantics || DEFAULT_EPUB_ANNOTATION_SEMANTICS,
+				expertSemanticLimit: plugin.settings.expertSemanticLimit,
 				standardSemanticIds: plugin.settings.standardSemanticIds || DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
 			});
 			const effective =
@@ -526,6 +530,25 @@ export function mountEpubSemanticSettings(options: MountEpubSemanticSettingsOpti
 					);
 				});
 			});
+
+			if (plugin.settings.readerUiMode === "expert") {
+				const expertLimitSetting = new Setting(body)
+					.setName("\u4e13\u5bb6\u6a21\u5f0f\u5feb\u6377\u8bed\u4e49\u6570\u91cf")
+					.setDesc("\u53ea\u63a7\u5236\u4e13\u5bb6\u6a21\u5f0f\u5de5\u5177\u680f\u9732\u51fa\u7684\u8bed\u4e49\u6309\u94ae\uff1b\u975e\u5168\u90e8\u4e14\u8bed\u4e49\u8d85\u51fa\u6570\u91cf\u65f6\uff0c\u5176\u4f59\u8bed\u4e49\u5728\u6b63\u6587\u6298\u53e0\u663e\u793a\u4e3a\u201c\u5176\u4ed6\u201d\uff0c\u539f\u59cb\u8bed\u4e49\u6570\u636e\u4fdd\u7559\u3002");
+				expertLimitSetting.addDropdown((dropdown) => {
+					dropdown.selectEl.addClass("weave-epub-semantic-expert-limit-select");
+					dropdown.addOption("3", "3 \u4e2a");
+					dropdown.addOption("5", "5 \u4e2a");
+					dropdown.addOption("all", "\u5168\u90e8");
+					dropdown.setValue(String(currentSettings.expertSemanticLimit || "all"));
+					dropdown.setDisabled(!canEdit);
+					dropdown.onChange(async (value) => {
+						const draft = getCurrentDraft();
+						draft.expertSemanticLimit = normalizeExpertSemanticLimit(value);
+						await saveCurrentDraft(draft);
+					});
+				});
+			}
 
 			const list = body.createDiv({ cls: "weave-epub-semantic-settings-list" });
 			const standardIds = new Set(currentSettings.standardSemanticIds);

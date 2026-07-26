@@ -436,7 +436,8 @@
 }
 
 .weave-epub-semantic-book-select,
-.weave-epub-semantic-scheme-select {
+.weave-epub-semantic-scheme-select,
+.weave-epub-semantic-expert-limit-select {
   max-width: min(28rem, 100%);
 }
 

@@ -364,6 +364,9 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
+		if (key === 'other') {
+			return '#111827';
+		}
 		const canonicalKey = key === 'cyan' ? 'teal' : key === 'pink' ? 'magenta' : key === 'gray' ? 'slate' : key;
 		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}

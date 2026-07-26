@@ -3,11 +3,15 @@ import {
 	activeSemanticEntries,
 	applySemanticScheme,
 	DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
+	EPUB_OTHER_SEMANTIC_ID,
 	mergeProfiles,
 	normalizeSemanticSettings,
 	PROFILE_FORMAT,
 	PROFILE_VERSION,
 	profileToSettings,
+	resolveAnnotationPresentation,
+	resolveExpertSemanticPresentationEntry,
+	resolveExpertSemanticShortcutEntries,
 	SEMANTIC_COLOR_HEX,
 	SYSTEM_SEMANTIC_SCHEMES,
 	type EpubSemanticSettings,
@@ -31,6 +35,7 @@ function profilePayload(scope: "global" | "book", settings: EpubSemanticSettings
 		annotationSemanticsEnabled: settings.annotationSemanticsEnabled,
 		semanticSchemeId: settings.semanticSchemeId,
 		semantics: settings.annotationSemantics.map((semantic) => ({ ...semantic })),
+		expertSemanticLimit: settings.expertSemanticLimit,
 		standardSemanticIds: [...settings.standardSemanticIds],
 		updatedAt: 1,
 	};
@@ -124,6 +129,109 @@ describe("semantic color palette", () => {
 		});
 
 		expect(settings.standardSemanticIds).toEqual(ids);
+	});
+
+	it("normalizes the expert mode shortcut semantic count", () => {
+		expect(normalizeSemanticSettings({}).expertSemanticLimit).toBe("all");
+		expect(normalizeSemanticSettings({ expertSemanticLimit: 3 }).expertSemanticLimit).toBe(3);
+		expect(normalizeSemanticSettings({ expertSemanticLimit: 5 }).expertSemanticLimit).toBe(5);
+		expect(normalizeSemanticSettings({ expertSemanticLimit: "all" }).expertSemanticLimit).toBe("all");
+		expect(normalizeSemanticSettings({ expertSemanticLimit: 4 }).expertSemanticLimit).toBe("all");
+	});
+
+	it("adds the virtual other semantic only when a finite expert limit hides entries", () => {
+		const entries = ["s1", "s2", "s3", "s4", "s5", "s6"].map((id) => ({
+			id,
+			label: id,
+			color: "yellow",
+			style: "highlight",
+			active: true,
+		}));
+
+		expect(resolveExpertSemanticShortcutEntries(entries.slice(0, 5), 5).map((entry) => entry.id)).toEqual([
+			"s1",
+			"s2",
+			"s3",
+			"s4",
+			"s5",
+		]);
+		expect(resolveExpertSemanticShortcutEntries(entries, 5).map((entry) => entry.id)).toEqual([
+			"s1",
+			"s2",
+			"s3",
+			"s4",
+			"s5",
+			EPUB_OTHER_SEMANTIC_ID,
+		]);
+		expect(resolveExpertSemanticShortcutEntries(entries, "all").map((entry) => entry.id)).toEqual([
+			"s1",
+			"s2",
+			"s3",
+			"s4",
+			"s5",
+			"s6",
+		]);
+	});
+
+	it("folds hidden expert annotations into other presentation without changing the original id", () => {
+		const settings = normalizeSemanticSettings({
+			expertSemanticLimit: 3,
+			annotationSemantics: ["s1", "s2", "s3", "s4"].map((id) => ({
+				id,
+				label: id,
+				color: id === "s4" ? "red" : "yellow",
+				style: id === "s4" ? "highlight" : "underline",
+				active: true,
+			})),
+			standardSemanticIds: ["s1", "s2", "s3"],
+		});
+
+		expect(resolveExpertSemanticPresentationEntry(settings, "s2")).toEqual(
+			expect.objectContaining({
+				folded: false,
+				originalSemanticId: "s2",
+				entry: expect.objectContaining({ id: "s2", color: "yellow", style: "underline" }),
+			})
+		);
+		expect(resolveExpertSemanticPresentationEntry(settings, "s4")).toEqual(
+			expect.objectContaining({
+				folded: true,
+				originalSemanticId: "s4",
+				entry: expect.objectContaining({ id: EPUB_OTHER_SEMANTIC_ID, label: "其他" }),
+			})
+		);
+	});
+
+	it("applies hidden expert semantic folding when resolving annotation presentation", () => {
+		const settings = normalizeSemanticSettings({
+			expertSemanticLimit: 3,
+			annotationSemantics: [
+				{ id: "s1", label: "s1", color: "yellow", style: "highlight", active: true },
+				{ id: "s2", label: "s2", color: "blue", style: "underline", active: true },
+				{ id: "s3", label: "s3", color: "green", style: "highlight", active: true },
+				{ id: "s4", label: "s4", color: "red", style: "highlight", active: true },
+			],
+			standardSemanticIds: ["s1", "s2", "s3"],
+		});
+
+		expect(
+			resolveAnnotationPresentation(
+				{
+					cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:4)",
+					text: "text",
+					semanticId: "s4",
+				},
+				settings
+			)
+		).toEqual(
+			expect.objectContaining({
+				semanticId: "s4",
+				semanticLabel: "其他",
+				color: "other",
+				style: "wavy",
+				semanticSource: "system",
+			})
+		);
 	});
 
 	it("orders every built-in semantic scheme by common-use priority", () => {

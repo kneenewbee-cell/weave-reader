@@ -52,6 +52,7 @@ function createSemanticProfileStore(options) {
       semantics: normalized.annotationSemantics.map((semantic) => ({
         ...semantic
       })),
+      expertSemanticLimit: normalized.expertSemanticLimit,
       standardSemanticIds: [...normalized.standardSemanticIds],
       updatedAt: now()
     };

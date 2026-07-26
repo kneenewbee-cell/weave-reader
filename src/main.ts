@@ -156,6 +156,7 @@ interface StandaloneEpubPluginSettings {
 	annotationSemanticsEnabled: boolean;
 	semanticSchemeId: string;
 	annotationSemantics: EpubAnnotationSemantic[];
+	expertSemanticLimit: 3 | 5 | "all";
 	standardSemanticIds: string[];
 	semanticSettingsScope: "global" | "book";
 	semanticSettingsBookId: string;
@@ -195,6 +196,7 @@ const DEFAULT_STANDALONE_EPUB_SETTINGS: StandaloneEpubPluginSettings = {
 	annotationSemanticsEnabled: true,
 	semanticSchemeId: DEFAULT_EPUB_SEMANTIC_SCHEME_ID,
 	annotationSemantics: DEFAULT_EPUB_ANNOTATION_SEMANTICS,
+	expertSemanticLimit: "all",
 	standardSemanticIds: DEFAULT_EPUB_STANDARD_SEMANTIC_IDS,
 	semanticSettingsScope: "global",
 	semanticSettingsBookId: "",
@@ -412,11 +414,13 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 			annotationSemanticsEnabled: this.settings.annotationSemanticsEnabled,
 			semanticSchemeId: this.settings.semanticSchemeId,
 			annotationSemantics: this.settings.annotationSemantics,
+			expertSemanticLimit: this.settings.expertSemanticLimit,
 			standardSemanticIds: this.settings.standardSemanticIds,
 		});
 		this.settings.annotationSemanticsEnabled = normalizedSettings.annotationSemanticsEnabled;
 		this.settings.semanticSchemeId = normalizedSettings.semanticSchemeId;
 		this.settings.annotationSemantics = normalizedSettings.annotationSemantics;
+		this.settings.expertSemanticLimit = normalizedSettings.expertSemanticLimit;
 		this.settings.standardSemanticIds = normalizedSettings.standardSemanticIds;
 		this.settings.semanticSettingsScope =
 			this.settings.semanticSettingsScope === "book" ? "book" : "global";

@@ -21,7 +21,7 @@
 	import EpubFootnotePreviewPopover from './EpubFootnotePreviewPopover.svelte';
 	import ReferenceDetailModal from './ReferenceDetailModal.svelte';
 	import EpubPremiumFeaturePopover from './EpubPremiumFeaturePopover.svelte';
-	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, createEpubAnnotationCompareContexts, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureActiveEpubSemanticProfile, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_DUAL_WINDOW_ANNOTATION_EVENT, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubDualWindowSession, getEpubStorageService, isBookCompleted, listEpubAnnotationVersions, loadEffectiveEpubSemanticProfileForVersion, markEpubDualWindowNoteLeaf, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, notifyEpubAnnotationVersionChanged, normalizeEpubAnnotationCompareContext, normalizeEpubAnnotationCompareContextChangeDetail, profileToSettings, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubAnnotationCompareExitPlan, resolveEpubAnnotationPaneCapabilities, resolveEpubDualWindowOpenGuard, resolveEpubDualWindowPanes, resolveEpubHost, resolveEpubWeaveOfficialAPI, restoreEpubDualWindowSessionsFromWorkspace, switchEpubAnnotationVersion, unregisterEpubDualWindowSession, warmEpubAnnotationIndexForPaths, type EpubAnnotationCompareContext, type EpubAnnotationVersionSummary, type EpubDualWindowAnnotationDetail, type EpubDualWindowMode, type EpubOpenDualWindowSession } from '../../services/epub';
+	import { canUseEpubCanvasExcerpts, canUseEpubChapterExport, canUseEpubExcerptNotes, canUseEpubFootnotePreview, canUseEpubParagraphMode, canUseEpubReadingProgress, canUseEpubReadingReference, canUseEpubSourceLocation, canUseEpubStyledExcerpts, createEpubReaderEngine, createEpubAnnotationCompareContexts, DEFAULT_EPUB_EXCERPT_SETTINGS, ensureActiveEpubSemanticProfile, ensureBookSourceLocationAccess, ensureEpubPremiumFeature, EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, EPUB_ANNOTATION_VERSION_CHANGED_EVENT, EPUB_DUAL_WINDOW_ANNOTATION_EVENT, EPUB_OTHER_SEMANTIC, EPUB_OTHER_SEMANTIC_ID, EPUB_READER_UI_MODE_CHANGED_EVENT, EPUB_RUNTIME, EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, EpubAnnotationService, EpubLinkService, EpubLocationMigrationService, SEMANTIC_COLOR_HEX, activeSemanticEntries, applyAnnotationChapterMetadata, flushEpubPendingProgress, getEpubAnnotationIndexService, getEpubBacklinkHighlightService, getEpubHighlightViewSnapshotService, getEpubDualWindowSession, getEpubStorageService, isBookCompleted, listEpubAnnotationVersions, loadEffectiveEpubSemanticProfileForVersion, markEpubDualWindowNoteLeaf, normalizeAnnotationStyle, normalizeEpubReaderUiMode, normalizeEpubSemanticSettings, notifyEpubAnnotationVersionChanged, normalizeEpubAnnotationCompareContext, normalizeEpubAnnotationCompareContextChangeDetail, profileToSettings, readEpubReaderUiModeChange, resolveAnnotationChapterMetadata, resolveDisplayProgress, resolveEpubAnnotationCompareExitPlan, resolveEpubAnnotationPaneCapabilities, resolveEpubDualWindowOpenGuard, resolveEpubDualWindowPanes, resolveEpubHost, resolveEpubWeaveOfficialAPI, resolveExpertSemanticPresentationEntry, restoreEpubDualWindowSessionsFromWorkspace, switchEpubAnnotationVersion, unregisterEpubDualWindowSession, warmEpubAnnotationIndexForPaths, type EpubAnnotationCompareContext, type EpubAnnotationVersionSummary, type EpubDualWindowAnnotationDetail, type EpubDualWindowMode, type EpubOpenDualWindowSession } from '../../services/epub';
 	import { EpubBookmarkService } from '../../services/epub/EpubBookmarkService';
 	import { epubVaultPathsReferToSameBook } from '../../services/epub/epub-vault-path';
 	import { EpubReferenceStatsService } from '../../services/epub/EpubReferenceStatsService';
@@ -377,6 +377,7 @@
 	const annotationUndoStack = new EpubAnnotationUndoStack();
 	let annotationMutationQueue: Promise<void> = Promise.resolve();
 	let annotationVersionRefreshPromise: Promise<void> | null = null;
+	let semanticProfileRefreshPromise: Promise<void> | null = null;
 	let annotationNoteRefreshQueue: Promise<void> = Promise.resolve();
 	let activeAnnotationPreviewCfiRange: string | null = null;
 	let highlightReloadToken = 0;
@@ -1868,6 +1869,7 @@
 	async function refreshSemanticSettings(options?: {
 		reloadHighlights?: boolean;
 		semanticOnly?: boolean;
+		forceReaderReplace?: boolean;
 	}): Promise<void> {
 		const token = ++semanticSettingsLoadToken;
 		try {
@@ -1904,7 +1906,10 @@
 				if (options.semanticOnly && await refreshSemanticPresentationFromCache()) {
 					return;
 				}
-				void reloadHighlights({ invalidateCache: true });
+				void reloadHighlights({
+					invalidateCache: true,
+					forceReaderReplace: options.forceReaderReplace === true,
+				});
 			}
 		} catch (error) {
 			logger.warn('[EpubReaderApp] Failed to load semantic profile:', error);
@@ -1918,6 +1923,9 @@
 		const id = String(semanticId || '').trim();
 		if (!id || semanticSettings.annotationSemanticsEnabled === false) {
 			return null;
+		}
+		if (id === EPUB_OTHER_SEMANTIC_ID) {
+			return { ...EPUB_OTHER_SEMANTIC } as EpubAnnotationSemantic;
 		}
 		return (activeSemanticEntries(semanticSettings) as EpubAnnotationSemantic[])
 			.find((semantic) => String(semantic.id || '').trim() === id) || null;
@@ -1950,16 +1958,21 @@
 	}
 
 	function applySemanticPresentation(highlight: ReaderHighlight): ReaderHighlight {
-		const semantic = findSemanticById(highlight.semanticId);
+		const semanticPresentation = readerUiMode === 'expert'
+			? resolveExpertSemanticPresentationEntry(semanticSettings, highlight.semanticId)
+			: null;
+		const semantic = (semanticPresentation?.entry as EpubAnnotationSemantic | undefined)
+			|| findSemanticById(highlight.semanticId);
 		if (!semantic) {
 			return highlight;
 		}
 		const style = toReaderHighlightStyle(semantic.style);
+		const originalSemanticId = String(highlight.semanticId || '').trim();
 		return {
 			...highlight,
 			color: semantic.color || highlight.color || 'yellow',
 			style,
-			semanticId: semantic.id,
+			semanticId: semanticPresentation?.folded ? originalSemanticId : semantic.id,
 			semanticLabel: semantic.label,
 			semanticGroup: semantic.group || highlight.semanticGroup,
 			semanticDescription: semantic.description || highlight.semanticDescription,
@@ -1991,7 +2004,10 @@
 			pendingLoadedHighlights = highlightsWithStats;
 			trackedHighlightSourceFiles = collectTrackedHighlightSourceFiles(highlightsWithStats);
 			getExcerptPipeline().syncCollectedHighlights(highlightsWithStats);
-			await readerService.applyHighlights(highlightsWithStats, { preserveAnchorCache: true });
+			await readerService.applyHighlights(highlightsWithStats, {
+				preserveAnchorCache: true,
+				forceRepaint: true,
+			});
 			if (componentDisposed || reloadToken !== highlightReloadToken) {
 				return true;
 			}
@@ -2402,6 +2418,9 @@
 
 	function getSemanticColorHex(color?: string): string {
 		const key = String(color || 'yellow').trim().toLowerCase();
+		if (key === 'other') {
+			return '#111827';
+		}
 		const canonicalKey = key === 'cyan' ? 'teal' : key === 'pink' ? 'magenta' : key === 'gray' ? 'slate' : key;
 		return (SEMANTIC_COLOR_HEX as Record<string, string>)[canonicalKey] || (SEMANTIC_COLOR_HEX as Record<string, string>).yellow || '#ffe58a';
 	}
@@ -2998,13 +3017,16 @@
 		}
 	}
 
-	async function refreshOpenAnnotationNoteAfterMutation(annotationBookId: string): Promise<void> {
+	async function refreshOpenAnnotationNoteAfterMutation(
+		annotationBookId: string,
+		options: { force?: boolean } = {}
+	): Promise<void> {
 		const normalizedBookId = String(annotationBookId || '').trim();
 		if (!normalizedBookId || !book?.id) {
 			return;
 		}
 		const notePath = resolveEpubPortableBookDataLocation(normalizedBookId).annotationsMarkdownPath;
-		if (!findOpenAnnotationNoteLeaf(app, notePath)) {
+		if (!options.force && !findOpenAnnotationNoteLeaf(app, notePath)) {
 			return;
 		}
 		const plugin = getMarkdownExportHost();
@@ -3030,10 +3052,13 @@
 		});
 	}
 
-	function queueOpenAnnotationNoteRefresh(annotationBookId: string): void {
+	function queueOpenAnnotationNoteRefresh(
+		annotationBookId: string,
+		options: { force?: boolean } = {}
+	): void {
 		annotationNoteRefreshQueue = annotationNoteRefreshQueue
 			.catch(() => undefined)
-			.then(() => refreshOpenAnnotationNoteAfterMutation(annotationBookId))
+			.then(() => refreshOpenAnnotationNoteAfterMutation(annotationBookId, options))
 			.catch((error) => {
 				logger.warn('[EpubReaderApp] Failed to refresh open annotation note:', error);
 			});
@@ -3600,6 +3625,60 @@
 			await reloadHighlights({ invalidateCache: true, forceReaderReplace: true });
 		}
 		queueOpenAnnotationNoteRefresh(annotationBookId);
+	}
+
+	async function refreshAfterSemanticProfileChanged() {
+		if (semanticProfileRefreshPromise) {
+			await semanticProfileRefreshPromise;
+			return;
+		}
+		semanticProfileRefreshPromise = runSemanticProfileRefresh();
+		try {
+			await semanticProfileRefreshPromise;
+		} finally {
+			semanticProfileRefreshPromise = null;
+		}
+	}
+
+	async function runSemanticProfileRefresh() {
+		if (!book?.id) {
+			await refreshSemanticSettings();
+			return;
+		}
+		const annotationBookId = await syncPortableBookIdForCurrentBook() || getCurrentAnnotationBookId();
+		highlightRefreshKey += 1;
+		highlightReloadToken += 1;
+		pendingCollectedHighlights = null;
+		pendingLoadedHighlights = null;
+		trackedHighlightSourceFiles = new Set<string>();
+		highlightToolbarInfo = null;
+		closeAnnotationDisambiguation();
+		commentEditorInfo = null;
+		commentEditorDraft = '';
+		commentEditorSaving = false;
+		getExcerptPipeline().syncCollectedHighlights([]);
+		try {
+			annotationService.invalidateCollectedHighlightsCache(annotationBookId, filePath);
+			highlightViewSnapshotService.invalidate(annotationBookId, filePath);
+			referenceStatsService.clearCache(filePath);
+			await backlinkService.invalidateHighlightsCacheForEpub(filePath, getBoundCanvasPath());
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to invalidate semantic profile highlight caches:', error);
+		}
+		await refreshSemanticSettings();
+		if (readerReady) {
+			try {
+				await persistCurrentReadingProgress();
+			} catch (error) {
+				logger.warn('[EpubReaderApp] Failed to persist progress before semantic profile reader refresh:', error);
+			}
+			highlightReloading = false;
+			readerReady = false;
+			readerRenderKey += 1;
+		} else {
+			await reloadHighlights({ invalidateCache: true, forceReaderReplace: true });
+		}
+		queueOpenAnnotationNoteRefresh(annotationBookId, { force: true });
 	}
 
 	function hasCreateReadingPointCapability(): boolean {
@@ -7422,6 +7501,7 @@
 		);
 		const handleReaderUiModeChanged = (event: Event) => {
 			readerUiMode = readEpubReaderUiModeChange(event) || getHostReaderUiMode();
+			void refreshSemanticSettings({ reloadHighlights: true, semanticOnly: true });
 			if (readerUiMode === 'minimal') {
 				highlightToolbarInfo = null;
 				closeAnnotationDisambiguation();
@@ -7437,7 +7517,15 @@
 			const detail = (event as CustomEvent<{ scope?: unknown; bookId?: unknown }>).detail || {};
 			const eventScope = String(detail.scope || '').trim();
 			const eventBookId = String(detail.bookId || '').trim();
-			if (eventScope === 'book' && book?.id && eventBookId && eventBookId !== book.id) {
+			const currentSemanticBookId = getCurrentAnnotationBookId();
+			const currentRuntimeBookId = String(book?.id || '').trim();
+			if (
+				eventScope === 'book'
+				&& eventBookId
+				&& currentSemanticBookId
+				&& eventBookId !== currentSemanticBookId
+				&& eventBookId !== currentRuntimeBookId
+			) {
 				return;
 			}
 			if (readerReady) {
@@ -7445,7 +7533,7 @@
 				closeAnnotationDisambiguation();
 				commentEditorInfo = null;
 			}
-			void refreshSemanticSettings({ reloadHighlights: true, semanticOnly: true });
+			void refreshAfterSemanticProfileChanged();
 		};
 		window.addEventListener(EPUB_SEMANTIC_PROFILE_CHANGED_EVENT, handleSemanticProfileChanged);
 		const handleAnnotationVersionChanged = (event: Event) => {

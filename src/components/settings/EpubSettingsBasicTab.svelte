@@ -206,6 +206,7 @@
 
     excerptSettingsVersion;
     t;
+    readerUiMode;
     selectionTranslationCustomProviderCount;
 
     let dispose: (() => void) | undefined;

@@ -44,6 +44,7 @@ function createSemanticSettings(): EpubSemanticSettings {
   return {
     annotationSemanticsEnabled: true,
     semanticSchemeId: 'test',
+    expertSemanticLimit: 'all',
     standardSemanticIds: ['definition'],
     annotationSemantics: [
       {
@@ -187,6 +188,49 @@ describe('EpubHighlightToolbar', () => {
       expect.objectContaining({ semanticId: 'theorem' }),
       expect.objectContaining({ id: 'definition' })
     );
+  });
+
+  it('limits expert semantic change chips using the configured common-use prefix', async () => {
+    const settings = {
+      ...createSemanticSettings(),
+      expertSemanticLimit: 3,
+      annotationSemantics: [
+        ...createSemanticSettings().annotationSemantics,
+        {
+          id: 'question',
+          label: '鐤戦棶',
+          color: 'purple',
+          style: 'underline',
+          group: 'study',
+          description: 'question',
+          active: true,
+        },
+      ],
+    } satisfies EpubSemanticSettings;
+    const { container } = render(EpubHighlightToolbar, {
+      props: {
+        info: { ...createInfo(), semanticId: 'theorem' },
+        readerService: createReaderService(),
+        readerUiMode: 'expert',
+        semanticSettings: settings,
+        onDelete: vi.fn(),
+        onTemporarilyReveal: vi.fn(),
+        onChangeSemantic: vi.fn(),
+        onEditComment: vi.fn(),
+        onCopyText: vi.fn(),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.epub-highlight-toolbar.visible')).toBeInTheDocument();
+    });
+
+    await fireEvent.click(container.querySelector('.semantic-action') as HTMLButtonElement);
+
+    expect(Array.from(container.querySelectorAll('.highlight-inline-semantic-row [data-semantic-id]')).map((button) =>
+      button.getAttribute('data-semantic-id')
+    )).toEqual(['theorem', 'definition', 'method']);
   });
 
   it('keeps standard mode focused on annotation controls before changing semantic highlights', async () => {

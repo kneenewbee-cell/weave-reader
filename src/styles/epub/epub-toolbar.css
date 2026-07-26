@@ -649,6 +649,12 @@ body.styled-scrollbars .epub-paragraph-overlay__text-viewport::-webkit-scrollbar
 	box-shadow: inset 0 -0.14em 0 0 color-mix(in srgb, currentColor 72%, transparent);
 }
 
+.epub-paragraph-overlay__text .weave-paragraph-annotation[data-color="other"] {
+	border: 1px solid color-mix(in srgb, currentColor 72%, transparent);
+	background: color-mix(in srgb, currentColor 6%, transparent);
+	box-shadow: inset 0 -0.12em 0 0 color-mix(in srgb, currentColor 62%, transparent);
+}
+
 .epub-paragraph-overlay__text .weave-paragraph-annotation[data-has-comment="true"]::after {
 	content: '';
 	display: inline-block;
