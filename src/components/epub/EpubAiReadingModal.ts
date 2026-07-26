@@ -40,6 +40,8 @@ interface EpubAiReadingModalDragState {
 	height: number;
 }
 
+const EPUB_AI_READING_BACKDROP_EVENTS = ["pointerdown", "mousedown", "click"] as const;
+
 const EPUB_AI_READING_SECTION_DEFINITIONS: Array<{
 	key: EpubAiReadingSectionKey;
 	label: string;
@@ -93,6 +95,9 @@ export class EpubAiReadingModal extends Modal {
 	private readonly handleDocumentDragEnd = (): void => {
 		this.stopModalDrag();
 	};
+	private readonly handleBackdropDismissEvent = (event: Event): void => {
+		this.preventBackdropDismiss(event);
+	};
 
 	constructor(app: App, options: EpubAiReadingModalOptions) {
 		super(app);
@@ -104,6 +109,7 @@ export class EpubAiReadingModal extends Modal {
 	onOpen(): void {
 		this.contentEl.empty();
 		this.getModalHostEl()?.addClass("weave-epub-ai-reading-modal-host");
+		this.addBackdropDismissGuard();
 		this.contentEl.addClass("weave-epub-ai-reading-modal");
 		this.renderShell();
 		void this.generateReading();
@@ -111,12 +117,36 @@ export class EpubAiReadingModal extends Modal {
 
 	onClose(): void {
 		this.getModalHostEl()?.removeClass("weave-epub-ai-reading-modal-host");
+		this.removeBackdropDismissGuard();
 		this.stopModalDrag();
 		this.releaseMarkdownRenderComponent();
 	}
 
 	private getModalHostEl(): HTMLElement | null {
 		return (this as Modal & { modalEl?: HTMLElement }).modalEl || this.containerEl || null;
+	}
+
+	private addBackdropDismissGuard(): void {
+		for (const eventName of EPUB_AI_READING_BACKDROP_EVENTS) {
+			this.containerEl.addEventListener(eventName, this.handleBackdropDismissEvent, true);
+		}
+	}
+
+	private removeBackdropDismissGuard(): void {
+		for (const eventName of EPUB_AI_READING_BACKDROP_EVENTS) {
+			this.containerEl.removeEventListener(eventName, this.handleBackdropDismissEvent, true);
+		}
+	}
+
+	private preventBackdropDismiss(event: Event): void {
+		const hostEl = this.getModalHostEl();
+		const target = event.target;
+		if (!hostEl || !(target instanceof Node) || hostEl.contains(target)) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		event.stopImmediatePropagation();
 	}
 
 	private renderShell(): void {

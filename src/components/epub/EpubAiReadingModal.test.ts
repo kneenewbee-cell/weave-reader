@@ -79,6 +79,35 @@ describe("EpubAiReadingModal", () => {
 		)).toBe(false);
 	});
 
+	it("does not close when the modal backdrop is clicked", () => {
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "AI reading result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+		});
+		const closeSpy = vi.spyOn(modal, "close");
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+		modal.containerEl.addEventListener("click", () => modal.close());
+		modal.containerEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+		expect(closeSpy).not.toHaveBeenCalled();
+	});
+
 	it("renders returned AI markdown with an Obsidian component host", async () => {
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
