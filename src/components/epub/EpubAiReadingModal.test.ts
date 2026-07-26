@@ -6,6 +6,8 @@ import {
 	requestEpubAiReading,
 	upsertEpubAiReadingNote,
 } from "../../services/epub/epub-ai-reading";
+import { EPUB_AI_READING_ALL_SCOPE_ID } from "../../services/epub/epub-ai-reading-scope";
+import type { TocItem } from "../../services/epub/types";
 import { openFileWithExistingLeaf } from "../../utils/workspace-navigation";
 
 vi.mock("../../services/epub/epub-ai-reading", async (importOriginal) => {
@@ -34,6 +36,33 @@ function createMockFile(path: string): TFile {
 		extension: path.split(".").pop() || "",
 		stat: { size: 0 },
 	});
+}
+
+function createScopeToc(): TocItem[] {
+	return [
+		{
+			id: "chapter-1",
+			label: "第一章",
+			href: "text/ch1.xhtml",
+			level: 1,
+			subitems: [
+				{
+					id: "tools",
+					label: "准备你的 LaTeX 工具",
+					href: "text/ch1.xhtml#tools",
+					level: 2,
+					subitems: [
+						{
+							id: "setup",
+							label: "准备工作",
+							href: "text/ch1.xhtml#setup",
+							level: 3,
+						},
+					],
+				},
+			],
+		},
+	];
 }
 
 describe("EpubAiReadingModal", () => {
@@ -106,6 +135,92 @@ describe("EpubAiReadingModal", () => {
 		modal.containerEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
 		expect(closeSpy).toHaveBeenCalled();
+	});
+
+	it("shows scope selection first when TOC scopes are provided", () => {
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "AI reading result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", "tools", "setup"],
+			resolveScopedInput: vi.fn(),
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		expect(mockedRequestEpubAiReading).not.toHaveBeenCalled();
+		expect(modal.contentEl.textContent || "").toContain("选择 AI 阅读范围");
+		expect(
+			Array.from(modal.contentEl.querySelectorAll("button")).some(
+				(button) => button.textContent === "开始 AI 阅读" && !button.disabled
+			)
+		).toBe(true);
+	});
+
+	it("keeps lower scope controls visible as disabled All after parent All", () => {
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", EPUB_AI_READING_ALL_SCOPE_ID],
+			resolveScopedInput: vi.fn(),
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		const scopeControls = modal.contentEl.querySelectorAll<HTMLSelectElement>(
+			".weave-epub-ai-reading-scope-select"
+		);
+		expect(scopeControls).toHaveLength(3);
+		expect(scopeControls[1].value).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(scopeControls[1].disabled).toBe(false);
+		expect(scopeControls[2].value).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(scopeControls[2].disabled).toBe(true);
+	});
+
+	it("disables generation for the full-book All placeholder", () => {
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			tocItems: createScopeToc(),
+			initialScopeIds: [EPUB_AI_READING_ALL_SCOPE_ID],
+			resolveScopedInput: vi.fn(),
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		const startButton = Array.from(modal.contentEl.querySelectorAll("button")).find(
+			(button) => button.textContent === "开始 AI 阅读"
+		);
+		expect(startButton?.disabled).toBe(true);
+		expect(modal.contentEl.textContent || "").toContain("全书 AI 阅读将在后续版本支持");
 	});
 
 	it("restores an unsaved AI reading result when reopening the same chapter", async () => {

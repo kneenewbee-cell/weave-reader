@@ -178,6 +178,53 @@
 	max-width: 100%;
 }
 
+.weave-epub-ai-reading-scope-picker {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.weave-epub-ai-reading-scope-picker h3 {
+	margin: 0;
+	font-size: 15px;
+	line-height: 1.35;
+}
+
+.weave-epub-ai-reading-scope-row {
+	display: grid;
+	grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.weave-epub-ai-reading-scope-label {
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.4;
+	white-space: nowrap;
+}
+
+.weave-epub-ai-reading-scope-select {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.weave-epub-ai-reading-scope-summary {
+	padding-top: 2px;
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.weave-epub-ai-reading-scope-summary.is-disabled {
+	color: var(--text-warning);
+}
+
 .weave-epub-ai-reading-result h1,
 .weave-epub-ai-reading-result h2,
 .weave-epub-ai-reading-result h3 {

@@ -8,12 +8,22 @@ import {
 	type EpubAiReadingInput,
 	type EpubAiReadingResult,
 } from "../../services/epub/epub-ai-reading";
+import {
+	buildEpubAiReadingScopeLevels,
+	resolveDefaultEpubAiReadingScopeIds,
+	resolveEpubAiReadingScopeSelection,
+	type EpubAiReadingScopeSelection,
+} from "../../services/epub/epub-ai-reading-scope";
+import type { TocItem } from "../../services/epub/types";
 import { logger } from "../../utils/logger";
 
 interface EpubAiReadingModalOptions {
 	input: EpubAiReadingInput;
 	configHost?: EpubAiReadingConfigHost | null;
 	envPathCandidates?: string[];
+	tocItems?: TocItem[];
+	initialScopeIds?: string[];
+	resolveScopedInput?: (scope: EpubAiReadingScopeSelection) => Promise<EpubAiReadingInput | null>;
 }
 
 type EpubAiReadingSectionKey =
@@ -154,8 +164,12 @@ export class EpubAiReadingModal extends Modal {
 	private readonly input: EpubAiReadingInput;
 	private readonly configHost: EpubAiReadingConfigHost | null;
 	private readonly envPathCandidates: string[];
+	private readonly tocItems: TocItem[];
+	private readonly resolveScopedInput: EpubAiReadingModalOptions["resolveScopedInput"];
 	private readonly sessionKey: string;
 	private readonly sessionState: EpubAiReadingSessionState;
+	private selectedScopeIds: string[];
+	private mode: "selecting-scope" | "reading" = "reading";
 	private result: EpubAiReadingResult | null = null;
 	private resultEl: HTMLElement | null = null;
 	private statusEl: HTMLElement | null = null;
@@ -180,6 +194,11 @@ export class EpubAiReadingModal extends Modal {
 		this.input = options.input;
 		this.configHost = options.configHost || null;
 		this.envPathCandidates = options.envPathCandidates || [];
+		this.tocItems = options.tocItems || [];
+		this.resolveScopedInput = options.resolveScopedInput;
+		this.selectedScopeIds =
+			options.initialScopeIds ||
+			resolveDefaultEpubAiReadingScopeIds(this.tocItems, this.input.chapterHref);
 		this.sessionKey = getEpubAiReadingSessionKey(this.input);
 		this.sessionState = getEpubAiReadingSessionState(app);
 	}
@@ -189,6 +208,10 @@ export class EpubAiReadingModal extends Modal {
 		this.getModalHostEl()?.addClass("weave-epub-ai-reading-modal-host");
 		this.contentEl.addClass("weave-epub-ai-reading-modal");
 		this.renderShell();
+		if (this.shouldShowScopeSelection()) {
+			this.renderScopeSelection();
+			return;
+		}
 		void this.restoreOrGenerateReading();
 	}
 
@@ -200,6 +223,10 @@ export class EpubAiReadingModal extends Modal {
 
 	private getModalHostEl(): HTMLElement | null {
 		return (this as Modal & { modalEl?: HTMLElement }).modalEl || this.containerEl || null;
+	}
+
+	private shouldShowScopeSelection(): boolean {
+		return this.tocItems.length > 0 && typeof this.resolveScopedInput === "function";
 	}
 
 	private renderShell(): void {
@@ -261,6 +288,10 @@ export class EpubAiReadingModal extends Modal {
 			return;
 		}
 		this.actionsEl.empty();
+		if (this.mode === "selecting-scope") {
+			this.renderScopeActions();
+			return;
+		}
 		const regenerateButton = this.actionsEl.createEl("button", { text: "重新生成" });
 		regenerateButton.addEventListener("click", () => {
 			void this.generateReading({ force: true });
@@ -281,7 +312,85 @@ export class EpubAiReadingModal extends Modal {
 		});
 	}
 
+	private renderScopeSelection(): void {
+		this.mode = "selecting-scope";
+		this.result = null;
+		this.noteFile = null;
+		this.clearWarning();
+		const selection = resolveEpubAiReadingScopeSelection(this.tocItems, this.selectedScopeIds);
+		this.setStatus(
+			selection.kind === "book-placeholder"
+				? "全书 AI 阅读将在后续版本支持。"
+				: "请选择 AI 阅读范围，然后点击开始 AI 阅读。"
+		);
+		if (!this.resultEl) {
+			return;
+		}
+		this.resultEl.empty();
+		const scopeRoot = this.resultEl.createDiv({ cls: "weave-epub-ai-reading-scope-picker" });
+		scopeRoot.createEl("h3", { text: "选择 AI 阅读范围" });
+		const levels = buildEpubAiReadingScopeLevels(this.tocItems, this.selectedScopeIds);
+		for (const level of levels) {
+			const row = scopeRoot.createDiv({ cls: "weave-epub-ai-reading-scope-row" });
+			row.createEl("label", {
+				cls: "weave-epub-ai-reading-scope-label",
+				text: `第 ${level.depth + 1} 级`,
+			});
+			const select = row.createEl("select", {
+				cls: "weave-epub-ai-reading-scope-select",
+			});
+			select.disabled = level.disabled;
+			for (const option of level.options) {
+				const optionEl = select.createEl("option", {
+					text: option.label,
+				});
+				optionEl.value = option.id;
+			}
+			select.value = level.selectedId;
+			select.addEventListener("change", () => {
+				this.selectedScopeIds = [
+					...this.selectedScopeIds.slice(0, level.depth),
+					select.value,
+				];
+				this.renderScopeSelection();
+			});
+		}
+		const summary = scopeRoot.createDiv({
+			cls: "weave-epub-ai-reading-scope-summary",
+			text: selection.pathLabels.join(" > "),
+		});
+		if (!selection.canGenerate) {
+			summary.addClass("is-disabled");
+		}
+		this.renderActions();
+	}
+
+	private renderScopeActions(): void {
+		if (!this.actionsEl) {
+			return;
+		}
+		const selection = resolveEpubAiReadingScopeSelection(this.tocItems, this.selectedScopeIds);
+		const startButton = this.actionsEl.createEl("button", {
+			text: "开始 AI 阅读",
+			cls: "mod-cta",
+		});
+		startButton.disabled = !selection.canGenerate;
+		startButton.addEventListener("click", () => {
+			void this.startScopedReading();
+		});
+	}
+
+	private async startScopedReading(): Promise<void> {
+		const selection = resolveEpubAiReadingScopeSelection(this.tocItems, this.selectedScopeIds);
+		if (!selection.canGenerate) {
+			this.setStatus("全书 AI 阅读将在后续版本支持。");
+			return;
+		}
+		this.setStatus("正在准备所选范围...");
+	}
+
 	private async restoreOrGenerateReading(): Promise<void> {
+		this.mode = "reading";
 		this.clearWarning();
 		const cachedDraft = this.sessionState.drafts.get(this.sessionKey);
 		if (cachedDraft) {
