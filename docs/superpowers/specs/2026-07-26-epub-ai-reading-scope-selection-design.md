@@ -15,6 +15,7 @@ This design keeps the current streamed AI generation, paragraph source reference
 - Keep full-book AI reading visible as a future option but disabled for the first pass.
 - Reuse existing TOC-scoped extraction (`getTocChapterReadingPointDraft`) where possible.
 - Preserve the current modal result cache and generated note flow.
+- Preserve an in-progress AI reading session after the modal is closed, then restore that session when `AI 阅读` is opened again.
 
 ## Non-Goals
 
@@ -40,6 +41,8 @@ This means the input scope is based on the current reader section/spine href. It
 ### Entry
 
 Clicking `AI 阅读` opens the existing AI reading modal, but the modal starts in `scope-selection` state.
+
+Exception: if the current book already has an in-progress AI reading session, the modal restores that session first instead of showing a fresh scope picker. This covers backdrop clicks, the close button, and other normal modal dismiss paths during generation.
 
 The modal shows:
 
@@ -78,6 +81,21 @@ Default resolution order:
 4. If no usable TOC item exists, show the current section fallback.
 
 The selected path can be changed before generation.
+
+### Close And Reopen During Generation
+
+Closing the modal while AI generation is running must not discard the running request.
+
+Expected behavior:
+
+- The generation continues in the background.
+- The latest stage text is stored.
+- The latest streamed partial content is stored.
+- Reopening `AI 阅读` for the same book restores the generating state, selected scope label, status text, and partial content.
+- When the request finishes while the modal is closed, reopening shows the completed result.
+- The request is not sent a second time unless the user explicitly chooses `重新生成`.
+
+If the reader is now at a different location, the in-progress session still takes priority. The modal should show the original selected scope label so the user understands what is being generated.
 
 ### Full Book Placeholder
 
@@ -130,6 +148,29 @@ interface EpubAiReadingScopeSelection {
 
 The UI can derive cascade levels from `TocItem[]` and current selection path.
 
+### Session Model
+
+The modal should store generation state outside the modal instance, keyed by app/book/scope:
+
+```ts
+interface EpubAiReadingSession {
+  key: string;
+  bookPath: string;
+  scope: EpubAiReadingScopeSelection;
+  state: "selecting-scope" | "generating" | "result" | "error";
+  status: string;
+  partialContent: string;
+  result?: EpubAiReadingResult;
+  errorMessage?: string;
+  noteFile?: TFile | null;
+  savedToNote: boolean;
+  request?: Promise<EpubAiReadingResult>;
+  updatedAt: number;
+}
+```
+
+The important distinction is that the modal is only a view over the session. Closing the modal should detach the view, not destroy the session or abort the request.
+
 ### Generation Flow
 
 When the user clicks `开始 AI 阅读`:
@@ -154,6 +195,8 @@ normalizePath(filePath)::scopeKind::scopeHref::scopeDepth::scopeLabel
 
 This prevents `第一章 > 全部` from overwriting `第一章 > 准备工作`.
 
+For in-progress sessions, the same key prevents duplicate requests. If a session with `state === "generating"` already exists, opening the modal attaches to it instead of creating a new request.
+
 ## Components
 
 ### EpubAiReadingModal
@@ -164,6 +207,8 @@ Extend the modal to support states:
 - `generating`
 - `result`
 - `error`
+
+The modal should render from the shared session state. During `generating`, `onStage` and `onPartialContent` update the session first, then update the modal if it is currently open.
 
 The result state keeps existing behavior:
 
@@ -204,6 +249,7 @@ Keep extraction close to the reader integration because it already owns:
 - Scoped extraction unavailable: fall back to current section extraction.
 - AI request failure: keep existing modal error handling.
 - Modal closed before generation: no cache is written.
+- Modal closed during generation: keep the request and restore its latest status/partial content on reopen.
 - Modal closed after generation: same-scope reopening restores cached content.
 
 ## Tests
@@ -218,6 +264,8 @@ Add focused tests for:
 - Selecting a TOC leaf calls `getTocChapterReadingPointDraft`.
 - Selecting a parent plus child `全部` calls `getTocChapterReadingPointDraft` for the parent item.
 - Cache key differs between parent scope and leaf scope.
+- Closing during generation and reopening restores the in-progress status/partial content without sending a duplicate request.
+- Reopening after a background generation finishes shows the completed result.
 
 Existing tests for streaming, note generation, markdown rendering, source link clicks, and modal close/restore should remain.
 
@@ -227,9 +275,10 @@ Existing tests for streaming, note generation, markdown rendering, source link c
 2. Add scope-selection state to `EpubAiReadingModal`.
 3. Wire `EpubReaderApp.svelte` to pass TOC and scoped generation dependencies.
 4. Generate selected TOC scope via `getTocChapterReadingPointDraft`.
-5. Update cache key to include scope identity.
-6. Run targeted tests and `npm run build`.
-7. Do not copy build artifacts unless the user types `拷贝`.
+5. Move modal cache into a shared AI reading session store that also tracks in-progress generation.
+6. Update cache key to include scope identity.
+7. Run targeted tests and `npm run build`.
+8. Do not copy build artifacts unless the user types `拷贝`.
 
 ## Open Decisions
 
