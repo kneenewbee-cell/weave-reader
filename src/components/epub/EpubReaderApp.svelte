@@ -66,6 +66,8 @@
 		canReuseExistingBook,
 		resolveBookLoadRestoredPosition,
 	} from '../../services/epub/epub-reader-book-load-helpers';
+	import { resolveDefaultEpubAiReadingScopeIds } from '../../services/epub/epub-ai-reading-scope';
+	import { flattenTocItems } from '../../utils/epub-toc-reading-position';
 	import {
 		findEpubPortableBookIdByIdentity,
 		isEpubGeneratedAnnotationNotePath,
@@ -5391,13 +5393,38 @@
 				new Notice(t('epub.reader.chapterLocateFailed'));
 				return;
 			}
-			const draft = await readerService.getChapterReadingPointDraft?.(chapterHref, titleHint);
-			if (!draft?.text?.trim()) {
-				new Notice(t('epub.reader.chapterExtractFailed'));
+			const tocItems = await getAnnotationTocItems();
+			if (tocItems.length === 0) {
+				const draft = await readerService.getChapterReadingPointDraft?.(chapterHref, titleHint);
+				if (!draft?.text?.trim()) {
+					new Notice(t('epub.reader.chapterExtractFailed'));
+					return;
+				}
+				const sourceBlocks = await buildAiReadingSourceBlocksForDraft(draft);
+				const { EpubAiReadingModal } = await import('./EpubAiReadingModal');
+				new EpubAiReadingModal(app, {
+					configHost: aiConfigHost,
+					envPathCandidates: aiReadingEnvPaths,
+					input: {
+						filePath,
+						bookTitle: book.metadata.title,
+						author: book.metadata.author,
+						chapterTitle: draft.title || titleHint,
+						chapterHref: draft.chapterHref || chapterHref,
+						chapterText: draft.text,
+						chapterMarkdown: draft.markdown,
+						tocItems,
+						sourceBlocks,
+						sourceLink: buildChapterReadingPointSourceLink(
+							draft.title || titleHint,
+							draft.cfi,
+							draft.chapterIndex
+						),
+					},
+				}).open();
 				return;
 			}
-			const tocItems = await getAnnotationTocItems();
-			const sourceBlocks = await buildAiReadingSourceBlocksForDraft(draft);
+			const flatTocItems = flattenTocItems(tocItems) as FlatTocExportItem[];
 			const { EpubAiReadingModal } = await import('./EpubAiReadingModal');
 			new EpubAiReadingModal(app, {
 				configHost: aiConfigHost,
@@ -5406,17 +5433,55 @@
 					filePath,
 					bookTitle: book.metadata.title,
 					author: book.metadata.author,
-					chapterTitle: draft.title || titleHint,
-					chapterHref: draft.chapterHref || chapterHref,
-					chapterText: draft.text,
-					chapterMarkdown: draft.markdown,
+					chapterTitle: titleHint,
+					chapterHref,
+					chapterText: '',
 					tocItems,
-					sourceBlocks,
-					sourceLink: buildChapterReadingPointSourceLink(
-						draft.title || titleHint,
-						draft.cfi,
-						draft.chapterIndex
-					),
+				},
+				tocItems,
+				initialScopeIds: resolveDefaultEpubAiReadingScopeIds(tocItems, chapterHref),
+				resolveScopedInput: async (scope) => {
+					let draft: EpubChapterReadingPointDraft | null = null;
+					if (
+						scope.kind === 'toc' &&
+						typeof scope.flatIndex === 'number' &&
+						readerService.getTocChapterReadingPointDraft
+					) {
+						const item = flatTocItems[scope.flatIndex];
+						if (item) {
+							const scopedTitle = String(item.label || '').trim() || titleHint;
+							draft = await readerService.getTocChapterReadingPointDraft(
+								item.href,
+								scopedTitle,
+								flatTocItems,
+								scope.flatIndex
+							);
+						}
+					}
+					if (!draft) {
+						draft = await readerService.getChapterReadingPointDraft?.(chapterHref, titleHint) || null;
+					}
+					if (!draft?.text?.trim()) {
+						new Notice(t('epub.reader.chapterExtractFailed'));
+						return null;
+					}
+					const sourceBlocks = await buildAiReadingSourceBlocksForDraft(draft);
+					return {
+						filePath,
+						bookTitle: book.metadata.title,
+						author: book.metadata.author,
+						chapterTitle: draft.title || scope.label || titleHint,
+						chapterHref: draft.chapterHref || scope.href || chapterHref,
+						chapterText: draft.text,
+						chapterMarkdown: draft.markdown,
+						tocItems,
+						sourceBlocks,
+						sourceLink: buildChapterReadingPointSourceLink(
+							draft.title || scope.label || titleHint,
+							draft.cfi,
+							draft.chapterIndex
+						),
+					};
 				},
 			}).open();
 		} catch (error) {
