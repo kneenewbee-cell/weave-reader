@@ -126,6 +126,7 @@
 	import { shouldDismissToolbarOnPointerDown } from './toolbar-positioning';
 	import { buildEpubMarkdownLocateCandidates } from '../../services/ui/source-locate-candidates';
 	import type { AIConfigHost } from '../../services/ai/ai-host';
+	import { buildEpubAiReadingSourceBlocksFromParagraphs } from '../../services/epub/epub-ai-reading-source-blocks';
 	import { attachExternalHighlightSyncReload } from './external-highlight-sync-reload';
 	import {
 		attachEpubCardHighlightSyncBridge,
@@ -4829,6 +4830,51 @@
 		);
 	}
 
+	const EPUB_AI_READING_SOURCE_BLOCK_LIMIT = 160;
+
+	function replaceWikilinkAlias(link: string, alias: string): string {
+		const normalizedAlias = String(alias || '').trim();
+		if (!normalizedAlias) {
+			return link;
+		}
+		if (/\|[^\]]*\]\]$/.test(link)) {
+			return link.replace(/\|[^\]]*\]\]$/, `|${normalizedAlias}]]`);
+		}
+		return link.endsWith(']]') ? `${link.slice(0, -2)}|${normalizedAlias}]]` : link;
+	}
+
+	function buildAiReadingParagraphSourceLink(paragraph: ReaderParagraph, blockId: string): string {
+		const link = linkService.buildEpubLink(
+			filePath,
+			paragraph.cfiRange,
+			paragraph.text || blockId,
+			paragraph.chapterIndex,
+			paragraph.chapterTitle,
+			undefined,
+			book?.sourceId
+		);
+		return replaceWikilinkAlias(link, blockId);
+	}
+
+	async function buildAiReadingSourceBlocksForDraft(draft: EpubChapterReadingPointDraft) {
+		if (typeof readerService.getParagraphsForChapter !== 'function' || draft.chapterIndex < 0) {
+			return [];
+		}
+		try {
+			const paragraphs = await readerService.getParagraphsForChapter(draft.chapterIndex, {
+				includeHtml: true,
+			});
+			return buildEpubAiReadingSourceBlocksFromParagraphs(paragraphs || [], {
+				maxBlocks: EPUB_AI_READING_SOURCE_BLOCK_LIMIT,
+				sourceLinkForParagraph: (paragraph, blockId) =>
+					buildAiReadingParagraphSourceLink(paragraph, blockId),
+			});
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to build AI reading source blocks:', error);
+			return [];
+		}
+	}
+
 	function formatTimestamp(date: Date): string {
 		return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 	}
@@ -5351,6 +5397,7 @@
 				return;
 			}
 			const tocItems = await getAnnotationTocItems();
+			const sourceBlocks = await buildAiReadingSourceBlocksForDraft(draft);
 			const { EpubAiReadingModal } = await import('./EpubAiReadingModal');
 			new EpubAiReadingModal(app, {
 				configHost: aiConfigHost,
@@ -5364,6 +5411,7 @@
 					chapterText: draft.text,
 					chapterMarkdown: draft.markdown,
 					tocItems,
+					sourceBlocks,
 					sourceLink: buildChapterReadingPointSourceLink(
 						draft.title || titleHint,
 						draft.cfi,
