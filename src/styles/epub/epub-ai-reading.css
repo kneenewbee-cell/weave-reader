@@ -119,6 +119,40 @@
 	max-width: 100%;
 }
 
+.weave-epub-ai-reading-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.weave-epub-ai-reading-tab {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.2;
+	padding: 5px 9px;
+	cursor: pointer;
+}
+
+.weave-epub-ai-reading-tab:hover {
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border-hover);
+}
+
+.weave-epub-ai-reading-tab.is-active {
+	background: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.weave-epub-ai-reading-section-body {
+	min-width: 0;
+	max-width: 100%;
+}
+
 .weave-epub-ai-reading-result h1,
 .weave-epub-ai-reading-result h2,
 .weave-epub-ai-reading-result h3 {
@@ -149,14 +183,16 @@
 
 .weave-epub-ai-reading-result pre {
 	max-width: 100%;
-	overflow-x: auto;
-	white-space: pre;
+	overflow-x: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
 
 .weave-epub-ai-reading-result pre code {
-	white-space: pre;
-	word-break: normal;
-	overflow-wrap: normal;
+	white-space: pre-wrap;
+	word-break: break-word;
+	overflow-wrap: anywhere;
 }
 
 .weave-epub-ai-reading-result :not(pre) > code {

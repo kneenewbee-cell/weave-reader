@@ -16,6 +16,53 @@ interface EpubAiReadingModalOptions {
 	envPathCandidates?: string[];
 }
 
+type EpubAiReadingSectionKey =
+	| "summary"
+	| "knowledge"
+	| "quotes"
+	| "relations"
+	| "path"
+	| "other"
+	| "full";
+
+interface EpubAiReadingSection {
+	key: EpubAiReadingSectionKey;
+	label: string;
+	markdown: string;
+}
+
+const EPUB_AI_READING_SECTION_DEFINITIONS: Array<{
+	key: EpubAiReadingSectionKey;
+	label: string;
+	match: RegExp;
+}> = [
+	{
+		key: "summary",
+		label: "\u6458\u8981",
+		match: /\u672c\u7ae0\u6458\u8981|\u5185\u5bb9\u6982\u8981|\u6458\u8981/u,
+	},
+	{
+		key: "knowledge",
+		label: "\u77e5\u8bc6\u70b9",
+		match: /\u5173\u952e\u77e5\u8bc6\u70b9|\u6982\u5ff5\/\u672f\u8bed|\u672f\u8bed|\u77e5\u8bc6\u70b9/u,
+	},
+	{
+		key: "quotes",
+		label: "\u91cd\u8981\u539f\u6587",
+		match: /\u91cd\u8981\u539f\u6587|\u539f\u6587/u,
+	},
+	{
+		key: "relations",
+		label: "\u7ae0\u8282\u5173\u7cfb",
+		match: /\u7ae0\u8282\u5173\u7cfb|\u5173\u7cfb/u,
+	},
+	{
+		key: "path",
+		label: "\u7cbe\u8bfb\u987a\u5e8f",
+		match: /\u5efa\u8bae\u7cbe\u8bfb\u987a\u5e8f|\u7cbe\u8bfb\u8def\u5f84|\u884c\u52a8\u6e05\u5355|\u7cbe\u8bfb\u987a\u5e8f/u,
+	},
+];
+
 export class EpubAiReadingModal extends Modal {
 	private readonly input: EpubAiReadingInput;
 	private readonly configHost: EpubAiReadingConfigHost | null;
@@ -27,6 +74,9 @@ export class EpubAiReadingModal extends Modal {
 	private noteFile: TFile | null = null;
 	private markdownRenderComponent: Component | null = null;
 	private streamingPreviewEl: HTMLPreElement | null = null;
+	private activeSectionKey: EpubAiReadingSectionKey | null = null;
+	private sectionTabsEl: HTMLElement | null = null;
+	private sectionBodyEl: HTMLElement | null = null;
 
 	constructor(app: App, options: EpubAiReadingModalOptions) {
 		super(app);
@@ -151,6 +201,22 @@ export class EpubAiReadingModal extends Modal {
 		}
 		this.resultEl.empty();
 		this.streamingPreviewEl = null;
+		this.sectionTabsEl = null;
+		this.sectionBodyEl = null;
+		const sections = this.splitAiReadingSections(markdown);
+		if (sections.length > 1) {
+			this.activeSectionKey = sections[0].key;
+			this.sectionTabsEl = this.resultEl.createDiv({
+				cls: "weave-epub-ai-reading-tabs",
+			});
+			this.sectionBodyEl = this.resultEl.createDiv({
+				cls: "weave-epub-ai-reading-section-body",
+			});
+			this.renderSectionTabs(sections);
+			await this.renderMarkdownInto(sections[0].markdown, this.sectionBodyEl);
+			return;
+		}
+		this.activeSectionKey = null;
 		try {
 			await MarkdownRenderer.render(
 				this.app,
@@ -166,6 +232,104 @@ export class EpubAiReadingModal extends Modal {
 			this.resultEl.createEl("pre", {
 				cls: "weave-epub-ai-reading-fallback",
 				text: markdown,
+			});
+		}
+	}
+
+	private async renderMarkdownInto(markdown: string, targetEl: HTMLElement): Promise<void> {
+		targetEl.empty();
+		try {
+			await MarkdownRenderer.render(
+				this.app,
+				markdown,
+				targetEl,
+				this.input.filePath,
+				this.resetMarkdownRenderComponent()
+			);
+		} catch (error) {
+			logger.warn("[EpubAiReadingModal] Markdown rendering failed; showing raw result:", error);
+			this.setStatus(
+				"AI \u9605\u8bfb\u5df2\u751f\u6210\uff0c\u4f46 Markdown \u6e32\u67d3\u5931\u8d25\uff0c\u5df2\u663e\u793a\u539f\u59cb\u7ed3\u679c\u3002"
+			);
+			targetEl.empty();
+			targetEl.createEl("pre", {
+				cls: "weave-epub-ai-reading-fallback",
+				text: markdown,
+			});
+		}
+	}
+
+	private splitAiReadingSections(markdown: string): EpubAiReadingSection[] {
+		const source = String(markdown || "").trim();
+		if (!source) {
+			return [{ key: "full", label: "\u5168\u90e8", markdown: "" }];
+		}
+
+		const headingPattern = /^##\s+(.+)$/gm;
+		const headings: Array<{ title: string; index: number }> = [];
+		let match: RegExpExecArray | null;
+		while ((match = headingPattern.exec(source)) !== null) {
+			headings.push({
+				title: match[1].trim(),
+				index: match.index,
+			});
+		}
+		if (headings.length === 0) {
+			return [{ key: "full", label: "\u5168\u90e8", markdown: source }];
+		}
+
+		const byKey = new Map<EpubAiReadingSectionKey, EpubAiReadingSection>();
+		for (let index = 0; index < headings.length; index += 1) {
+			const heading = headings[index];
+			const nextHeading = headings[index + 1];
+			const bodyEnd = nextHeading ? nextHeading.index : source.length;
+			const sectionMarkdown = source.slice(heading.index, bodyEnd).trim();
+			const definition = EPUB_AI_READING_SECTION_DEFINITIONS.find((item) =>
+				item.match.test(heading.title)
+			);
+			const key = definition?.key || "other";
+			const label = definition?.label || "\u5176\u4ed6";
+			const existing = byKey.get(key);
+			if (existing) {
+				existing.markdown = `${existing.markdown}\n\n${sectionMarkdown}`.trim();
+			} else {
+				byKey.set(key, { key, label, markdown: sectionMarkdown });
+			}
+		}
+
+		const orderedSections = EPUB_AI_READING_SECTION_DEFINITIONS
+			.map((definition) => byKey.get(definition.key))
+			.filter((section): section is EpubAiReadingSection => Boolean(section));
+		const otherSection = byKey.get("other");
+		if (otherSection) {
+			orderedSections.push(otherSection);
+		}
+		return orderedSections.length > 0
+			? orderedSections
+			: [{ key: "full", label: "\u5168\u90e8", markdown: source }];
+	}
+
+	private renderSectionTabs(sections: EpubAiReadingSection[]): void {
+		if (!this.sectionTabsEl) {
+			return;
+		}
+		this.sectionTabsEl.empty();
+		for (const section of sections) {
+			const tab = this.sectionTabsEl.createEl("button", {
+				cls: `weave-epub-ai-reading-tab${section.key === this.activeSectionKey ? " is-active" : ""}`,
+				text: section.label,
+				attr: {
+					type: "button",
+					"aria-pressed": section.key === this.activeSectionKey ? "true" : "false",
+				},
+			});
+			tab.addEventListener("click", () => {
+				if (!this.sectionBodyEl || section.key === this.activeSectionKey) {
+					return;
+				}
+				this.activeSectionKey = section.key;
+				this.renderSectionTabs(sections);
+				void this.renderMarkdownInto(section.markdown, this.sectionBodyEl);
 			});
 		}
 	}

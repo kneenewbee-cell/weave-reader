@@ -88,6 +88,58 @@ describe("EpubAiReadingModal", () => {
 		expect(typeof renderHost?.addChild).toBe("function");
 	});
 
+	it("renders section tabs for structured AI reading markdown", async () => {
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: [
+				"## \u672c\u7ae0\u6458\u8981",
+				"\u6458\u8981\u5185\u5bb9",
+				"## \u5173\u952e\u77e5\u8bc6\u70b9",
+				"- \u77e5\u8bc6\u70b9",
+				"## \u91cd\u8981\u539f\u6587",
+				"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)|P001]]",
+				"## \u7ae0\u8282\u5173\u7cfb",
+				"\u627f\u4e0a\u542f\u4e0b",
+				"## \u5efa\u8bae\u7cbe\u8bfb\u987a\u5e8f",
+				"1. \u5148\u8bfb\u5b9a\u4e49",
+			].join("\n"),
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			expect(modal.contentEl.querySelectorAll(".weave-epub-ai-reading-tab")).toHaveLength(5);
+			expect(modal.contentEl.textContent || "").toContain("\u6458\u8981\u5185\u5bb9");
+		});
+
+		const tabs = modal.contentEl.querySelectorAll<HTMLButtonElement>(
+			".weave-epub-ai-reading-tab"
+		);
+		tabs[2].click();
+
+		await waitFor(() => {
+			expect(modal.contentEl.textContent || "").toContain("P001");
+			expect(
+				modal.contentEl.querySelector(".weave-epub-ai-reading-tab.is-active")?.textContent || ""
+			).toContain("\u91cd\u8981\u539f\u6587");
+		});
+	});
+
 	it("keeps the AI result visible if markdown rendering fails", async () => {
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
