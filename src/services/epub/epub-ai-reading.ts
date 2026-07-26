@@ -4,6 +4,11 @@ import { DirectoryUtils } from "../../utils/directory-utils";
 import { sanitizeExportFileName } from "../../utils/sanitize-export-filename";
 import type { AIConfig } from "../../types/plugin-settings";
 import type { TocItem } from "./types";
+import {
+	decorateEpubAiReadingSourceReferences,
+	formatEpubAiReadingSourceBlocksForPrompt,
+	type EpubAiReadingSourceBlock,
+} from "./epub-ai-reading-source-blocks";
 
 export interface EpubAiReadingInput {
 	bookTitle?: string;
@@ -15,6 +20,7 @@ export interface EpubAiReadingInput {
 	chapterMarkdown?: string;
 	tocItems: TocItem[];
 	sourceLink?: string;
+	sourceBlocks?: EpubAiReadingSourceBlock[];
 }
 
 export interface EpubAiReadingConfig {
@@ -38,6 +44,7 @@ export interface EpubAiReadingResult {
 	chapterTitle: string;
 	chapterHref: string;
 	sourceLink?: string;
+	sourceBlocks?: EpubAiReadingSourceBlock[];
 	content: string;
 	model: string;
 	generatedAt: number;
@@ -417,6 +424,11 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 	const tocPath = findTocPath(input.tocItems, input.chapterHref)?.join(" > ") || input.chapterTitle;
 	const chapterText = normalizeConfigValue(input.chapterMarkdown) || input.chapterText;
 	const sourceLink = normalizeConfigValue(input.sourceLink);
+	const sourceBlocks = Array.isArray(input.sourceBlocks) ? input.sourceBlocks : [];
+	const sourceBlockText = formatEpubAiReadingSourceBlocksForPrompt(sourceBlocks);
+	const sourceReferenceRule = sourceBlockText
+		? "\u8bf7\u5f15\u7528 P001 \u8fd9\u79cd\u6bb5\u843d\u7f16\u53f7\uff1b\u4e0d\u8981\u751f\u6210 EPUB CFI\u3001\u5185\u90e8\u951a\u70b9\u6216 URL\u3002"
+		: "\u63d0\u53d6\u91cd\u8981\u539f\u6587\u65f6\uff0c\u7528\u201c\u4f4d\u7f6e\u8bf4\u660e + \u4e3a\u4ec0\u4e48\u91cd\u8981\u201d\u63cf\u8ff0\uff0c\u4e0d\u8981\u4f2a\u9020\u4e0d\u53ef\u70b9\u51fb\u7684\u951a\u70b9\u3002";
 	const system = [
 		"你是 EPUB AI 阅读助手。",
 		"你帮助用户理解当前章节，但不能替代原文阅读。",
@@ -447,13 +459,16 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"",
 		"# \u5b9a\u4f4d\u89c4\u5219",
 		"\u53ef\u70b9\u51fb\u8df3\u8f6c\u7531\u9605\u8bfb\u5668\u754c\u9762\u63d0\u4f9b\uff1b\u4f60\u4e0d\u8981\u628a EPUB \u5185\u90e8\u951a\u70b9\uff08\u5982 #id\u3001#_idParaDest\uff09\u5199\u6210\u9700\u8981\u7528\u6237\u70b9\u51fb\u7684\u94fe\u63a5\u3002",
-		"\u63d0\u53d6\u91cd\u8981\u539f\u6587\u65f6\uff0c\u7528\u201c\u4f4d\u7f6e\u8bf4\u660e + \u4e3a\u4ec0\u4e48\u91cd\u8981\u201d\u63cf\u8ff0\uff0c\u4e0d\u8981\u4f2a\u9020\u4e0d\u53ef\u70b9\u51fb\u7684\u951a\u70b9\u3002",
+		sourceReferenceRule,
+		sourceBlockText
+			? "\u6458\u8981\u53ef\u4ee5\u7efc\u5408\u591a\u4e2a\u6bb5\u843d\uff0c\u4f46\u5173\u952e\u77e5\u8bc6\u70b9\u548c\u91cd\u8981\u539f\u6587\u5fc5\u987b\u5c3d\u91cf\u5e26\u6765\u6e90\u7f16\u53f7\uff0c\u4f8b\u5982 [P001]\u3002\u63d2\u4ef6\u4f1a\u628a\u6bb5\u843d\u7f16\u53f7\u8f6c\u6362\u6210\u53ef\u70b9\u51fb\u94fe\u63a5\u3002"
+			: "",
 		"",
 		"# 全书目录",
 		tocLines,
 		"",
-		"# 当前章节正文",
-		chapterText,
+		sourceBlockText ? "# \u5f53\u524d\u7ae0\u8282\u5b9a\u4f4d\u6b63\u6587\u5757" : "# 当前章节正文",
+		sourceBlockText || chapterText,
 	].filter(Boolean).join("\n");
 
 	return { system, user };
@@ -880,6 +895,12 @@ export async function requestEpubAiReading(
 		throw new Error("Kimi API \u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u9605\u8bfb\u7ed3\u679c\u3002");
 	}
 
+	const sourceBlocks = Array.isArray(input.sourceBlocks) ? input.sourceBlocks : [];
+	const decoratedContent =
+		sourceBlocks.length > 0
+			? decorateEpubAiReadingSourceReferences(content, sourceBlocks)
+			: content;
+
 	return {
 		bookTitle: input.bookTitle,
 		author: input.author,
@@ -887,7 +908,8 @@ export async function requestEpubAiReading(
 		chapterTitle: normalizeConfigValue(input.chapterTitle) || "\u5f53\u524d\u7ae0\u8282",
 		chapterHref: normalizeConfigValue(input.chapterHref),
 		sourceLink: input.sourceLink,
-		content,
+		sourceBlocks,
+		content: decoratedContent,
 		model: config.model,
 		generatedAt: options.now?.() ?? Date.now(),
 	};

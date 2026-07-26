@@ -11,6 +11,7 @@ import {
 	requestEpubAiReading,
 	upsertEpubAiReadingNote,
 } from "../epub-ai-reading";
+import type { EpubAiReadingSourceBlock } from "../epub-ai-reading-source-blocks";
 
 const tocItems: TocItem[] = [
 	{
@@ -103,6 +104,35 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).toContain("第二章 信息过载");
 		expect(messages.user).toContain("注意力是一种有限资源");
 		expect(messages.user).toContain("重要原文");
+	});
+
+	it("builds paragraph-located AI messages when source blocks are available", () => {
+		const sourceBlocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "P001",
+				chapterHref: "Text/chapter1.xhtml",
+				cfi: "epubcfi(/6/2)",
+				text: "LaTeX is a document markup language.",
+				headingPath: ["Chapter 1", "What is LaTeX?"],
+				kind: "paragraph",
+				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]",
+			},
+		];
+
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Guide",
+			filePath: "Books/latex.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "Text/chapter1.xhtml",
+			chapterText: "Fallback chapter text",
+			tocItems,
+			sourceBlocks,
+		});
+
+		expect(messages.user).toContain("# \u5f53\u524d\u7ae0\u8282\u5b9a\u4f4d\u6b63\u6587\u5757");
+		expect(messages.user).toContain("[P001] kind=paragraph path=Chapter 1 > What is LaTeX?");
+		expect(messages.user).toContain("P001");
+		expect(messages.user).not.toContain("# \u5f53\u524d\u7ae0\u8282\u6b63\u6587\nFallback chapter text");
 	});
 
 	it("extracts assistant content from a Kimi chat completion response", () => {
@@ -385,6 +415,59 @@ describe("epub-ai-reading", () => {
 		expect(partials).toEqual(["visible answer"]);
 		expect(stages).toContain("AI \u6b63\u5728\u5206\u6790\u6b63\u6587\u548c\u7ae0\u8282\u5173\u7cfb");
 		expect(stages).toContain("\u6b63\u5728\u6d41\u5f0f\u8f93\u51fa AI \u9605\u8bfb\u7ed3\u679c");
+	});
+
+	it("decorates AI source markers in request results and generated notes", async () => {
+		const requester = vi.fn(async () => ({
+			json: {
+				choices: [
+					{
+						message: {
+							content: "## Important Excerpts\nLaTeX definition matters. [P001]",
+						},
+					},
+				],
+			},
+		}));
+		const sourceBlocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "P001",
+				chapterHref: "Text/chapter1.xhtml",
+				cfi: "epubcfi(/6/2)",
+				text: "LaTeX is a document markup language.",
+				headingPath: ["Chapter 1"],
+				kind: "paragraph",
+				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]",
+			},
+		];
+
+		const result = await requestEpubAiReading(
+			{
+				bookTitle: "LaTeX Guide",
+				filePath: "Books/latex.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "Text/chapter1.xhtml",
+				chapterText: "Fallback text",
+				tocItems,
+				sourceBlocks,
+			},
+			{
+				config: {
+					apiKey: "test-key",
+					baseUrl: "https://api.kimi.com/coding/v1",
+					model: "k3",
+				},
+				requester,
+				enableStreaming: false,
+				now: () => 1710000000000,
+			}
+		);
+
+		expect(result.content).toContain("[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]");
+		expect(result.sourceBlocks).toEqual(sourceBlocks);
+		expect(buildEpubAiReadingNoteSection(result)).toContain(
+			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]"
+		);
 	});
 
 	it("loads Kimi configuration from the plugin .env file at request time", async () => {
