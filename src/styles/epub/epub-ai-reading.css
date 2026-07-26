@@ -77,6 +77,21 @@
 	overflow-wrap: anywhere;
 }
 
+.weave-epub-ai-reading-warning {
+	padding: 6px 8px;
+	border: 1px solid color-mix(in srgb, var(--text-warning), transparent 55%);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--background-primary), var(--text-warning) 10%);
+	color: var(--text-warning);
+	font-size: 12px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.weave-epub-ai-reading-warning.is-hidden {
+	display: none;
+}
+
 .weave-epub-ai-reading-meta {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);

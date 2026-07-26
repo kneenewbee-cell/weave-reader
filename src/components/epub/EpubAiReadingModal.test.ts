@@ -79,7 +79,7 @@ describe("EpubAiReadingModal", () => {
 		)).toBe(false);
 	});
 
-	it("does not close when the modal backdrop is clicked", () => {
+	it("allows the Obsidian backdrop to close the modal", () => {
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
 			filePath: "Books/demo.epub",
@@ -105,7 +105,108 @@ describe("EpubAiReadingModal", () => {
 		modal.containerEl.addEventListener("click", () => modal.close());
 		modal.containerEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-		expect(closeSpy).not.toHaveBeenCalled();
+		expect(closeSpy).toHaveBeenCalled();
+	});
+
+	it("restores an unsaved AI reading result when reopening the same chapter", async () => {
+		const app = new App();
+		const input = {
+			bookTitle: "Session Book",
+			filePath: "Books/session-restore.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			chapterText: "Chapter text",
+			tocItems: [],
+		};
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: input.bookTitle,
+			filePath: input.filePath,
+			chapterTitle: input.chapterTitle,
+			chapterHref: input.chapterHref,
+			content: "cached same chapter result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const firstModal = new EpubAiReadingModal(app, { input });
+
+		EpubAiReadingModal.prototype.onOpen.call(firstModal);
+
+		await waitFor(() => {
+			expect(firstModal.contentEl.textContent || "").toContain("cached same chapter result");
+		});
+		EpubAiReadingModal.prototype.onClose.call(firstModal);
+
+		const secondModal = new EpubAiReadingModal(app, { input });
+
+		EpubAiReadingModal.prototype.onOpen.call(secondModal);
+
+		await waitFor(() => {
+			expect(secondModal.contentEl.textContent || "").toContain("cached same chapter result");
+			expect(secondModal.contentEl.textContent || "").toContain(
+				"\u5df2\u6062\u590d\u4e0a\u6b21 AI \u9605\u8bfb\u7ed3\u679c"
+			);
+		});
+		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
+	});
+
+	it("warns before generating another chapter when the previous result is not saved to a note", async () => {
+		const app = new App();
+		mockedRequestEpubAiReading
+			.mockResolvedValueOnce({
+				bookTitle: "Session Book",
+				filePath: "Books/session-warning.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				content: "chapter one result",
+				model: "k3",
+				generatedAt: 1710000000000,
+			})
+			.mockResolvedValueOnce({
+				bookTitle: "Session Book",
+				filePath: "Books/session-warning.epub",
+				chapterTitle: "Chapter 2",
+				chapterHref: "text/chapter2.xhtml",
+				content: "chapter two result",
+				model: "k3",
+				generatedAt: 1710000000001,
+			});
+		const firstModal = new EpubAiReadingModal(app, {
+			input: {
+				bookTitle: "Session Book",
+				filePath: "Books/session-warning.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter one text",
+				tocItems: [],
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(firstModal);
+
+		await waitFor(() => {
+			expect(firstModal.contentEl.textContent || "").toContain("chapter one result");
+		});
+		EpubAiReadingModal.prototype.onClose.call(firstModal);
+
+		const secondModal = new EpubAiReadingModal(app, {
+			input: {
+				bookTitle: "Session Book",
+				filePath: "Books/session-warning.epub",
+				chapterTitle: "Chapter 2",
+				chapterHref: "text/chapter2.xhtml",
+				chapterText: "Chapter two text",
+				tocItems: [],
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(secondModal);
+
+		await waitFor(() => {
+			expect(secondModal.contentEl.textContent || "").toContain(
+				"\u4e0a\u4e00\u4efd AI \u9605\u8bfb\u7ed3\u679c\u5c1a\u672a\u751f\u6210/\u66f4\u65b0\u7b14\u8bb0"
+			);
+		});
+		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(2);
 	});
 
 	it("renders returned AI markdown with an Obsidian component host", async () => {
