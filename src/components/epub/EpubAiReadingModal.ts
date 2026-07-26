@@ -10,6 +10,7 @@ import {
 } from "../../services/epub/epub-ai-reading";
 import {
 	buildEpubAiReadingScopeLevels,
+	getEpubAiReadingScopeSessionKeyPart,
 	resolveDefaultEpubAiReadingScopeIds,
 	resolveEpubAiReadingScopeSelection,
 	type EpubAiReadingScopeSelection,
@@ -51,15 +52,36 @@ interface EpubAiReadingModalDragState {
 }
 
 interface EpubAiReadingSessionDraft {
+	key: string;
+	bookKey: string;
+	input: EpubAiReadingInput;
 	result: EpubAiReadingResult;
 	noteFile: TFile | null;
 	savedToNote: boolean;
 	updatedAt: number;
 }
 
+interface EpubAiReadingGenerationSession {
+	key: string;
+	bookKey: string;
+	input: EpubAiReadingInput;
+	state: "generating" | "result" | "error";
+	status: string;
+	partialContent: string;
+	result: EpubAiReadingResult | null;
+	errorMessage: string;
+	noteFile: TFile | null;
+	savedToNote: boolean;
+	updatedAt: number;
+	request: Promise<EpubAiReadingResult>;
+	listeners: Set<() => void>;
+}
+
 interface EpubAiReadingSessionState {
 	drafts: Map<string, EpubAiReadingSessionDraft>;
+	generations: Map<string, EpubAiReadingGenerationSession>;
 	latestUnsavedDraftKey: string | null;
+	latestSessionKeyByBook: Map<string, string>;
 }
 
 const EPUB_AI_READING_SESSION_STATE = new WeakMap<App, EpubAiReadingSessionState>();
@@ -107,7 +129,9 @@ function getEpubAiReadingSessionState(app: App): EpubAiReadingSessionState {
 	if (!state) {
 		state = {
 			drafts: new Map(),
+			generations: new Map(),
 			latestUnsavedDraftKey: null,
+			latestSessionKeyByBook: new Map(),
 		};
 		EPUB_AI_READING_SESSION_STATE.set(app, state);
 	}
@@ -118,8 +142,18 @@ function normalizeSessionValue(value: unknown): string {
 	return String(value || "").trim();
 }
 
-function getEpubAiReadingSessionKey(input: EpubAiReadingInput): string {
+function getEpubAiReadingBookKey(input: Pick<EpubAiReadingInput, "filePath">): string {
+	return normalizePath(normalizeSessionValue(input.filePath));
+}
+
+function getEpubAiReadingSessionKey(
+	input: EpubAiReadingInput,
+	scope?: EpubAiReadingScopeSelection | null
+): string {
 	const filePath = normalizePath(normalizeSessionValue(input.filePath));
+	if (scope) {
+		return `${filePath}::${getEpubAiReadingScopeSessionKeyPart(scope)}`;
+	}
 	const chapterKey =
 		normalizeSessionValue(input.chapterHref) ||
 		normalizeSessionValue(input.sourceLink) ||
@@ -170,6 +204,9 @@ export class EpubAiReadingModal extends Modal {
 	private readonly sessionState: EpubAiReadingSessionState;
 	private selectedScopeIds: string[];
 	private mode: "selecting-scope" | "reading" = "reading";
+	private activeInput: EpubAiReadingInput;
+	private activeSessionKey: string;
+	private generationSessionUnsubscribe: (() => void) | null = null;
 	private result: EpubAiReadingResult | null = null;
 	private resultEl: HTMLElement | null = null;
 	private statusEl: HTMLElement | null = null;
@@ -201,6 +238,8 @@ export class EpubAiReadingModal extends Modal {
 			resolveDefaultEpubAiReadingScopeIds(this.tocItems, this.input.chapterHref);
 		this.sessionKey = getEpubAiReadingSessionKey(this.input);
 		this.sessionState = getEpubAiReadingSessionState(app);
+		this.activeInput = this.input;
+		this.activeSessionKey = this.sessionKey;
 	}
 
 	onOpen(): void {
@@ -209,6 +248,15 @@ export class EpubAiReadingModal extends Modal {
 		this.contentEl.addClass("weave-epub-ai-reading-modal");
 		this.renderShell();
 		if (this.shouldShowScopeSelection()) {
+			const restorableSession = this.getLatestRestorableSessionForBook();
+			if (restorableSession?.generation) {
+				this.attachGenerationSession(restorableSession.generation);
+				return;
+			}
+			if (restorableSession?.draft) {
+				void this.restoreCachedReading(restorableSession.draft);
+				return;
+			}
 			this.renderScopeSelection();
 			return;
 		}
@@ -218,6 +266,7 @@ export class EpubAiReadingModal extends Modal {
 	onClose(): void {
 		this.getModalHostEl()?.removeClass("weave-epub-ai-reading-modal-host");
 		this.stopModalDrag();
+		this.detachGenerationSession();
 		this.releaseMarkdownRenderComponent();
 	}
 
@@ -227,6 +276,93 @@ export class EpubAiReadingModal extends Modal {
 
 	private shouldShowScopeSelection(): boolean {
 		return this.tocItems.length > 0 && typeof this.resolveScopedInput === "function";
+	}
+
+	private getLatestRestorableSessionForBook():
+		| { generation?: EpubAiReadingGenerationSession; draft?: EpubAiReadingSessionDraft }
+		| null {
+		const bookKey = getEpubAiReadingBookKey(this.input);
+		const latestKey = this.sessionState.latestSessionKeyByBook.get(bookKey);
+		if (latestKey) {
+			const generation = this.sessionState.generations.get(latestKey);
+			if (generation) {
+				return { generation };
+			}
+			const draft = this.sessionState.drafts.get(latestKey);
+			if (draft) {
+				return { draft };
+			}
+		}
+		for (const generation of this.sessionState.generations.values()) {
+			if (generation.bookKey === bookKey) {
+				return { generation };
+			}
+		}
+		return null;
+	}
+
+	private detachGenerationSession(): void {
+		this.generationSessionUnsubscribe?.();
+		this.generationSessionUnsubscribe = null;
+	}
+
+	private attachGenerationSession(session: EpubAiReadingGenerationSession): void {
+		this.detachGenerationSession();
+		this.mode = "reading";
+		this.activeInput = session.input;
+		this.activeSessionKey = session.key;
+		const listener = () => {
+			void this.renderGenerationSession(session);
+		};
+		session.listeners.add(listener);
+		this.generationSessionUnsubscribe = () => {
+			session.listeners.delete(listener);
+		};
+		void this.renderGenerationSession(session);
+	}
+
+	private notifyGenerationSession(session: EpubAiReadingGenerationSession): void {
+		for (const listener of session.listeners) {
+			listener();
+		}
+	}
+
+	private async renderGenerationSession(session: EpubAiReadingGenerationSession): Promise<void> {
+		if (this.activeSessionKey !== session.key) {
+			return;
+		}
+		this.mode = "reading";
+		this.activeInput = session.input;
+		this.result = session.result;
+		this.noteFile = session.noteFile;
+		if (session.state === "generating") {
+			this.setStatus(session.status || "正在生成 AI 阅读结果...");
+			if (session.partialContent) {
+				this.renderStreamingPreview(session.partialContent);
+			} else if (this.resultEl) {
+				this.resultEl.empty();
+				this.resultEl.createDiv({ text: "生成中..." });
+			}
+			this.renderActions();
+			return;
+		}
+		if (session.state === "error") {
+			this.setStatus(session.errorMessage || "AI 阅读生成失败。");
+			if (this.resultEl) {
+				this.resultEl.empty();
+				this.resultEl.createDiv({
+					cls: "weave-epub-ai-reading-error",
+					text: "AI 阅读生成失败，请检查 .env 中的 Kimi API Key、网络连接或模型配置。",
+				});
+			}
+			this.renderActions();
+			return;
+		}
+		if (session.result) {
+			this.setStatus(session.status || "已生成当前范围 AI 阅读结果。");
+			await this.renderMarkdown(session.result.content);
+			this.renderActions();
+		}
 	}
 
 	private renderShell(): void {
@@ -292,9 +428,19 @@ export class EpubAiReadingModal extends Modal {
 			this.renderScopeActions();
 			return;
 		}
+		if (this.shouldShowScopeSelection() && this.result) {
+			const changeScopeButton = this.actionsEl.createEl("button", { text: "更改范围" });
+			changeScopeButton.addEventListener("click", () => {
+				this.renderScopeSelection();
+			});
+		}
 		const regenerateButton = this.actionsEl.createEl("button", { text: "重新生成" });
 		regenerateButton.addEventListener("click", () => {
-			void this.generateReading({ force: true });
+			void this.generateReading({
+				force: true,
+				input: this.activeInput,
+				sessionKey: this.activeSessionKey,
+			});
 		});
 		if (this.noteFile) {
 			const openNoteButton = this.actionsEl.createEl("button", { text: "打开笔记" });
@@ -386,12 +532,38 @@ export class EpubAiReadingModal extends Modal {
 			this.setStatus("全书 AI 阅读将在后续版本支持。");
 			return;
 		}
+		if (!this.resolveScopedInput) {
+			this.setStatus("AI 阅读范围解析不可用。");
+			return;
+		}
 		this.setStatus("正在准备所选范围...");
+		try {
+			const scopedInput = await this.resolveScopedInput(selection);
+			if (!scopedInput?.chapterText?.trim() && !scopedInput?.chapterMarkdown?.trim()) {
+				this.setStatus("所选范围没有可用于 AI 阅读的正文。");
+				return;
+			}
+			this.mode = "reading";
+			this.activeInput = scopedInput;
+			this.activeSessionKey = getEpubAiReadingSessionKey(scopedInput, selection);
+			await this.generateReading({
+				input: scopedInput,
+				sessionKey: this.activeSessionKey,
+			});
+		} catch (error) {
+			logger.error("[EpubAiReadingModal] Failed to prepare scoped AI reading:", error);
+			this.setStatus(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	private async restoreOrGenerateReading(): Promise<void> {
 		this.mode = "reading";
 		this.clearWarning();
+		const generatingSession = this.sessionState.generations.get(this.sessionKey);
+		if (generatingSession) {
+			this.attachGenerationSession(generatingSession);
+			return;
+		}
 		const cachedDraft = this.sessionState.drafts.get(this.sessionKey);
 		if (cachedDraft) {
 			await this.restoreCachedReading(cachedDraft);
@@ -407,6 +579,8 @@ export class EpubAiReadingModal extends Modal {
 	private async restoreCachedReading(draft: EpubAiReadingSessionDraft): Promise<void> {
 		this.result = draft.result;
 		this.noteFile = draft.noteFile;
+		this.activeInput = draft.input;
+		this.activeSessionKey = draft.key;
 		this.streamingPreviewEl = null;
 		this.setStatus(
 			draft.savedToNote ? EPUB_AI_READING_RESTORED_SAVED_STATUS : EPUB_AI_READING_RESTORED_STATUS
@@ -419,56 +593,123 @@ export class EpubAiReadingModal extends Modal {
 		if (!this.result) {
 			return;
 		}
-		this.sessionState.drafts.set(this.sessionKey, {
+		const key = this.activeSessionKey || this.sessionKey;
+		const bookKey = getEpubAiReadingBookKey(this.activeInput);
+		this.sessionState.drafts.set(key, {
+			key,
+			bookKey,
+			input: this.activeInput,
 			result: this.result,
 			noteFile: this.noteFile,
 			savedToNote,
 			updatedAt: Date.now(),
 		});
+		this.sessionState.latestSessionKeyByBook.set(bookKey, key);
 		if (savedToNote) {
-			if (this.sessionState.latestUnsavedDraftKey === this.sessionKey) {
+			if (this.sessionState.latestUnsavedDraftKey === key) {
 				this.sessionState.latestUnsavedDraftKey = findLatestUnsavedDraftKey(this.sessionState);
 			}
 			return;
 		}
-		this.sessionState.latestUnsavedDraftKey = this.sessionKey;
+		this.sessionState.latestUnsavedDraftKey = key;
 	}
 
-	private async generateReading(_options: { force?: boolean } = {}): Promise<void> {
+	private async generateReading(
+		options: { force?: boolean; input?: EpubAiReadingInput; sessionKey?: string } = {}
+	): Promise<void> {
+		const input = options.input || this.activeInput || this.input;
+		const sessionKey = options.sessionKey || this.activeSessionKey || this.sessionKey;
+		const existingSession = this.sessionState.generations.get(sessionKey);
+		if (existingSession && !options.force) {
+			this.attachGenerationSession(existingSession);
+			return;
+		}
+		this.detachGenerationSession();
+		this.activeInput = input;
+		this.activeSessionKey = sessionKey;
 		this.result = null;
 		this.noteFile = null;
 		this.streamingPreviewEl = null;
 		this.renderActions();
-		this.setStatus("正在提取当前章节并请求 Kimi 生成 AI 阅读结果...");
+		this.setStatus("正在提取所选范围并请求 Kimi 生成 AI 阅读结果...");
 		if (this.resultEl) {
 			this.resultEl.empty();
 			this.resultEl.createDiv({ text: "生成中..." });
 		}
+		const bookKey = getEpubAiReadingBookKey(input);
+		const generationSession = this.createGenerationSession(input, sessionKey, bookKey);
+		this.attachGenerationSession(generationSession);
 
 		try {
-			this.result = await requestEpubAiReading(this.input, {
-				app: this.app,
-				configHost: this.configHost,
-				envPathCandidates: this.envPathCandidates,
-				onStage: (stage) => this.setStatus(stage),
-				onPartialContent: (content) => this.renderStreamingPreview(content),
-			});
-			this.setStatus("已生成当前章节 AI 阅读结果。");
-			this.rememberCurrentResult(false);
-			await this.renderMarkdown(this.result.content);
+			await generationSession.request;
 		} catch (error) {
 			logger.error("[EpubAiReadingModal] Failed to generate AI reading:", error);
-			this.setStatus(error instanceof Error ? error.message : String(error));
-			if (this.resultEl) {
-				this.resultEl.empty();
-				this.resultEl.createDiv({
-					cls: "weave-epub-ai-reading-error",
-					text: "AI 阅读生成失败，请检查 .env 中的 Kimi API Key、网络连接或模型配置。",
-				});
-			}
 		} finally {
 			this.renderActions();
 		}
+	}
+
+	private createGenerationSession(
+		input: EpubAiReadingInput,
+		sessionKey: string,
+		bookKey: string
+	): EpubAiReadingGenerationSession {
+		this.sessionState.generations.delete(sessionKey);
+		const session = {
+			key: sessionKey,
+			bookKey,
+			input,
+			state: "generating" as const,
+			status: "正在提取所选范围并请求 Kimi 生成 AI 阅读结果...",
+			partialContent: "",
+			result: null,
+			errorMessage: "",
+			noteFile: null,
+			savedToNote: false,
+			updatedAt: Date.now(),
+			request: Promise.resolve(null as unknown as EpubAiReadingResult),
+			listeners: new Set<() => void>(),
+		};
+		this.sessionState.generations.set(sessionKey, session);
+		this.sessionState.latestSessionKeyByBook.set(bookKey, sessionKey);
+		session.request = requestEpubAiReading(input, {
+			app: this.app,
+			configHost: this.configHost,
+			envPathCandidates: this.envPathCandidates,
+			onStage: (stage) => {
+				session.status = stage;
+				session.updatedAt = Date.now();
+				this.notifyGenerationSession(session);
+			},
+			onPartialContent: (content) => {
+				session.partialContent = content;
+				session.updatedAt = Date.now();
+				this.notifyGenerationSession(session);
+			},
+		})
+			.then((result) => {
+				session.state = "result";
+				session.result = result;
+				session.status = "已生成当前范围 AI 阅读结果。";
+				session.updatedAt = Date.now();
+				this.sessionState.generations.delete(sessionKey);
+				this.result = result;
+				this.noteFile = session.noteFile;
+				this.activeInput = input;
+				this.activeSessionKey = sessionKey;
+				this.rememberCurrentResult(false);
+				this.notifyGenerationSession(session);
+				return result;
+			})
+			.catch((error) => {
+				session.state = "error";
+				session.errorMessage = error instanceof Error ? error.message : String(error);
+				session.status = session.errorMessage;
+				session.updatedAt = Date.now();
+				this.notifyGenerationSession(session);
+				throw error;
+			});
+		return session;
 	}
 
 	private async renderMarkdown(markdown: string): Promise<void> {

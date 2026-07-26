@@ -223,6 +223,139 @@ describe("EpubAiReadingModal", () => {
 		expect(modal.contentEl.textContent || "").toContain("全书 AI 阅读将在后续版本支持");
 	});
 
+	it("starts AI reading with the selected TOC scope input", async () => {
+		const resolveScopedInput = vi.fn(async () => ({
+			bookTitle: "Demo Book",
+			filePath: "Books/scoped.epub",
+			chapterTitle: "准备工作",
+			chapterHref: "text/ch1.xhtml#setup",
+			chapterText: "Scoped text",
+			tocItems: createScopeToc(),
+		}));
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/scoped.epub",
+			chapterTitle: "准备工作",
+			chapterHref: "text/ch1.xhtml#setup",
+			content: "scoped AI reading result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/scoped.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/ch1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", "tools", "setup"],
+			resolveScopedInput,
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+		Array.from(modal.contentEl.querySelectorAll("button"))
+			.find((button) => button.textContent === "开始 AI 阅读")
+			?.click();
+
+		await waitFor(() => {
+			expect(resolveScopedInput).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "toc",
+					label: "准备工作",
+					href: "text/ch1.xhtml#setup",
+					flatIndex: 2,
+				})
+			);
+			expect(mockedRequestEpubAiReading).toHaveBeenCalledWith(
+				expect.objectContaining({
+					chapterTitle: "准备工作",
+					chapterHref: "text/ch1.xhtml#setup",
+					chapterText: "Scoped text",
+				}),
+				expect.any(Object)
+			);
+			expect(modal.contentEl.textContent || "").toContain("scoped AI reading result");
+		});
+	});
+
+	it("restores an in-progress scoped generation after the modal is closed", async () => {
+		const app = new App();
+		let finishGeneration!: () => void;
+		const pendingGeneration = new Promise<void>((resolve) => {
+			finishGeneration = resolve;
+		});
+		const resolveScopedInput = vi.fn(async () => ({
+			bookTitle: "Demo Book",
+			filePath: "Books/scoped-resume.epub",
+			chapterTitle: "准备工作",
+			chapterHref: "text/ch1.xhtml#setup",
+			chapterText: "Scoped text",
+			tocItems: createScopeToc(),
+		}));
+		mockedRequestEpubAiReading.mockImplementation(async (_input, options) => {
+			const hooks = options as {
+				onStage?: (message: string) => void;
+				onPartialContent?: (content: string) => void;
+			};
+			hooks.onStage?.("AI 正在整理所选范围");
+			hooks.onPartialContent?.("流式片段 A");
+			await pendingGeneration;
+			return {
+				bookTitle: "Demo Book",
+				filePath: "Books/scoped-resume.epub",
+				chapterTitle: "准备工作",
+				chapterHref: "text/ch1.xhtml#setup",
+				content: "恢复后的最终结果",
+				model: "k3",
+				generatedAt: 1710000000000,
+			};
+		});
+		const options = {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/scoped-resume.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/ch1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", "tools", "setup"],
+			resolveScopedInput,
+		};
+		const firstModal = new EpubAiReadingModal(app, options);
+
+		EpubAiReadingModal.prototype.onOpen.call(firstModal);
+		Array.from(firstModal.contentEl.querySelectorAll("button"))
+			.find((button) => button.textContent === "开始 AI 阅读")
+			?.click();
+
+		await waitFor(() => {
+			expect(firstModal.contentEl.textContent || "").toContain("流式片段 A");
+		});
+		EpubAiReadingModal.prototype.onClose.call(firstModal);
+
+		const secondModal = new EpubAiReadingModal(app, options);
+
+		EpubAiReadingModal.prototype.onOpen.call(secondModal);
+
+		await waitFor(() => {
+			expect(secondModal.contentEl.textContent || "").toContain("AI 正在整理所选范围");
+			expect(secondModal.contentEl.textContent || "").toContain("流式片段 A");
+		});
+		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
+
+		finishGeneration();
+
+		await waitFor(() => {
+			expect(secondModal.contentEl.textContent || "").toContain("恢复后的最终结果");
+		});
+		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
+	});
+
 	it("restores an unsaved AI reading result when reopening the same chapter", async () => {
 		const app = new App();
 		const input = {
