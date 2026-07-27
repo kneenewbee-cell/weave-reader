@@ -476,8 +476,9 @@ export class EpubAiReadingModal extends Modal {
 		const scopeRoot = this.resultEl.createDiv({ cls: "weave-epub-ai-reading-scope-picker" });
 		scopeRoot.createEl("h3", { text: "选择 AI 阅读范围" });
 		const levels = buildEpubAiReadingScopeLevels(this.tocItems, this.selectedScopeIds);
+		const controlsRoot = scopeRoot.createDiv({ cls: "weave-epub-ai-reading-scope-controls" });
 		for (const level of levels) {
-			const row = scopeRoot.createDiv({ cls: "weave-epub-ai-reading-scope-row" });
+			const row = controlsRoot.createDiv({ cls: "weave-epub-ai-reading-scope-row" });
 			row.createEl("label", {
 				cls: "weave-epub-ai-reading-scope-label",
 				text: `第 ${level.depth + 1} 级`,

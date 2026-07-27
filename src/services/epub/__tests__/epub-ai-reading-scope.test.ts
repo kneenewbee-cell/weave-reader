@@ -87,6 +87,18 @@ describe("EPUB AI reading scope helper", () => {
 		]);
 	});
 
+	it("keeps the book max depth visible when the selected top-level item is a leaf", () => {
+		const levels = buildEpubAiReadingScopeLevels(nestedToc, ["chapter-2"]);
+
+		expect(levels).toHaveLength(3);
+		expect(levels[0].selectedId).toBe("chapter-2");
+		expect(levels[0].disabled).toBe(false);
+		expect(levels[1].selectedId).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(levels[1].disabled).toBe(true);
+		expect(levels[2].selectedId).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(levels[2].disabled).toBe(true);
+	});
+
 	it("resolves top-level All as the disabled full-book placeholder", () => {
 		const selection = resolveEpubAiReadingScopeSelection(nestedToc, [
 			EPUB_AI_READING_ALL_SCOPE_ID,

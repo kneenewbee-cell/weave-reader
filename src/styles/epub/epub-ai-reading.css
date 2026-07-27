@@ -192,11 +192,21 @@
 	line-height: 1.35;
 }
 
-.weave-epub-ai-reading-scope-row {
+.weave-epub-ai-reading-scope-controls {
 	display: grid;
-	grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
-	align-items: center;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 240px));
+	align-items: end;
+	justify-content: start;
 	gap: 10px;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.weave-epub-ai-reading-scope-row {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 5px;
 	min-width: 0;
 }
 
@@ -211,6 +221,7 @@
 	width: 100%;
 	min-width: 0;
 	max-width: 100%;
+	min-height: 32px;
 }
 
 .weave-epub-ai-reading-scope-summary {

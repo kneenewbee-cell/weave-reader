@@ -199,6 +199,28 @@ describe("EpubAiReadingModal", () => {
 		expect(scopeControls[2].disabled).toBe(true);
 	});
 
+	it("groups scope controls in a compact controls area", () => {
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", "tools", "setup"],
+			resolveScopedInput: vi.fn(),
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		const controls = modal.contentEl.querySelector(".weave-epub-ai-reading-scope-controls");
+		expect(controls).not.toBeNull();
+		expect(controls?.querySelectorAll(".weave-epub-ai-reading-scope-row")).toHaveLength(3);
+	});
+
 	it("disables generation for the full-book All placeholder", () => {
 		const modal = new EpubAiReadingModal(new App(), {
 			input: {

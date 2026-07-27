@@ -210,7 +210,7 @@ export function buildEpubAiReadingScopeLevels(
 		pathLabels = [...pathLabels, selectedLabel];
 		items = selectedItem.subitems || [];
 		if (items.length === 0) {
-			break;
+			lockedUntilDepth = rootMaxDepth;
 		}
 	}
 
@@ -323,4 +323,3 @@ export function getEpubAiReadingScopeSessionKeyPart(scope: EpubAiReadingScopeSel
 		scope.pathLabels.map(normalizeScopeText).join(">"),
 	].join("::");
 }
-
