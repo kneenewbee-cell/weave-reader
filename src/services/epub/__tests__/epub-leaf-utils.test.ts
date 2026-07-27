@@ -11,6 +11,10 @@ vi.mock('../../../views/EpubView', () => ({
 	VIEW_TYPE_EPUB: 'weave-epub-reader',
 }));
 
+vi.mock('../../../views/PdfView', () => ({
+	VIEW_TYPE_PDF: 'weave-pdf-reader',
+}));
+
 vi.mock('../../../stores/epub-active-document-store', () => ({
 	epubActiveDocumentStore: {
 		getActiveDocument: () => '',
@@ -35,9 +39,11 @@ import {
 	findOpenEpubLeaf,
 	openBookForSourceNavigation,
 	pathsReferToSameOpenBook,
+	resolveRegisteredEpubViewType,
 } from '../../../utils/epub-leaf-utils';
 
 const VIEW_TYPE_EPUB = 'weave-epub-reader';
+const VIEW_TYPE_PDF = 'weave-pdf-reader';
 
 describe('epub-leaf-utils source navigation', () => {
 	beforeEach(() => {
@@ -138,5 +144,21 @@ describe('epub-leaf-utils source navigation', () => {
 		expect(result).toBe(newTabLeaf);
 		expect(app.workspace.getLeaf).toHaveBeenCalledWith('tab');
 		expect(newTabLeaf.setViewState).toHaveBeenCalled();
+	});
+
+	it('prefers the Weave PDF reader for PDFs even when the pdf extension is already registered elsewhere', () => {
+		const app = {
+			viewRegistry: {
+				typeByExtension: {
+					get: vi.fn((extension: string) => extension === 'pdf' ? 'pdf' : VIEW_TYPE_EPUB),
+				},
+				viewByType: new Map([
+					[VIEW_TYPE_EPUB, {}],
+					[VIEW_TYPE_PDF, {}],
+				]),
+			},
+		} as any;
+
+		expect(resolveRegisteredEpubViewType(app, 'Books/paper.pdf')).toBe(VIEW_TYPE_PDF);
 	});
 });

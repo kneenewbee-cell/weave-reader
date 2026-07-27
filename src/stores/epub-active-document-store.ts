@@ -30,8 +30,31 @@ export interface EpubNavigationRequest {
 	showLocateOverlay?: boolean;
 }
 
+export type ActiveReaderDocumentKind = "epub" | "pdf" | null;
+
+export interface PdfPageThumbnail {
+	pageNumber: number;
+	image: string;
+}
+
+export interface PdfSharedState {
+	filePath: string;
+	title: string;
+	currentPage?: number;
+	pageCount?: number;
+	furthestPage?: number;
+	progress?: number;
+	visitedPageCount?: number;
+	activeTool?: "pan" | "select" | "stroke-select" | "capture" | "pen" | "highlighter" | "eraser";
+	inkStrokeCount?: number;
+	thumbnails?: PdfPageThumbnail[];
+	onNavigatePage?: ((pageNumber: number) => void) | null;
+}
+
 export interface EpubSharedState {
+	activeKind: ActiveReaderDocumentKind;
 	filePath: string | null;
+	pdf: PdfSharedState | null;
 	readerService: EpubReaderEngine | null;
 	annotationService: EpubAnnotationService | null;
 	highlightViewSnapshotService: EpubHighlightViewSnapshotService | null;
@@ -77,7 +100,9 @@ type Subscriber = (state: EpubSharedState) => void;
 type FilePathSubscriber = (filePath: string | null) => void;
 
 const EMPTY_STATE: EpubSharedState = {
+	activeKind: null,
 	filePath: null,
+	pdf: null,
 	readerService: null,
 	annotationService: null,
 	highlightViewSnapshotService: null,
@@ -119,12 +144,77 @@ class EpubActiveDocumentStore {
 	private filePathSubscribers: Set<FilePathSubscriber> = new Set();
 
 	setActiveDocument(filePath: string | null): void {
+		if (!filePath) {
+			this.clearActiveDocument();
+			return;
+		}
+		this.state.activeKind = "epub";
 		this.state.filePath = filePath;
+		this.state.pdf = null;
 		this.notifyAll();
 	}
 
 	getActiveDocument(): string | null {
 		return this.state.filePath;
+	}
+
+	setActivePdfDocument(input: PdfSharedState): void {
+		const filePath = String(input.filePath || "").trim();
+		const title = String(input.title || "").trim();
+		const pdf: PdfSharedState = {
+			filePath,
+			title,
+		};
+
+		if (Number.isFinite(input.currentPage)) {
+			pdf.currentPage = Math.max(1, Math.floor(Number(input.currentPage)));
+		}
+		if (Number.isFinite(input.pageCount)) {
+			pdf.pageCount = Math.max(1, Math.floor(Number(input.pageCount)));
+		}
+		if (Number.isFinite(input.furthestPage)) {
+			pdf.furthestPage = Math.max(1, Math.floor(Number(input.furthestPage)));
+		}
+		if (Number.isFinite(input.progress)) {
+			pdf.progress = Math.max(0, Math.min(100, Math.round(Number(input.progress))));
+		}
+		if (Number.isFinite(input.visitedPageCount)) {
+			pdf.visitedPageCount = Math.max(0, Math.floor(Number(input.visitedPageCount)));
+		}
+		if (
+			input.activeTool === "pan" ||
+			input.activeTool === "select" ||
+			input.activeTool === "stroke-select" ||
+			input.activeTool === "capture" ||
+			input.activeTool === "pen" ||
+			input.activeTool === "highlighter" ||
+			input.activeTool === "eraser"
+		) {
+			pdf.activeTool = input.activeTool;
+		}
+		if (Number.isFinite(input.inkStrokeCount)) {
+			pdf.inkStrokeCount = Math.max(0, Math.floor(Number(input.inkStrokeCount)));
+		}
+		if (Array.isArray(input.thumbnails)) {
+			pdf.thumbnails = input.thumbnails
+				.filter((thumbnail) => thumbnail?.pageNumber && thumbnail?.image)
+				.map((thumbnail) => ({
+					pageNumber: Math.max(1, Math.floor(Number(thumbnail.pageNumber))),
+					image: String(thumbnail.image),
+				}));
+		}
+		if (typeof input.onNavigatePage === "function") {
+			pdf.onNavigatePage = input.onNavigatePage;
+		}
+
+		this.state = {
+			...EMPTY_STATE,
+			activeKind: "pdf",
+			filePath,
+			pdf,
+			progress: pdf.progress ?? 0,
+		};
+		this.notifyAll();
 	}
 
 	clearActiveDocument(filePath?: string | null): void {

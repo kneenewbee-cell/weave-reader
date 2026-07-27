@@ -67,9 +67,24 @@ vi.mock('../EpubStorageService', () => ({
   }),
 }));
 
+vi.mock('../../../views/EpubView', () => ({
+  VIEW_TYPE_EPUB: 'weave-epub-reader-standalone',
+  EpubView: class MockEpubView {},
+}));
+
+vi.mock('../../../views/EpubSidebarView', () => ({
+  VIEW_TYPE_EPUB_SIDEBAR: 'weave-epub-sidebar-standalone',
+  EpubSidebarView: class MockEpubSidebarView {},
+}));
+
+vi.mock('../../../views/EpubBookshelfSidebarView', () => ({
+  VIEW_TYPE_EPUB_BOOKSHELF_SIDEBAR: 'weave-epub-bookshelf-sidebar-standalone',
+  EpubBookshelfSidebarView: class MockEpubBookshelfSidebarView {},
+}));
+
 import { TFile } from 'obsidian';
 import { EpubStorageService } from '../EpubStorageService';
-import { openEpubReader } from '../epub-plugin-support';
+import { openEpubReader, registerEpubWorkspaceViews } from '../epub-plugin-support';
 import { EPUB_RUNTIME } from '../epub-runtime';
 
 function createVaultFile(path: string): TFile {
@@ -141,5 +156,33 @@ describe('epub-plugin-support openEpubReader', () => {
       type: EPUB_RUNTIME.events.bookshelfDataChanged,
     }));
     expect(notices).toEqual([]);
+  });
+});
+
+describe('epub-plugin-support workspace registration', () => {
+  beforeEach(() => {
+    notices.length = 0;
+  });
+
+  it('registers PDF files to the PDF reader view and keeps EPUB-like formats on the EPUB reader', () => {
+    const registerView = vi.fn();
+    const registerExtensions = vi.fn();
+    const host = {
+      app: createApp(),
+      registerView,
+      registerExtensions,
+    };
+    const pdfReaderViewType = (EPUB_RUNTIME.viewTypes as Record<string, string>).pdfReader;
+    const epubReaderViewType = 'weave-epub-reader-standalone';
+
+    registerEpubWorkspaceViews(host as any, '[Standalone EPUB]', 'Weave Reader');
+
+    expect(registerView).toHaveBeenCalledWith(pdfReaderViewType, expect.any(Function));
+    const epubRegisteredExtensions = registerExtensions.mock.calls
+      .filter((call) => call[1] === epubReaderViewType)
+      .flatMap((call) => call[0]);
+    expect(epubRegisteredExtensions).toEqual(expect.arrayContaining(['epub', 'txt']));
+    expect(epubRegisteredExtensions).not.toContain('pdf');
+    expect(registerExtensions).toHaveBeenCalledWith(['pdf'], pdfReaderViewType);
   });
 });

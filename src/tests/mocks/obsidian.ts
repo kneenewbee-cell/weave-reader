@@ -631,6 +631,7 @@ export const setIcon = vi.fn((element: HTMLElement, iconName: string) => {
 });
 
 export const requestUrl = vi.fn();
+export const loadPdfJs = vi.fn();
 
 // Mock constants
 export const Platform = {
@@ -670,6 +671,7 @@ export default {
   sanitizeHTMLToDom,
   setIcon,
   requestUrl,
+  loadPdfJs,
   Platform,
   mockApp,
   abstractInputSuggestInstances

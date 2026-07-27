@@ -64,6 +64,8 @@ export function getBookFormatDisplayLabel(extensionOrPath: string): string {
 			return "CBZ";
 		case "txt":
 			return "TXT";
+		case "pdf":
+			return "PDF";
 		default:
 			return normalized ? normalized.toUpperCase() : i18n.t("epub.common.unknownFormat");
 	}
@@ -78,7 +80,14 @@ export function isFreeBookFormat(filePathOrExtension: string): boolean {
 	const extension = isSupportedBookPath(filePathOrExtension)
 		? getBookExtensionFromPath(filePathOrExtension)
 		: normalizeBookExtension(filePathOrExtension);
-	return extension === "epub" || extension === "txt";
+	return extension === "epub" || extension === "txt" || extension === "pdf";
+}
+
+export function isPdfBookFormat(filePathOrExtension: string): boolean {
+	const extension = isSupportedBookPath(filePathOrExtension)
+		? getBookExtensionFromPath(filePathOrExtension)
+		: normalizeBookExtension(filePathOrExtension);
+	return extension === "pdf";
 }
 
 export function isSupportedBookPath(filePath: string): boolean {
@@ -103,7 +112,7 @@ export function stripSupportedBookExtension(value: string): string {
 	return String(value || "")
 		.trim()
 		.replace(/\.fb2\.zip$/i, "")
-		.replace(/\.(epub|mobi|azw3|fb2|fbz|cbz|txt)$/i, "");
+		.replace(/\.(epub|mobi|azw3|fb2|fbz|cbz|txt|pdf)$/i, "");
 }
 
 export function usesPlainTextBookAdapter(extensionOrPath: string): boolean {
@@ -117,7 +126,7 @@ export function usesFoliateGenericBookLoader(extensionOrPath: string): boolean {
 	const normalized = isSupportedBookPath(extensionOrPath)
 		? getBookExtensionFromPath(extensionOrPath)
 		: normalizeBookExtension(extensionOrPath);
-	return normalized !== "" && normalized !== "epub" && normalized !== "txt";
+	return normalized !== "" && normalized !== "epub" && normalized !== "txt" && normalized !== "pdf";
 }
 
 const SUPPORTED_BOOK_LOCATOR_MARKERS = [

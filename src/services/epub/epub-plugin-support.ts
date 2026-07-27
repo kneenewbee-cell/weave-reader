@@ -9,9 +9,10 @@ import {
 } from "../../views/EpubBookshelfSidebarView";
 import { EpubSidebarView, VIEW_TYPE_EPUB_SIDEBAR } from "../../views/EpubSidebarView";
 import { EpubView, VIEW_TYPE_EPUB } from "../../views/EpubView";
+import { PdfView, VIEW_TYPE_PDF } from "../../views/PdfView";
 import { createEpubLinkPostProcessor } from "./EpubLinkPostProcessor";
 import { EpubLinkService } from "./EpubLinkService";
-import { isSupportedBookFile, SUPPORTED_BOOK_EXTENSIONS } from "./book-format";
+import { isPdfBookFormat, isSupportedBookFile, SUPPORTED_BOOK_EXTENSIONS } from "./book-format";
 import { EPUB_RUNTIME } from "./epub-runtime";
 import { ensureEpubFileAccess } from "./epub-premium";
 
@@ -79,16 +80,31 @@ export function registerEpubWorkspaceViews(
 	ownerName: string
 ): void {
 	host.registerView(VIEW_TYPE_EPUB, (leaf) => new EpubView(leaf, host));
+	host.registerView(VIEW_TYPE_PDF, (leaf) => new PdfView(leaf));
 	host.registerView(
 		VIEW_TYPE_EPUB_BOOKSHELF_SIDEBAR,
 		(leaf) => new EpubBookshelfSidebarView(leaf, host)
 	);
 	host.registerView(VIEW_TYPE_EPUB_SIDEBAR, (leaf) => new EpubSidebarView(leaf, host));
+	const pdfBookExtensions = SUPPORTED_BOOK_EXTENSIONS.filter((extension) =>
+		isPdfBookFormat(extension)
+	);
+	const foliateBookExtensions = SUPPORTED_BOOK_EXTENSIONS.filter(
+		(extension) => !isPdfBookFormat(extension)
+	);
 	registerExtensionsSafely(
 		host,
 		host.app,
-		[...SUPPORTED_BOOK_EXTENSIONS],
+		[...foliateBookExtensions],
 		VIEW_TYPE_EPUB,
+		logPrefix,
+		ownerName
+	);
+	registerExtensionsSafely(
+		host,
+		host.app,
+		[...pdfBookExtensions],
+		VIEW_TYPE_PDF,
 		logPrefix,
 		ownerName
 	);

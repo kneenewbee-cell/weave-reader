@@ -30,6 +30,7 @@ export interface BookMetadata {
 	coverImage?: string;
 	wordCount?: number;
 	chapterCount: number;
+	pageCount?: number;
 }
 
 export type EpubHighlightStyle = "underline" | "strikethrough" | "wavy";

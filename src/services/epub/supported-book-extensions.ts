@@ -6,6 +6,7 @@ export const SUPPORTED_BOOK_EXTENSIONS = [
 	"fbz",
 	"cbz",
 	"txt",
+	"pdf",
 ] as const;
 
 export type SupportedBookExtension = (typeof SUPPORTED_BOOK_EXTENSIONS)[number];

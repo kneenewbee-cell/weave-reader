@@ -30,13 +30,14 @@
 		return new EpubBookmarkService(app);
 	}
 
- 	let sharedState = $state<EpubSharedState | null>(null);
+	let sharedState = $state<EpubSharedState | null>(null);
 	let activeTab = $state<'toc' | 'bookmarks' | 'highlights'>('toc');
   	let sidebarView = $state<'details' | 'bookshelf'>('details');
   	let tocItems = $state<TocItem[]>([]);
   	let bookshelfRefreshToken = $state(0);
   	let bookshelfMounted = $state(false);
-  	let effectiveSidebarView = $derived(sharedState?.book ? sidebarView : 'bookshelf');
+	let activePdf = $derived(sharedState?.activeKind === 'pdf' ? sharedState.pdf : null);
+  	let effectiveSidebarView = $derived(activePdf ? 'pdf' : (sharedState?.book ? sidebarView : 'bookshelf'));
 
 	$effect(() => {
 		if (effectiveSidebarView === 'bookshelf') {
@@ -74,10 +75,18 @@
   	let tocLoadToken = 0;
 	let tocLoading = $state(false);
 	let tocLoadFailed = $state(false);
-  	let sidebarDisposed = false;
+ 	let sidebarDisposed = false;
  	let lastExternalSearchNonce = 0;
  	const SIDEBAR_PROGRESS_SEGMENT_COUNT = 16;
 	let sidebarProgressPercent = $derived(Math.max(0, Math.min(100, Math.round(sharedState?.progress ?? 0))));
+	let pdfProgressPercent = $derived(Math.max(0, Math.min(100, Math.round(activePdf?.progress ?? 0))));
+	let pdfCoverImage = $derived(activePdf?.thumbnails?.[0]?.image ?? '');
+	let pdfProgressSegments = $derived(
+		Array.from({ length: SIDEBAR_PROGRESS_SEGMENT_COUNT }, (_, index) => ({
+			index,
+			filled: index < Math.round((pdfProgressPercent / 100) * SIDEBAR_PROGRESS_SEGMENT_COUNT)
+		}))
+	);
 	let lastReadTocHref = $derived.by(() => {
 		const state = sharedState;
 		if (!state?.canUseReadingProgress || !state.book) {
@@ -392,6 +401,10 @@
 		if (sharedState?.book) {
 			sidebarView = 'details';
 		}
+	}
+
+	function handlePdfPageNavigate(pageNumber: number) {
+		activePdf?.onNavigatePage?.(pageNumber);
 	}
 
 	async function loadHighlightCount(
@@ -793,7 +806,89 @@
 			/>
 		</div>
 	{/if}
-	{#if effectiveSidebarView !== 'bookshelf' && !sharedState?.book}
+	{#if effectiveSidebarView === 'pdf' && activePdf}
+		<div class="epub-global-sidebar-pdf">
+			<div class="epub-global-sidebar-header epub-global-sidebar-pdf-header">
+				<div class="header-flex">
+					{#if pdfCoverImage}
+						<img src={pdfCoverImage} alt="PDF cover" class="sidebar-cover" />
+					{:else}
+						<div class="sidebar-cover-placeholder">
+							<span use:icon={'file-text'}></span>
+						</div>
+					{/if}
+					<div class="header-info">
+						<div class="book-title">{activePdf.title || activePdf.filePath.split('/').pop() || 'PDF'}</div>
+						<div class="book-meta">
+							{#if activePdf.pageCount}
+								<span>{activePdf.pageCount} 页</span>
+								<span> · </span>
+							{/if}
+							<span>PDF</span>
+						</div>
+						{#if activePdf.pageCount}
+							<div class="book-meta pdf-page-meta">
+								<span>已读到 {activePdf.furthestPage ?? activePdf.currentPage ?? 0} / {activePdf.pageCount}</span>
+								<span> · </span>
+								<span>{pdfProgressPercent}%</span>
+							</div>
+							<div
+								class="book-progress-track"
+								role="progressbar"
+								aria-label="PDF reading progress"
+								aria-valuemin={0}
+								aria-valuemax={100}
+								aria-valuenow={pdfProgressPercent}
+								aria-valuetext={`${pdfProgressPercent}%`}
+							>
+								{#each pdfProgressSegments as segment (segment.index)}
+									<span class="book-progress-segment" class:filled={segment.filled}></span>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</div>
+			</div>
+			<div class="epub-global-sidebar-tabs pdf-sidebar-tabs">
+				<button class="epub-global-tab active" type="button">
+					<span class="tab-icon" use:icon={'layers'}></span>
+					<span class="tab-label">页面</span>
+					{#if activePdf.pageCount}
+						<span class="tab-count">{activePdf.pageCount}</span>
+					{/if}
+				</button>
+				<button class="epub-global-tab pdf-disabled-tab" type="button" disabled>
+					<span class="tab-icon" use:icon={'highlighter'}></span>
+					<span class="tab-label">标注</span>
+				</button>
+				<button class="epub-global-tab pdf-disabled-tab" type="button" disabled>
+					<span class="tab-icon" use:icon={'bookmark'}></span>
+					<span class="tab-label">书签</span>
+				</button>
+			</div>
+			<div class="epub-sidebar-content epub-global-sidebar-pdf-content" aria-label="PDF">
+				{#if activePdf.thumbnails?.length}
+					<div class="pdf-page-list" role="list" aria-label="PDF pages">
+						{#each activePdf.thumbnails as thumbnail (thumbnail.pageNumber)}
+							<button
+								class="pdf-page-item"
+								class:active={thumbnail.pageNumber === activePdf.currentPage}
+								type="button"
+								onclick={() => handlePdfPageNavigate(thumbnail.pageNumber)}
+							>
+								<img src={thumbnail.image} alt={`PDF page ${thumbnail.pageNumber}`} class="pdf-page-thumb" />
+								<span class="pdf-page-number">{thumbnail.pageNumber}</span>
+							</button>
+						{/each}
+					</div>
+				{:else}
+					<div class="pdf-page-list-empty">
+						<span use:icon={'file-text'}></span>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{:else if effectiveSidebarView !== 'bookshelf' && !sharedState?.book}
 		<div class="epub-global-sidebar-empty">
 			<span class="empty-icon" use:icon={'book-open'}></span>
 			<span class="empty-text">{t('epub.globalSidebar.noBookOpen')}</span>
@@ -1071,6 +1166,112 @@
 
 	.epub-global-sidebar-bookshelf.is-hidden {
 		display: none;
+	}
+
+	.epub-global-sidebar-pdf {
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	.epub-global-sidebar-pdf-content {
+		flex: 1 1 auto;
+		min-height: 0;
+		padding: var(--size-4-2) var(--size-4-3) var(--size-4-4);
+	}
+
+	.epub-global-sidebar-pdf-header .pdf-page-meta {
+		color: var(--text-faint);
+	}
+
+	.pdf-sidebar-tabs {
+		border-bottom: 1px solid var(--background-modifier-border);
+		padding-bottom: var(--size-2-2);
+	}
+
+	button.epub-global-tab.pdf-disabled-tab {
+		cursor: default;
+		opacity: 0.45;
+	}
+
+	button.epub-global-tab.pdf-disabled-tab:hover {
+		color: var(--text-muted);
+		background: transparent;
+	}
+
+	.pdf-page-list {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: var(--size-4-3);
+		width: 100%;
+	}
+
+	.pdf-page-item {
+		appearance: none;
+		-webkit-appearance: none;
+		display: grid;
+		grid-template-columns: 96px minmax(0, 1fr);
+		align-items: center;
+		gap: var(--size-4-3);
+		width: 100%;
+		margin: 0;
+		min-height: 118px;
+		height: auto;
+		padding: var(--size-4-2) var(--size-4-3);
+		border: 1px solid transparent;
+		border-radius: var(--radius-s);
+		background: transparent;
+		color: var(--text-muted);
+		text-align: left;
+		cursor: pointer;
+		box-shadow: none;
+		line-height: normal;
+		overflow: hidden;
+		transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+	}
+
+	.pdf-page-item:hover {
+		background: var(--background-modifier-hover);
+		color: var(--text-normal);
+	}
+
+	.pdf-page-item.active {
+		background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+		border-color: color-mix(in srgb, var(--interactive-accent) 35%, transparent);
+		color: var(--text-normal);
+	}
+
+	.pdf-page-thumb {
+		display: block;
+		width: 96px;
+		height: 96px;
+		object-fit: contain;
+		border: 1px solid var(--background-modifier-border);
+		border-radius: var(--radius-s);
+		background: var(--background-primary);
+		box-shadow: var(--shadow-s);
+	}
+
+	.pdf-page-number {
+		min-width: 0;
+		font-size: var(--font-ui-medium);
+		font-weight: 700;
+		line-height: 1.3;
+		color: inherit;
+	}
+
+	.pdf-page-list-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 120px;
+		color: var(--text-faint);
+	}
+
+	.pdf-page-list-empty :global(.svg-icon) {
+		width: 24px;
+		height: 24px;
 	}
 
 	.epub-global-sidebar-empty {

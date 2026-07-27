@@ -30,6 +30,11 @@ const ignoredDirectories = new Set([
 	"coverage"
 ]);
 
+const ignoredRootFiles = new Set([
+	"main.js",
+	"styles.css"
+]);
+
 const suspiciousSequencePattern =
 	/(?:�|澶辫触|璇诲彇|娓呯悊|鍒犻櫎|鍗＄墖|鐗岀粍|缂撳瓨|閫氱煡|鏁版嵁|鍚屾|璺緞|鎵归噺|鈿狅笍|鉂|馃|妫€|缁熶竴|鍒濆|瀵煎叆|绛涢€夊櫒|鏍囩|涓婚|纭繚|鍙栨秷|鍥為€€|鎵佸钩鍖|鍒峰啓|闄嶇骇鍒|鑾峰彇|浣跨敤|鏇存柊|闂|缂|婵|鍨|濠|鐗|杩|閫|鏉)/u;
 
@@ -84,6 +89,8 @@ function collectFiles(root) {
 
 function scanFile(absolutePath) {
 	const relativePath = toProjectRelative(absolutePath);
+	if (ignoredRootFiles.has(relativePath)) return [];
+
 	let lines;
 	try {
 		lines = fs.readFileSync(absolutePath, "utf8").split(/\r?\n/);

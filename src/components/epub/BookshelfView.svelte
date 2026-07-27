@@ -22,9 +22,20 @@
                 type ImportEpubAnnotatedBookPackageResult,
         } from '../../services/epub';
         import { PremiumFeatureGuard } from '../../services/premium/PremiumFeatureGuard';
-        import { getBookFormatDisplayLabel, isSupportedBookFile, stripSupportedBookExtension } from '../../services/epub/book-format';
+        import { getBookFormatDisplayLabel, isPdfBookFormat, isSupportedBookFile, stripSupportedBookExtension } from '../../services/epub/book-format';
         import { FoliateVaultPublicationParser } from '../../services/epub/FoliateVaultPublicationParser';
         import type { BookMetadata, EpubBook } from '../../services/epub';
+        import {
+                hasBookshelfDisplayDetails,
+                mergeBookshelfDisplayMetadata,
+                shouldParseBookshelfPublication,
+        } from '../../services/epub/bookshelf-metadata-loading';
+        import {
+                buildPdfBookshelfStatsParts,
+                loadPdfBookshelfInfo,
+                mergePdfBookshelfInfoIntoMeta,
+                type PdfBookshelfInfo,
+        } from '../../services/epub/pdf-bookshelf-metadata';
         import {
                 clampBookshelfProgress,
                 formatBookshelfLastReadTime,
@@ -104,6 +115,7 @@
                 coverImage?: string;
                 wordCount?: number;
                 chapterCount?: number;
+                pageCount?: number;
                 progress: number;
                 lastReadTime: number;
                 createdTime: number;
@@ -119,6 +131,7 @@
                 translator?: string;
                 publisher?: string;
                 wordCount?: number;
+                pageCount?: number;
                 formatLabel: string;
                 progress: number;
                 lastReadTime: number;
@@ -205,6 +218,9 @@
         let metadataRetryTimer: ReturnType<typeof window.setTimeout> | null = null;
         const storageService = untrack(() => getEpubStorageService(app));
         const coverCache = new Map<string, string | null>();
+        const metadataParsedPaths = new Set<string>();
+        const pdfMetadataParsedPaths = new Set<string>();
+        const pdfMetadataLoadingPaths = new Set<string>();
         let coverPersistTimer: ReturnType<typeof window.setTimeout> | null = null;
         const coverPersistPending = new Map<string, string | null>();
         const BOOKSHELF_DATA_CHANGED_EVENT = EPUB_RUNTIME.events.bookshelfDataChanged;
@@ -278,6 +294,10 @@
                         chapterCount:
                                 typeof book.metadata.chapterCount === 'number' && book.metadata.chapterCount > 0
                                         ? book.metadata.chapterCount
+                                        : undefined,
+                        pageCount:
+                                typeof book.metadata.pageCount === 'number' && book.metadata.pageCount > 0
+                                        ? book.metadata.pageCount
                                         : undefined,
                         progress: resolveDisplayProgress(book),
                         lastReadTime: Number.isFinite(book.readingStats?.lastReadTime) ? book.readingStats.lastReadTime : 0,
@@ -579,6 +599,36 @@
                 for (const [path, url] of remappedCoverCache.entries()) {
                         coverCache.set(path, url);
                 }
+
+                const remappedMetadataParsedPaths = new Set<string>();
+                for (const path of metadataParsedPaths) {
+                        const remapped = remapVaultPath(path, normalizedOldPath, newPath) || path;
+                        remappedMetadataParsedPaths.add(remapped);
+                }
+                metadataParsedPaths.clear();
+                for (const path of remappedMetadataParsedPaths) {
+                        metadataParsedPaths.add(path);
+                }
+
+                const remappedPdfMetadataParsedPaths = new Set<string>();
+                for (const path of pdfMetadataParsedPaths) {
+                        const remapped = remapVaultPath(path, normalizedOldPath, newPath) || path;
+                        remappedPdfMetadataParsedPaths.add(remapped);
+                }
+                pdfMetadataParsedPaths.clear();
+                for (const path of remappedPdfMetadataParsedPaths) {
+                        pdfMetadataParsedPaths.add(path);
+                }
+
+                const remappedPdfMetadataLoadingPaths = new Set<string>();
+                for (const path of pdfMetadataLoadingPaths) {
+                        const remapped = remapVaultPath(path, normalizedOldPath, newPath) || path;
+                        remappedPdfMetadataLoadingPaths.add(remapped);
+                }
+                pdfMetadataLoadingPaths.clear();
+                for (const path of remappedPdfMetadataLoadingPaths) {
+                        pdfMetadataLoadingPaths.add(path);
+                }
         }
 
         async function loadBookMetadata(files: EpubFileInfo[], runId: number, allowRetry = true): Promise<void> {
@@ -621,6 +671,19 @@
                         }
 
                         bookMetaByPath = nextMeta;
+                        for (const file of files) {
+                                if (!hasBookshelfDisplayDetails(nextMeta.get(file.path))) {
+                                        metadataParsedPaths.delete(file.path);
+                                }
+                        }
+                        for (const file of files) {
+                                if (!isPdfBookFormat(file.path)) continue;
+                                void loadPdfBookshelfInfoForFile(
+                                        file,
+                                        runId,
+                                        Boolean(file.customCoverPath || coverCache.get(file.path))
+                                );
+                        }
                 } catch {
                         if (runId === refreshRunId) {
                                 bookMetaByPath = new Map();
@@ -694,6 +757,21 @@
                                 coverCache.delete(path);
                         }
                 }
+                for (const path of Array.from(metadataParsedPaths)) {
+                        if (!validPaths.has(path)) {
+                                metadataParsedPaths.delete(path);
+                        }
+                }
+                for (const path of Array.from(pdfMetadataParsedPaths)) {
+                        if (!validPaths.has(path)) {
+                                pdfMetadataParsedPaths.delete(path);
+                        }
+                }
+                for (const path of Array.from(pdfMetadataLoadingPaths)) {
+                        if (!validPaths.has(path)) {
+                                pdfMetadataLoadingPaths.delete(path);
+                        }
+                }
         }
 
         function cancelScheduledCoverLoading() {
@@ -703,21 +781,101 @@
                 }
         }
 
+        function hasPositivePageCount(meta: BookshelfBookMeta | undefined): boolean {
+                return typeof meta?.pageCount === 'number'
+                        && Number.isFinite(meta.pageCount)
+                        && meta.pageCount > 0;
+        }
+
+        function mergeLoadedPdfBookshelfInfo(filePath: string, info: PdfBookshelfInfo): void {
+                const existing = bookMetaByPath.get(filePath);
+                if (!existing) {
+                        return;
+                }
+
+                const result = mergePdfBookshelfInfoIntoMeta(existing, info);
+                if (!result.changed) {
+                        return;
+                }
+
+                const nextMeta = new Map(bookMetaByPath);
+                nextMeta.set(filePath, result.metadata);
+                bookMetaByPath = nextMeta;
+        }
+
+        async function loadPdfBookshelfInfoForFile(
+                file: EpubFileInfo,
+                runId: number,
+                hasResolvedCover: boolean
+        ): Promise<void> {
+                const existing = bookMetaByPath.get(file.path);
+                const needsPageCount = !hasPositivePageCount(existing);
+                const needsCover = !hasResolvedCover;
+
+                if (
+                        (!needsPageCount && !needsCover)
+                        || pdfMetadataParsedPaths.has(file.path)
+                        || pdfMetadataLoadingPaths.has(file.path)
+                ) {
+                        return;
+                }
+
+                pdfMetadataLoadingPaths.add(file.path);
+                try {
+                        const info = await loadPdfBookshelfInfo(app, file.path, {
+                                renderCover: needsCover,
+                        });
+                        if (runId !== refreshRunId) return;
+
+                        pdfMetadataParsedPaths.add(file.path);
+                        mergeLoadedPdfBookshelfInfo(file.path, info);
+                        if (info.coverImage) {
+                                cacheResolvedCover(file.path, info.coverImage);
+                        } else if (needsCover && !coverCache.has(file.path)) {
+                                cacheResolvedCover(file.path, null);
+                        }
+                } catch (error) {
+                        if (runId === refreshRunId) {
+                                logger.error('Failed to load PDF bookshelf metadata:', error);
+                                pdfMetadataParsedPaths.add(file.path);
+                                if (needsCover && !coverCache.has(file.path)) {
+                                        cacheResolvedCover(file.path, null);
+                                }
+                        }
+                } finally {
+                        pdfMetadataLoadingPaths.delete(file.path);
+                }
+        }
+
         async function loadCoverForFile(file: EpubFileInfo, runId: number): Promise<void> {
                 if (runId !== refreshRunId) return;
+                let hasResolvedCover = false;
                 if (file.customCoverPath) {
                         cacheResolvedCover(
                                 file.path,
                                 resolveVaultImageResourceUrl(app, file.customCoverPath)
                         );
-                        return;
+                        hasResolvedCover = true;
                 }
-                if (coverCache.has(file.path)) {
+                const hasCachedCover = coverCache.has(file.path);
+                if (!hasResolvedCover && hasCachedCover) {
                         const cachedCover = coverCache.get(file.path);
                         if (cachedCover && !covers.has(file.path)) {
                                 covers.set(file.path, cachedCover);
                                 covers = new Map(covers);
                         }
+                        hasResolvedCover = Boolean(cachedCover);
+                }
+                if (isPdfBookFormat(file.path)) {
+                        await loadPdfBookshelfInfoForFile(file, runId, hasResolvedCover);
+                        return;
+                }
+                if (!shouldParseBookshelfPublication({
+                        isPdf: isPdfBookFormat(file.path),
+                        hasCachedCover: hasResolvedCover || hasCachedCover,
+                        metadataParseAttempted: metadataParsedPaths.has(file.path),
+                        meta: bookMetaByPath.get(file.path),
+                })) {
                         return;
                 }
 
@@ -726,11 +884,17 @@
                         const loaded = await publicationParser.load(file.path);
                         const coverUrl = loaded.coverImage || null;
                         if (runId !== refreshRunId) return;
+                        metadataParsedPaths.add(file.path);
                         mergeParsedBookshelfMetadata(file.path, loaded.metadata);
-                        cacheResolvedCover(file.path, coverUrl);
+                        if (!hasResolvedCover) {
+                                cacheResolvedCover(file.path, coverUrl);
+                        }
                 } catch {
                         if (runId === refreshRunId) {
-                                cacheResolvedCover(file.path, null);
+                                metadataParsedPaths.add(file.path);
+                                if (!hasResolvedCover && !hasCachedCover) {
+                                        cacheResolvedCover(file.path, null);
+                                }
                         }
                 } finally {
                         publicationParser.dispose();
@@ -782,45 +946,13 @@
                         return;
                 }
 
-                const next: BookshelfBookMeta = { ...existing };
-                let changed = false;
-
-                if (
-                        typeof metadata.wordCount === 'number'
-                        && metadata.wordCount > 0
-                        && metadata.wordCount !== existing.wordCount
-                ) {
-                        next.wordCount = metadata.wordCount;
-                        changed = true;
-                }
-
-                const publisher = metadata.publisher?.trim();
-                if (publisher && publisher !== existing.publisher) {
-                        next.publisher = publisher;
-                        changed = true;
-                }
-
-                const translator = metadata.translator?.trim();
-                if (translator && translator !== existing.translator) {
-                        next.translator = translator;
-                        changed = true;
-                }
-
-                if (
-                        typeof metadata.chapterCount === 'number'
-                        && metadata.chapterCount > 0
-                        && metadata.chapterCount !== existing.chapterCount
-                ) {
-                        next.chapterCount = metadata.chapterCount;
-                        changed = true;
-                }
-
-                if (!changed) {
+                const result = mergeBookshelfDisplayMetadata(existing, metadata);
+                if (!result.changed) {
                         return;
                 }
 
                 const nextMeta = new Map(bookMetaByPath);
-                nextMeta.set(filePath, next);
+                nextMeta.set(filePath, result.metadata);
                 bookMetaByPath = nextMeta;
         }
 
@@ -1178,6 +1310,8 @@
                 covers.delete(filePath);
                 covers = new Map(covers);
                 coverCache.delete(filePath);
+                pdfMetadataParsedPaths.delete(filePath);
+                pdfMetadataLoadingPaths.delete(filePath);
                 bookMetaByPath.delete(filePath);
                 bookMetaByPath = new Map(bookMetaByPath);
         }
@@ -1198,6 +1332,8 @@
         }
 
         function resetBookStateInList(filePath: string) {
+                pdfMetadataParsedPaths.delete(filePath);
+                pdfMetadataLoadingPaths.delete(filePath);
                 bookMetaByPath.delete(filePath);
                 bookMetaByPath = new Map(bookMetaByPath);
         }
@@ -1939,6 +2075,8 @@
                                 cacheResolvedCover(resolvedPath, resolveVaultImageResourceUrl(app, coverPath));
                         } else {
                                 coverCache.delete(resolvedPath);
+                                pdfMetadataParsedPaths.delete(resolvedPath);
+                                pdfMetadataLoadingPaths.delete(resolvedPath);
                                 const targetFile = epubFiles.find((file) => file.path === resolvedPath);
                                 if (targetFile) {
                                         void loadCoverForFile(targetFile, refreshRunId);
@@ -2262,6 +2400,10 @@
         }
 
         function buildBookStatsLine(file: EpubFileInfo, meta?: BookshelfBookMeta): string {
+                if (isPdfBookFormat(file.path)) {
+                        return buildPdfBookshelfStatsParts({ pageCount: meta?.pageCount }).join(' · ');
+                }
+
                 return [
                         formatBookshelfWordCount(meta?.wordCount),
                         formatBookshelfChapterCount(meta?.chapterCount),
@@ -2301,6 +2443,7 @@
                                         translator: meta?.translator?.trim() || undefined,
                                         publisher: meta?.publisher?.trim() || undefined,
                                         wordCount: meta?.wordCount,
+                                        pageCount: meta?.pageCount,
                                         formatLabel,
                                         progress,
                                         lastReadTime,
@@ -2768,6 +2911,8 @@
                         }
                         coverPersistPending.clear();
                         coverCache.clear();
+                        pdfMetadataParsedPaths.clear();
+                        pdfMetadataLoadingPaths.clear();
                 };
         });
 
