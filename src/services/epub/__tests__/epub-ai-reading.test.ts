@@ -135,6 +135,27 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).not.toContain("# \u5f53\u524d\u7ae0\u8282\u6b63\u6587\nFallback chapter text");
 	});
 
+	it("includes scope context as relationship guidance without replacing scoped body text", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "Scoped Book",
+			filePath: "Books/scoped.epub",
+			chapterTitle: "Selected section",
+			chapterHref: "Text/chapter.xhtml#selected",
+			chapterText: "Only this selected section body should be treated as the close reading source.",
+			tocItems,
+			scopeContext: [
+				"Selected path: Chapter 1 > Selected section",
+				"Previous sibling: Before section",
+				"Next sibling: After section",
+			].join("\n"),
+		});
+
+		expect(messages.user).toContain("# \u9605\u8bfb\u8303\u56f4\u4e0e\u5916\u90e8\u7ed3\u6784\u7ebf\u7d22");
+		expect(messages.user).toContain("Selected path: Chapter 1 > Selected section");
+		expect(messages.user).toContain("\u5916\u90e8\u7ebf\u7d22\u53ea\u7528\u4e8e\u7406\u89e3\u7ae0\u8282\u5173\u7cfb");
+		expect(messages.user).toContain("Only this selected section body should be treated as the close reading source.");
+	});
+
 	it("extracts assistant content from a Kimi chat completion response", () => {
 		const text = extractKimiChatCompletionText({
 			choices: [

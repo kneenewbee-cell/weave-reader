@@ -66,7 +66,10 @@
 		canReuseExistingBook,
 		resolveBookLoadRestoredPosition,
 	} from '../../services/epub/epub-reader-book-load-helpers';
-	import { resolveDefaultEpubAiReadingScopeIds } from '../../services/epub/epub-ai-reading-scope';
+	import {
+		resolveDefaultEpubAiReadingScopeIds,
+		type EpubAiReadingScopeSelection,
+	} from '../../services/epub/epub-ai-reading-scope';
 	import { flattenTocItems } from '../../utils/epub-toc-reading-position';
 	import {
 		findEpubPortableBookIdByIdentity,
@@ -128,7 +131,10 @@
 	import { shouldDismissToolbarOnPointerDown } from './toolbar-positioning';
 	import { buildEpubMarkdownLocateCandidates } from '../../services/ui/source-locate-candidates';
 	import type { AIConfigHost } from '../../services/ai/ai-host';
-	import { buildEpubAiReadingSourceBlocksFromParagraphs } from '../../services/epub/epub-ai-reading-source-blocks';
+	import {
+		buildEpubAiReadingSourceBlocksFromParagraphs,
+		filterReaderParagraphsForAiReadingDraft,
+	} from '../../services/epub/epub-ai-reading-source-blocks';
 	import { attachExternalHighlightSyncReload } from './external-highlight-sync-reload';
 	import {
 		attachEpubCardHighlightSyncBridge,
@@ -4858,6 +4864,58 @@
 		return replaceWikilinkAlias(link, blockId);
 	}
 
+	function formatAiReadingTocContextItem(item: FlatTocExportItem | undefined): string {
+		if (!item) {
+			return '';
+		}
+		const label = String(item.label || item.href || '').trim();
+		const href = String(item.href || '').trim();
+		return href ? `${label} (${href})` : label;
+	}
+
+	function buildAiReadingScopeContext(
+		scope: EpubAiReadingScopeSelection,
+		flatTocItems: FlatTocExportItem[]
+	): string {
+		if (scope.kind !== 'toc' || typeof scope.flatIndex !== 'number') {
+			return '';
+		}
+		const selected = flatTocItems[scope.flatIndex];
+		if (!selected) {
+			return '';
+		}
+		const endFlatIndex =
+			typeof scope.endFlatIndex === 'number'
+				? Math.max(scope.flatIndex, scope.endFlatIndex)
+				: scope.flatIndex;
+		const scopedItems = flatTocItems.slice(scope.flatIndex, endFlatIndex + 1);
+		const descendants = scopedItems.slice(1);
+		const siblings = flatTocItems.filter((item) => item.depth === selected.depth);
+		const siblingWindow = siblings
+			.slice(
+				Math.max(0, siblings.findIndex((item) => item.id === selected.id) - 2),
+				Math.max(0, siblings.findIndex((item) => item.id === selected.id) - 2) + 5
+			)
+			.map(formatAiReadingTocContextItem)
+			.filter(Boolean);
+		const lines = [
+			`精读范围路径：${scope.pathLabels.join(' > ') || formatAiReadingTocContextItem(selected)}`,
+			`精读范围 href：${String(scope.href || selected.href || '').trim() || '未知'}`,
+			scope.includeDescendants ? '范围策略：包含该目录项及其下级目录正文。' : '范围策略：只精读当前目录项正文。',
+			descendants.length > 0
+				? `范围内下级目录：${descendants.map(formatAiReadingTocContextItem).filter(Boolean).join('；')}`
+				: '',
+			flatTocItems[scope.flatIndex - 1]
+				? `前一目录线索：${formatAiReadingTocContextItem(flatTocItems[scope.flatIndex - 1])}`
+				: '',
+			flatTocItems[endFlatIndex + 1]
+				? `后一目录线索：${formatAiReadingTocContextItem(flatTocItems[endFlatIndex + 1])}`
+				: '',
+			siblingWindow.length > 0 ? `同级目录线索：${siblingWindow.join('；')}` : '',
+		];
+		return lines.filter(Boolean).join('\n');
+	}
+
 	async function buildAiReadingSourceBlocksForDraft(draft: EpubChapterReadingPointDraft) {
 		if (typeof readerService.getParagraphsForChapter !== 'function' || draft.chapterIndex < 0) {
 			return [];
@@ -4866,7 +4924,11 @@
 			const paragraphs = await readerService.getParagraphsForChapter(draft.chapterIndex, {
 				includeHtml: true,
 			});
-			return buildEpubAiReadingSourceBlocksFromParagraphs(paragraphs || [], {
+			const scopedParagraphs = filterReaderParagraphsForAiReadingDraft(
+				paragraphs || [],
+				draft.markdown || draft.text
+			);
+			return buildEpubAiReadingSourceBlocksFromParagraphs(scopedParagraphs, {
 				maxBlocks: EPUB_AI_READING_SOURCE_BLOCK_LIMIT,
 				sourceLinkForParagraph: (paragraph, blockId) =>
 					buildAiReadingParagraphSourceLink(paragraph, blockId),
@@ -5450,11 +5512,13 @@
 						const item = flatTocItems[scope.flatIndex];
 						if (item) {
 							const scopedTitle = String(item.label || '').trim() || titleHint;
+							const boundaryFlatIndex =
+								typeof scope.endFlatIndex === 'number' ? scope.endFlatIndex : scope.flatIndex;
 							draft = await readerService.getTocChapterReadingPointDraft(
 								item.href,
 								scopedTitle,
 								flatTocItems,
-								scope.flatIndex
+								boundaryFlatIndex
 							);
 						}
 					}
@@ -5476,6 +5540,7 @@
 						chapterMarkdown: draft.markdown,
 						tocItems,
 						sourceBlocks,
+						scopeContext: buildAiReadingScopeContext(scope, flatTocItems),
 						sourceLink: buildChapterReadingPointSourceLink(
 							draft.title || scope.label || titleHint,
 							draft.cfi,

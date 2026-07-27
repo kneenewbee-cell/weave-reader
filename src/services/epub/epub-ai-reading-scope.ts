@@ -30,6 +30,8 @@ export interface EpubAiReadingScopeSelection {
 	pathLabels: string[];
 	href?: string;
 	flatIndex?: number;
+	endFlatIndex?: number;
+	includeDescendants?: boolean;
 	depth?: number;
 }
 
@@ -126,6 +128,27 @@ function getItemsForPath(tocItems: TocItem[], selectedIds: string[], depth: numb
 		items = selected?.subitems || [];
 	}
 	return items;
+}
+
+function isDescendantOrSelf(candidate: FlatScopeItem, ancestor: FlatScopeItem): boolean {
+	if (candidate.pathIds.length < ancestor.pathIds.length) {
+		return false;
+	}
+	return ancestor.pathIds.every((id, index) => candidate.pathIds[index] === id);
+}
+
+function getLastDescendantFlatIndex(flatItems: FlatScopeItem[], item: FlatScopeItem): number {
+	let endFlatIndex = item.flatIndex;
+	for (let index = item.flatIndex + 1; index < flatItems.length; index += 1) {
+		const candidate = flatItems[index];
+		if (candidate.depth <= item.depth) {
+			break;
+		}
+		if (isDescendantOrSelf(candidate, item)) {
+			endFlatIndex = candidate.flatIndex;
+		}
+	}
+	return endFlatIndex;
 }
 
 export function buildEpubAiReadingScopeLevels(
@@ -271,11 +294,16 @@ export function resolveEpubAiReadingScopeSelection(
 			pathLabels: first.pathLabels,
 			href: first.href,
 			flatIndex: first.flatIndex,
+			endFlatIndex: first.flatIndex,
+			includeDescendants: false,
 			depth: first.depth,
 		};
 	}
 
 	const hasChildAll = selectedIds[selectedFlatItem.depth + 1] === EPUB_AI_READING_ALL_SCOPE_ID;
+	const endFlatIndex = hasChildAll
+		? getLastDescendantFlatIndex(flatItems, selectedFlatItem)
+		: selectedFlatItem.flatIndex;
 	return {
 		kind: "toc",
 		canGenerate: true,
@@ -283,6 +311,8 @@ export function resolveEpubAiReadingScopeSelection(
 		pathLabels: hasChildAll ? [...selectedFlatItem.pathLabels, allLabel] : selectedFlatItem.pathLabels,
 		href: selectedFlatItem.href,
 		flatIndex: selectedFlatItem.flatIndex,
+		endFlatIndex,
+		includeDescendants: hasChildAll,
 		depth: selectedFlatItem.depth,
 	};
 }
@@ -319,6 +349,9 @@ export function getEpubAiReadingScopeSessionKeyPart(scope: EpubAiReadingScopeSel
 		scope.kind,
 		normalizeScopeText(scope.href),
 		String(scope.depth ?? ""),
+		String(scope.flatIndex ?? ""),
+		String(scope.endFlatIndex ?? ""),
+		scope.includeDescendants ? "desc" : "exact",
 		normalizeScopeText(scope.label),
 		scope.pathLabels.map(normalizeScopeText).join(">"),
 	].join("::");

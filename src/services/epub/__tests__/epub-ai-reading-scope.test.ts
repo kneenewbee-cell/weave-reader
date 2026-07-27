@@ -128,6 +128,8 @@ describe("EPUB AI reading scope helper", () => {
 				label: "准备你的 LaTeX 工具",
 				href: "text/ch1.xhtml#tools",
 				flatIndex: 1,
+				endFlatIndex: 3,
+				includeDescendants: true,
 				depth: 1,
 				pathLabels: ["第一章", "准备你的 LaTeX 工具", "全部"],
 			})
@@ -140,6 +142,26 @@ describe("EPUB AI reading scope helper", () => {
 			"tools",
 			"setup",
 		]);
+	});
+
+	it("resolves an exact leaf scope without widening to siblings", () => {
+		const selection = resolveEpubAiReadingScopeSelection(nestedToc, [
+			"chapter-1",
+			"tools",
+			"setup",
+		]);
+
+		expect(selection).toEqual(
+			expect.objectContaining({
+				kind: "toc",
+				canGenerate: true,
+				href: "text/ch1.xhtml#setup",
+				flatIndex: 2,
+				endFlatIndex: 2,
+				includeDescendants: false,
+				depth: 2,
+			})
+		);
 	});
 
 	it("uses different session key parts for parent and leaf scopes", () => {

@@ -21,6 +21,7 @@ export interface EpubAiReadingInput {
 	tocItems: TocItem[];
 	sourceLink?: string;
 	sourceBlocks?: EpubAiReadingSourceBlock[];
+	scopeContext?: string;
 }
 
 export interface EpubAiReadingConfig {
@@ -426,6 +427,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 	const sourceLink = normalizeConfigValue(input.sourceLink);
 	const sourceBlocks = Array.isArray(input.sourceBlocks) ? input.sourceBlocks : [];
 	const sourceBlockText = formatEpubAiReadingSourceBlocksForPrompt(sourceBlocks);
+	const scopeContext = normalizeConfigValue(input.scopeContext);
 	const sourceReferenceRule = sourceBlockText
 		? "\u8bf7\u5f15\u7528 P001 \u8fd9\u79cd\u6bb5\u843d\u7f16\u53f7\uff1b\u4e0d\u8981\u751f\u6210 EPUB CFI\u3001\u5185\u90e8\u951a\u70b9\u6216 URL\u3002"
 		: "\u63d0\u53d6\u91cd\u8981\u539f\u6587\u65f6\uff0c\u7528\u201c\u4f4d\u7f6e\u8bf4\u660e + \u4e3a\u4ec0\u4e48\u91cd\u8981\u201d\u63cf\u8ff0\uff0c\u4e0d\u8981\u4f2a\u9020\u4e0d\u53ef\u70b9\u51fb\u7684\u951a\u70b9\u3002";
@@ -460,6 +462,12 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"# \u5b9a\u4f4d\u89c4\u5219",
 		"\u53ef\u70b9\u51fb\u8df3\u8f6c\u7531\u9605\u8bfb\u5668\u754c\u9762\u63d0\u4f9b\uff1b\u4f60\u4e0d\u8981\u628a EPUB \u5185\u90e8\u951a\u70b9\uff08\u5982 #id\u3001#_idParaDest\uff09\u5199\u6210\u9700\u8981\u7528\u6237\u70b9\u51fb\u7684\u94fe\u63a5\u3002",
 		sourceReferenceRule,
+		scopeContext ? "" : "",
+		scopeContext ? "# \u9605\u8bfb\u8303\u56f4\u4e0e\u5916\u90e8\u7ed3\u6784\u7ebf\u7d22" : "",
+		scopeContext
+			? "\u5916\u90e8\u7ebf\u7d22\u53ea\u7528\u4e8e\u7406\u89e3\u7ae0\u8282\u5173\u7cfb\u3001\u8de8\u7ae0\u5f15\u7528\u548c\u5efa\u8bae\u7cbe\u8bfb\u987a\u5e8f\uff1b\u6458\u8981\u3001\u77e5\u8bc6\u70b9\u548c\u91cd\u8981\u539f\u6587\u5fc5\u987b\u4ee5\u4e0b\u65b9\u201c\u7cbe\u8bfb\u8303\u56f4\u6b63\u6587\u201d\u4e3a\u4e3b\u3002"
+			: "",
+		scopeContext,
 		sourceBlockText
 			? "\u6458\u8981\u53ef\u4ee5\u7efc\u5408\u591a\u4e2a\u6bb5\u843d\uff0c\u4f46\u5173\u952e\u77e5\u8bc6\u70b9\u548c\u91cd\u8981\u539f\u6587\u5fc5\u987b\u5c3d\u91cf\u5e26\u6765\u6e90\u7f16\u53f7\uff0c\u4f8b\u5982 [P001]\u3002\u63d2\u4ef6\u4f1a\u628a\u6bb5\u843d\u7f16\u53f7\u8f6c\u6362\u6210\u53ef\u70b9\u51fb\u94fe\u63a5\u3002"
 			: "",

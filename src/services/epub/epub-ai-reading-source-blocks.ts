@@ -30,6 +30,26 @@ function normalizeBlockText(value: string): string {
 	return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeComparableText(value: string): string {
+	return normalizeBlockText(value).replace(/\s+/g, "").toLowerCase();
+}
+
+function paragraphAppearsInDraft(paragraphText: string, draftText: string): boolean {
+	const paragraph = normalizeComparableText(paragraphText);
+	const draft = normalizeComparableText(draftText);
+	if (!paragraph || !draft) {
+		return false;
+	}
+	if (draft.includes(paragraph)) {
+		return true;
+	}
+	const probeLength = Math.min(48, paragraph.length);
+	if (probeLength < 12) {
+		return false;
+	}
+	return draft.includes(paragraph.slice(0, probeLength));
+}
+
 function inferBlockKind(paragraph: ReaderParagraph): EpubAiReadingSourceBlockKind {
 	const html = String(paragraph.html || "").trim().toLowerCase();
 	if (/^<h[1-6]\b/.test(html)) {
@@ -82,6 +102,17 @@ export function buildEpubAiReadingSourceBlocksFromParagraphs(
 		});
 	}
 	return blocks;
+}
+
+export function filterReaderParagraphsForAiReadingDraft(
+	paragraphs: ReaderParagraph[],
+	draftText: string
+): ReaderParagraph[] {
+	const draft = normalizeBlockText(draftText);
+	if (!draft) {
+		return paragraphs || [];
+	}
+	return (paragraphs || []).filter((paragraph) => paragraphAppearsInDraft(paragraph.text, draft));
 }
 
 export function formatEpubAiReadingSourceBlocksForPrompt(

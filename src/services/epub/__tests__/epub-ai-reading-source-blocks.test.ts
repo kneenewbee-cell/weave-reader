@@ -3,6 +3,7 @@ import type { ReaderParagraph } from "../reader-engine-types";
 import {
 	buildEpubAiReadingSourceBlocksFromParagraphs,
 	decorateEpubAiReadingSourceReferences,
+	filterReaderParagraphsForAiReadingDraft,
 	formatEpubAiReadingSourceBlocksForPrompt,
 	type EpubAiReadingSourceBlock,
 } from "../epub-ai-reading-source-blocks";
@@ -82,6 +83,45 @@ describe("epub-ai-reading-source-blocks", () => {
 		expect(prompt).toContain("[P001] kind=paragraph path=Chapter 1 > Content and form");
 		expect(prompt).toContain("href=chapter.xhtml cfi=epubcfi(/6/2)");
 		expect(prompt).toContain("Tell LaTeX that this is a section heading.");
+	});
+
+	it("filters source paragraphs to the scoped draft text before assigning source ids", () => {
+		const paragraphs: ReaderParagraph[] = [
+			{
+				id: "outside-before",
+				chapterIndex: 4,
+				chapterTitle: "Chapter 1",
+				chapterHref: "OEBPS/chapter1.xhtml",
+				text: "This paragraph belongs to a different TOC section.",
+				cfiRange: "epubcfi(/6/10!/4/2)",
+			},
+			{
+				id: "inside",
+				chapterIndex: 4,
+				chapterTitle: "Chapter 1",
+				chapterHref: "OEBPS/chapter1.xhtml#target",
+				text: "Scoped paragraph that should be sent to AI.",
+				cfiRange: "epubcfi(/6/10!/4/4)",
+			},
+			{
+				id: "outside-after",
+				chapterIndex: 4,
+				chapterTitle: "Chapter 1",
+				chapterHref: "OEBPS/chapter1.xhtml#next",
+				text: "Another unrelated section after the selected range.",
+				cfiRange: "epubcfi(/6/10!/4/6)",
+			},
+		];
+
+		const filtered = filterReaderParagraphsForAiReadingDraft(
+			paragraphs,
+			"Scoped paragraph that should be sent to AI."
+		);
+		const blocks = buildEpubAiReadingSourceBlocksFromParagraphs(filtered);
+
+		expect(filtered.map((paragraph) => paragraph.id)).toEqual(["inside"]);
+		expect(blocks.map((block) => block.id)).toEqual(["P001"]);
+		expect(blocks[0]?.text).toBe("Scoped paragraph that should be sent to AI.");
 	});
 
 	it("decorates model source markers with plugin-owned EPUB links", () => {
