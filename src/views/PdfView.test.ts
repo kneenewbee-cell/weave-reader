@@ -130,15 +130,34 @@ describe("PdfView custom PDF reader", () => {
 	function installCanvasMock() {
 		const originalGetContext = HTMLCanvasElement.prototype.getContext;
 		const originalToDataUrl = HTMLCanvasElement.prototype.toDataURL;
+		const originalToBlob = HTMLCanvasElement.prototype.toBlob;
 		HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+			save: vi.fn(),
+			restore: vi.fn(),
+			beginPath: vi.fn(),
+			moveTo: vi.fn(),
+			lineTo: vi.fn(),
+			arc: vi.fn(),
+			stroke: vi.fn(),
 			fillStyle: "",
+			strokeStyle: "",
+			globalAlpha: 1,
+			lineCap: "round",
+			lineJoin: "round",
+			lineWidth: 1,
 			fillRect: vi.fn(),
 			drawImage: vi.fn(),
 		})) as any;
 		HTMLCanvasElement.prototype.toDataURL = vi.fn(() => "data:image/png;base64,thumb") as any;
+		HTMLCanvasElement.prototype.toBlob = vi.fn(
+			(callback: BlobCallback, type?: string) => {
+				callback(new Blob(["thumb"], { type: type || "image/png" }));
+			}
+		) as any;
 		return () => {
 			HTMLCanvasElement.prototype.getContext = originalGetContext;
 			HTMLCanvasElement.prototype.toDataURL = originalToDataUrl;
+			HTMLCanvasElement.prototype.toBlob = originalToBlob;
 		};
 	}
 
@@ -150,9 +169,11 @@ describe("PdfView custom PDF reader", () => {
 			exists: vi.fn(async () => false),
 			read: vi.fn(async () => ""),
 			write: vi.fn(async () => undefined),
+			writeBinary: vi.fn(async () => undefined),
 			mkdir: vi.fn(async () => undefined),
 		};
 		(app.vault as any).adapter = adapter;
+		(app.vault as any).getConfig = vi.fn(() => "");
 		app.vault.getAbstractFileByPath = vi.fn((path: string) =>
 			path === filePath ? file : null
 		) as any;
@@ -878,12 +899,21 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
-	it("keeps a capture selection and copies it as image data", async () => {
+	it("keeps a capture selection and copies it as a real clipboard image", async () => {
 		const restoreCanvas = installCanvasMock();
 		const originalClipboard = navigator.clipboard;
-		const clipboard = { writeText: vi.fn(async () => undefined) };
+		const originalClipboardItem = (globalThis as any).ClipboardItem;
+		const clipboardItem = vi.fn((items: Record<string, Blob>) => ({ items }));
+		const clipboard = {
+			write: vi.fn(async () => undefined),
+			writeText: vi.fn(async () => undefined),
+		};
 		Object.defineProperty(navigator, "clipboard", {
 			value: clipboard,
+			configurable: true,
+		});
+		Object.defineProperty(globalThis, "ClipboardItem", {
+			value: clipboardItem,
 			configurable: true,
 		});
 		const { pdf } = createMockPdfDocument(1);
@@ -920,13 +950,90 @@ describe("PdfView custom PDF reader", () => {
 		dispatchPointerEvent(layer!, "pointerup", { clientX: 120, clientY: 168, buttons: 0 });
 
 		expect(layer!.querySelector(".weave-pdf-capture-box")).toBeTruthy();
+		expect(view.contentEl.querySelector(".weave-pdf-capture-action-bar")).toBeTruthy();
 		view.contentEl
-			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="copy-capture"]')
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="copy-capture-image"]')
 			?.click();
 
 		await vi.waitFor(() => {
-			expect(clipboard.writeText).toHaveBeenCalledWith("data:image/png;base64,thumb");
+			expect(clipboard.write).toHaveBeenCalledTimes(1);
 		});
+		expect(clipboard.writeText).not.toHaveBeenCalledWith("data:image/png;base64,thumb");
+		expect(clipboardItem).toHaveBeenCalledWith({
+			"image/png": expect.any(Blob),
+		});
+		Object.defineProperty(navigator, "clipboard", {
+			value: originalClipboard,
+			configurable: true,
+		});
+		Object.defineProperty(globalThis, "ClipboardItem", {
+			value: originalClipboardItem,
+			configurable: true,
+		});
+		restoreCanvas();
+	});
+
+	it("saves a capture selection to the attachment folder and copies its embed link", async () => {
+		const restoreCanvas = installCanvasMock();
+		const originalClipboard = navigator.clipboard;
+		const clipboard = {
+			writeText: vi.fn(async () => undefined),
+		};
+		Object.defineProperty(navigator, "clipboard", {
+			value: clipboard,
+			configurable: true,
+		});
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		(app.vault as any).getConfig = vi.fn((key: string) =>
+			key === "attachmentFolderPath" ? "Attachments/screens" : ""
+		);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		view.contentEl
+			.querySelector<HTMLButtonElement>('.weave-pdf-reader-tool-button[data-weave-pdf-tool="capture"]')
+			?.click();
+
+		const layer = view.contentEl.querySelector<SVGSVGElement>(
+			".weave-pdf-annotation-layer"
+		);
+		expect(layer).toBeTruthy();
+		layer!.getBoundingClientRect = vi.fn(() => ({
+			top: 0,
+			bottom: 280,
+			height: 280,
+			left: 0,
+			right: 200,
+			width: 200,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect));
+
+		dispatchPointerEvent(layer!, "pointerdown", { clientX: 20, clientY: 28 });
+		dispatchPointerEvent(layer!, "pointermove", { clientX: 120, clientY: 168 });
+		dispatchPointerEvent(layer!, "pointerup", { clientX: 120, clientY: 168, buttons: 0 });
+
+		const saveButton = view.contentEl.querySelector<HTMLButtonElement>(
+			'[data-weave-pdf-action="save-capture-image"]'
+		);
+		expect(saveButton).toBeTruthy();
+		saveButton?.click();
+
+		await vi.waitFor(() => {
+			expect(adapter.writeBinary).toHaveBeenCalled();
+		});
+		expect(adapter.mkdir).toHaveBeenCalledWith("Attachments");
+		expect(adapter.mkdir).toHaveBeenCalledWith("Attachments/screens");
+		const [imagePath, imageBytes] = adapter.writeBinary.mock.calls[0] ?? [];
+		expect(imagePath).toMatch(/^Attachments\/screens\/pdf-duboule-page-p1-\d{8}-\d{6}\.png$/);
+		expect(imageBytes).toBeInstanceOf(ArrayBuffer);
+		expect(clipboard.writeText).toHaveBeenCalledWith(`![[${imagePath}]]`);
 		Object.defineProperty(navigator, "clipboard", {
 			value: originalClipboard,
 			configurable: true,
@@ -969,10 +1076,12 @@ describe("PdfView custom PDF reader", () => {
 		dispatchPointerEvent(layer!, "pointermove", { clientX: 120, clientY: 168 });
 		dispatchPointerEvent(layer!, "pointerup", { clientX: 120, clientY: 168, buttons: 0 });
 		expect(layer!.querySelector(".weave-pdf-capture-box")).toBeTruthy();
+		expect(view.contentEl.querySelector(".weave-pdf-capture-action-bar")).toBeTruthy();
 
 		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="pan"]')?.click();
 
 		expect(layer!.querySelector(".weave-pdf-capture-box")).toBeNull();
+		expect(view.contentEl.querySelector(".weave-pdf-capture-action-bar")).toBeNull();
 		restoreCanvas();
 	});
 

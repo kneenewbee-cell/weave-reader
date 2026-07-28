@@ -9,6 +9,7 @@ import {
 	type WorkspaceLeaf,
 } from "obsidian";
 import "../styles/pdf/pdf-reader.css";
+import type { VaultConfigLike } from "../types/obsidian-extensions";
 import { isPdfBookFormat, stripSupportedBookExtension } from "../services/epub/book-format";
 import { createDebouncedBookshelfProgressChangedNotifier } from "../services/epub/bookshelf-data-events";
 import { getEpubStorageService } from "../services/epub/epub-storage-access";
@@ -73,6 +74,17 @@ interface PdfTextSelectionSegment {
 	text: string;
 	lineIndex: number;
 	rect: PdfTextAnnotationRect;
+}
+
+interface PdfCaptureSelection {
+	pageNumber: number;
+	box: { left: number; top: number; right: number; bottom: number };
+}
+
+interface PdfVaultBinaryAdapterLike {
+	exists?: (path: string) => Promise<boolean>;
+	mkdir?: (path: string) => Promise<void>;
+	writeBinary?: (path: string, data: ArrayBuffer) => Promise<void>;
 }
 
 const PDF_INK_DEFAULTS = {
@@ -144,10 +156,8 @@ export class PdfView extends ItemView {
 		startPoint: PdfInkPoint;
 	} | null = null;
 	private captureRectEl: SVGRectElement | null = null;
-	private captureSelection: {
-		pageNumber: number;
-		box: { left: number; top: number; right: number; bottom: number };
-	} | null = null;
+	private captureSelection: PdfCaptureSelection | null = null;
+	private captureActionBarEl: HTMLElement | null = null;
 	private activeTextSelectionPointerId: number | null = null;
 	private textSelectionDrag: {
 		pageNumber: number;
@@ -279,6 +289,7 @@ export class PdfView extends ItemView {
 		this.captureDrag = null;
 		this.captureRectEl = null;
 		this.captureSelection = null;
+		this.captureActionBarEl = null;
 		this.activeTextSelectionPointerId = null;
 		this.textSelectionDrag = null;
 		this.selectedPdfTextSelection = null;
@@ -616,17 +627,6 @@ export class PdfView extends ItemView {
 		pasteButton.addEventListener("click", () => {
 			this.closeMoreToolsPanel();
 			this.pasteCopiedInkStrokes();
-		});
-
-		const copyCaptureButton = panel.createEl("button", {
-			cls: "weave-pdf-reader-tools-panel-button",
-			text: "复制截图",
-		});
-		copyCaptureButton.type = "button";
-		copyCaptureButton.setAttribute("data-weave-pdf-action", "copy-capture");
-		copyCaptureButton.addEventListener("click", () => {
-			this.closeMoreToolsPanel();
-			void this.copyCaptureSelectionImage();
 		});
 
 		const highlightTextButton = panel.createEl("button", {
@@ -1563,6 +1563,12 @@ export class PdfView extends ItemView {
 		point: PdfInkPoint,
 		layer: SVGSVGElement
 	): void {
+		const previousSelectionPage = this.captureSelection?.pageNumber;
+		this.captureSelection = null;
+		this.clearCaptureActionBar();
+		if (previousSelectionPage) {
+			this.renderInkStrokesForPage(previousSelectionPage);
+		}
 		this.captureDrag = {
 			pageNumber,
 			startPoint: point,
@@ -2141,13 +2147,77 @@ export class PdfView extends ItemView {
 		this.captureRectEl = null;
 	}
 
+	private clearCaptureActionBar(): void {
+		this.captureActionBarEl?.remove();
+		this.captureActionBarEl = null;
+	}
+
 	private clearCaptureSelection(): void {
 		const pageNumber = this.captureSelection?.pageNumber;
 		this.captureSelection = null;
 		this.clearCapturePreview();
+		this.clearCaptureActionBar();
 		if (pageNumber) {
 			this.renderInkStrokesForPage(pageNumber);
 		}
+	}
+
+	private renderCaptureActionBarForPage(selection: PdfCaptureSelection): void {
+		this.clearCaptureActionBar();
+		const pageEl = this.pageEls.get(selection.pageNumber);
+		const canvasShell = pageEl?.querySelector<HTMLElement>(".weave-pdf-page-canvas-shell");
+		const sourceCanvas = canvasShell?.querySelector<HTMLCanvasElement>("canvas");
+		if (!canvasShell || !sourceCanvas) {
+			return;
+		}
+
+		const cssWidth = this.getCanvasCssWidth(sourceCanvas);
+		const cssHeight = this.getCanvasCssHeight(sourceCanvas);
+		const placeBelow = selection.box.top < 0.12;
+		const bar = canvasShell.createDiv({
+			cls: "weave-pdf-capture-action-bar",
+			attr: {
+				"data-page-number": String(selection.pageNumber),
+				role: "toolbar",
+				"aria-label": "区域截图操作",
+			},
+		});
+		bar.classList.toggle("is-below", placeBelow);
+		bar.style.left = `${10 + selection.box.right * cssWidth}px`;
+		bar.style.top = `${10 + (placeBelow ? selection.box.bottom * cssHeight + 8 : selection.box.top * cssHeight - 8)}px`;
+		bar.addEventListener("mousedown", (event) => event.stopPropagation());
+		bar.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+		this.createCaptureActionButton(bar, "复制图片", "copy-capture-image", () => {
+			void this.copyCaptureSelectionImage();
+		});
+		this.createCaptureActionButton(bar, "保存图片", "save-capture-image", () => {
+			void this.saveCaptureSelectionImage();
+		});
+		this.createCaptureActionButton(bar, "取消", "cancel-capture", () => {
+			this.clearCaptureSelection();
+		});
+		this.captureActionBarEl = bar;
+	}
+
+	private createCaptureActionButton(
+		parent: HTMLElement,
+		label: string,
+		action: string,
+		onClick: () => void
+	): HTMLButtonElement {
+		const button = parent.createEl("button", {
+			cls: "weave-pdf-capture-action-button",
+			text: label,
+		});
+		button.type = "button";
+		button.setAttribute("data-weave-pdf-action", action);
+		button.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			onClick();
+		});
+		return button;
 	}
 
 	private async copyCaptureSelectionImage(): Promise<void> {
@@ -2156,11 +2226,67 @@ export class PdfView extends ItemView {
 			new Notice("请先框选 PDF 区域");
 			return;
 		}
+		const blob = await this.createCaptureSelectionBlob(selection);
+		if (!blob) {
+			new Notice("无法复制截图");
+			return;
+		}
+		try {
+			if (
+				navigator.clipboard &&
+				typeof navigator.clipboard.write === "function" &&
+				typeof ClipboardItem !== "undefined"
+			) {
+				await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+				new Notice("截图已复制");
+				return;
+			}
+		} catch {
+			// Fall through to the user-facing failure notice below.
+		}
+		new Notice("当前环境不支持复制截图");
+	}
+
+	private async saveCaptureSelectionImage(): Promise<void> {
+		const selection = this.captureSelection;
+		if (!selection) {
+			new Notice("请先框选 PDF 区域");
+			return;
+		}
+		const blob = await this.createCaptureSelectionBlob(selection);
+		if (!blob) {
+			new Notice("无法保存截图");
+			return;
+		}
+		try {
+			const imagePath = await this.saveCaptureImageBlob(blob, selection.pageNumber);
+			try {
+				if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+					await navigator.clipboard.writeText(`![[${imagePath}]]`);
+				}
+			} catch {
+				// Saving is still useful even if the embed link cannot be copied.
+			}
+			new Notice(`截图已保存：${imagePath}`);
+		} catch {
+			new Notice("保存截图失败");
+		}
+	}
+
+	private async createCaptureSelectionBlob(selection: PdfCaptureSelection): Promise<Blob | null> {
+		try {
+			const canvas = this.renderCaptureSelectionCanvas(selection);
+			return await this.canvasToBlob(canvas, "image/png");
+		} catch {
+			return null;
+		}
+	}
+
+	private renderCaptureSelectionCanvas(selection: PdfCaptureSelection): HTMLCanvasElement {
 		const pageEl = this.pageEls.get(selection.pageNumber);
 		const sourceCanvas = pageEl?.querySelector<HTMLCanvasElement>(".weave-pdf-page-canvas-shell canvas");
 		if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) {
-			new Notice("无法复制截图");
-			return;
+			throw new Error("PDF capture source canvas is unavailable");
 		}
 
 		const left = Math.max(0, Math.floor(selection.box.left * sourceCanvas.width));
@@ -2170,23 +2296,223 @@ export class PdfView extends ItemView {
 		const output = document.createElement("canvas");
 		output.width = width;
 		output.height = height;
-		const context = output.getContext("2d");
+		const context = output.getContext("2d", { alpha: false });
 		if (!context) {
-			new Notice("无法复制截图");
+			throw new Error("PDF capture output canvas is unavailable");
+		}
+		context.fillStyle = "#ffffff";
+		context.fillRect(0, 0, width, height);
+		context.drawImage(sourceCanvas, left, top, width, height, 0, 0, width, height);
+		this.drawTextAnnotationsToCaptureCanvas(context, selection, sourceCanvas, left, top);
+		this.drawInkStrokesToCaptureCanvas(context, selection, sourceCanvas, left, top);
+		return output;
+	}
+
+	private drawTextAnnotationsToCaptureCanvas(
+		context: CanvasRenderingContext2D,
+		selection: PdfCaptureSelection,
+		sourceCanvas: HTMLCanvasElement,
+		cropLeft: number,
+		cropTop: number
+	): void {
+		for (const annotation of this.textAnnotations.filter(
+			(item) => item.pageNumber === selection.pageNumber
+		)) {
+			context.save();
+			context.globalAlpha = 0.38;
+			context.fillStyle = annotation.color;
+			for (const rect of annotation.rects) {
+				context.fillRect(
+					rect.x * sourceCanvas.width - cropLeft,
+					rect.y * sourceCanvas.height - cropTop,
+					rect.width * sourceCanvas.width,
+					rect.height * sourceCanvas.height
+				);
+			}
+			context.restore();
+		}
+	}
+
+	private drawInkStrokesToCaptureCanvas(
+		context: CanvasRenderingContext2D,
+		selection: PdfCaptureSelection,
+		sourceCanvas: HTMLCanvasElement,
+		cropLeft: number,
+		cropTop: number
+	): void {
+		const cssWidth = this.getCanvasCssWidth(sourceCanvas);
+		const strokeScale = sourceCanvas.width / Math.max(1, cssWidth);
+		for (const stroke of this.inkStrokes.filter((item) => item.pageNumber === selection.pageNumber)) {
+			if (stroke.points.length === 0) {
+				continue;
+			}
+			context.save();
+			context.globalAlpha = stroke.tool === "highlighter" ? 0.36 : 1;
+			context.strokeStyle = stroke.color;
+			context.lineWidth = Math.max(1, stroke.width * strokeScale);
+			context.lineCap = "round";
+			context.lineJoin = "round";
+			context.beginPath();
+			for (const [index, point] of stroke.points.entries()) {
+				const x = point.x * sourceCanvas.width - cropLeft;
+				const y = point.y * sourceCanvas.height - cropTop;
+				if (index === 0) {
+					context.moveTo(x, y);
+				} else {
+					context.lineTo(x, y);
+				}
+			}
+			if (stroke.points.length === 1) {
+				const point = stroke.points[0];
+				context.lineTo(
+					point.x * sourceCanvas.width - cropLeft + 0.1,
+					point.y * sourceCanvas.height - cropTop + 0.1
+				);
+			}
+			context.stroke();
+			context.restore();
+		}
+	}
+
+	private async canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob | null> {
+		if (typeof canvas.toBlob !== "function") {
+			return null;
+		}
+		return new Promise((resolve) => {
+			canvas.toBlob((blob) => resolve(blob), type);
+		});
+	}
+
+	private async saveCaptureImageBlob(blob: Blob, pageNumber: number): Promise<string> {
+		const arrayBuffer = await this.blobToArrayBuffer(blob);
+		const imagePath = await this.buildUniqueCaptureImagePath(pageNumber);
+		const folderPath = imagePath.includes("/") ? imagePath.slice(0, imagePath.lastIndexOf("/")) : "";
+		await this.ensureVaultFolderExists(folderPath);
+		await this.writeVaultBinaryFile(imagePath, arrayBuffer);
+		return imagePath;
+	}
+
+	private async blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+		if (typeof blob.arrayBuffer === "function") {
+			return await blob.arrayBuffer();
+		}
+		if (typeof FileReader === "undefined") {
+			throw new Error("Blob arrayBuffer is unavailable");
+		}
+		return await new Promise<ArrayBuffer>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				if (reader.result instanceof ArrayBuffer) {
+					resolve(reader.result);
+					return;
+				}
+				reject(new Error("Unable to read image blob"));
+			};
+			reader.onerror = () => reject(reader.error ?? new Error("Unable to read image blob"));
+			reader.readAsArrayBuffer(blob);
+		});
+	}
+
+	private async buildUniqueCaptureImagePath(pageNumber: number): Promise<string> {
+		const attachmentFolder = this.readAttachmentFolderPath();
+		const folderPath = attachmentFolder && attachmentFolder !== "/" && attachmentFolder !== "."
+			? normalizePath(attachmentFolder)
+			: "";
+		const safeTitle = this.sanitizeCaptureFileName(this.getResolvedTitle(), "pdf");
+		const timestamp = this.createCaptureTimestamp();
+		const baseName = `pdf-${safeTitle}-p${pageNumber}-${timestamp}`;
+		let candidate = normalizePath(folderPath ? `${folderPath}/${baseName}.png` : `${baseName}.png`);
+		let index = 2;
+		while (await this.vaultPathExists(candidate)) {
+			candidate = normalizePath(folderPath ? `${folderPath}/${baseName}-${index}.png` : `${baseName}-${index}.png`);
+			index += 1;
+		}
+		return candidate;
+	}
+
+	private readAttachmentFolderPath(): string {
+		const vault = this.app.vault as unknown as VaultConfigLike;
+		const configured = vault.getConfig?.("attachmentFolderPath") ?? vault.config?.attachmentFolderPath;
+		return typeof configured === "string" ? configured.trim() : "";
+	}
+
+	private async ensureVaultFolderExists(folderPath: string): Promise<void> {
+		const normalizedFolderPath = normalizePath(String(folderPath || "").trim());
+		if (!normalizedFolderPath) {
 			return;
 		}
-		context.drawImage(sourceCanvas, left, top, width, height, 0, 0, width, height);
-		const dataUrl = output.toDataURL("image/png");
-		try {
-			if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-				await navigator.clipboard.writeText(dataUrl);
-				new Notice("截图已复制");
-				return;
+		const adapter = this.getVaultBinaryAdapter();
+		const segments = normalizedFolderPath.split("/").filter(Boolean);
+		let currentPath = "";
+		for (const segment of segments) {
+			currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+			if (await this.vaultPathExists(currentPath)) {
+				continue;
 			}
-		} catch {
-			// Fall through to the user-facing failure notice below.
+			if (typeof adapter.mkdir === "function") {
+				await adapter.mkdir(currentPath);
+				continue;
+			}
+			const vault = this.app.vault as unknown as { createFolder?: (path: string) => Promise<void> };
+			if (typeof vault.createFolder === "function") {
+				await vault.createFolder(currentPath);
+			}
 		}
-		new Notice("当前环境不支持复制截图");
+	}
+
+	private async writeVaultBinaryFile(path: string, data: ArrayBuffer): Promise<void> {
+		const adapter = this.getVaultBinaryAdapter();
+		if (typeof adapter.writeBinary === "function") {
+			await adapter.writeBinary(path, data);
+			return;
+		}
+		const vault = this.app.vault as unknown as { createBinary?: (path: string, data: ArrayBuffer) => Promise<void> };
+		if (typeof vault.createBinary === "function") {
+			await vault.createBinary(path, data);
+			return;
+		}
+		throw new Error("Binary vault writes are unavailable");
+	}
+
+	private async vaultPathExists(path: string): Promise<boolean> {
+		const normalizedPath = normalizePath(String(path || "").trim());
+		if (!normalizedPath) {
+			return false;
+		}
+		const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
+		if (existing) {
+			return true;
+		}
+		const adapter = this.getVaultBinaryAdapter();
+		return typeof adapter.exists === "function" ? await adapter.exists(normalizedPath) : false;
+	}
+
+	private getVaultBinaryAdapter(): PdfVaultBinaryAdapterLike {
+		return ((this.app.vault as unknown as { adapter?: PdfVaultBinaryAdapterLike }).adapter ?? {}) as PdfVaultBinaryAdapterLike;
+	}
+
+	private sanitizeCaptureFileName(value: string, fallback: string): string {
+		const sanitized = String(value || "")
+			.replace(/[\\/:*?"<>|]/g, "_")
+			.replace(/\s+/g, "-")
+			.replace(/-+/g, "-")
+			.replace(/^[-_.]+|[-_.]+$/g, "")
+			.slice(0, 36);
+		return sanitized || fallback;
+	}
+
+	private createCaptureTimestamp(): string {
+		const now = new Date();
+		const pad = (value: number) => String(value).padStart(2, "0");
+		return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+	}
+
+	private getCanvasCssWidth(canvas: HTMLCanvasElement): number {
+		return Number.parseFloat(canvas.style.width || "") || canvas.clientWidth || canvas.width;
+	}
+
+	private getCanvasCssHeight(canvas: HTMLCanvasElement): number {
+		return Number.parseFloat(canvas.style.height || "") || canvas.clientHeight || canvas.height;
 	}
 
 	private createTextHighlightFromSelection(): void {
@@ -2530,6 +2856,9 @@ export class PdfView extends ItemView {
 		const selection = this.captureSelection;
 		const layer = this.annotationLayers.get(pageNumber);
 		if (!selection || !layer || selection.pageNumber !== pageNumber) {
+			if (this.captureActionBarEl?.dataset.pageNumber === String(pageNumber)) {
+				this.clearCaptureActionBar();
+			}
 			return;
 		}
 		const rect = this.createInkSelectionRect(layer, "weave-pdf-capture-box");
@@ -2544,6 +2873,7 @@ export class PdfView extends ItemView {
 			t: 0,
 		};
 		this.updateInkRect(rect, startPoint, endPoint);
+		this.renderCaptureActionBarForPage(selection);
 	}
 
 	private renderTextAnnotationsForPage(pageNumber: number): void {
@@ -2802,6 +3132,7 @@ export class PdfView extends ItemView {
 		}
 		const token = ++this.renderToken;
 		this.pageEls.clear();
+		this.clearCaptureActionBar();
 		this.pagesScrollEl.empty();
 		await this.renderPages(this.pdfDocument, this.pagesScrollEl, token);
 		if (!this.isCurrentRender(token)) {
