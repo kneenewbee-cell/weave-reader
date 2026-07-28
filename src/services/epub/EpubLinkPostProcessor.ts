@@ -1,6 +1,9 @@
 import type { App } from "obsidian";
 import { MarkdownPostProcessorContext, TFile, setIcon } from "obsidian";
-import { isSupportedBookLocatorHref, stripSupportedBookExtension } from "./book-format";
+import {
+	isSupportedBookLocatorHref,
+	stripSupportedBookExtension,
+} from "./book-format";
 import { maybeMigrateEpubLinksInMarkdownFile } from "./epub-link-content-migration";
 import { EpubLinkService } from "./EpubLinkService";
 import { resolveEpubSourceNavigationTextHint } from "./epub-source-navigation-text-hint";
@@ -18,6 +21,32 @@ type AnnotationNoteFilterMarker = HTMLElement & {
 	__weaveFilterRefreshPending?: boolean;
 	__weaveDualWindowControlsBound?: boolean;
 };
+
+type AiReadingNoteFilterMarker = HTMLElement & {
+	__weaveApplyAiReadingNoteFilters?: () => void;
+	__weaveAiReadingFilterRefreshPending?: boolean;
+};
+
+interface AiReadingNoteFilterSegment {
+	typeKey: string;
+	typeLabel: string;
+	sectionKey: string;
+	sectionLabel: string;
+	elements: HTMLElement[];
+	groupElement: HTMLElement | null;
+	text: string;
+}
+
+const AI_READING_NOTE_TYPE_DEFINITIONS: AnnotationNoteFilterOption[] = [
+	{ value: "summary", label: "总览/摘要" },
+	{ value: "core", label: "结论/重点" },
+	{ value: "knowledge", label: "知识点" },
+	{ value: "sections", label: "小节精读" },
+	{ value: "quotes", label: "重要原文" },
+	{ value: "relations", label: "章节关系" },
+	{ value: "path", label: "精读路径" },
+	{ value: "other", label: "其他" },
+];
 
 function extractEpubProtocolName(href: string): string {
 	const normalizedHref = String(href || "").trim();
@@ -45,7 +74,11 @@ function collectEpubCalloutElements(root: HTMLElement): HTMLElement[] {
 	if (root.matches('.callout[data-callout="epub"]')) {
 		results.push(root);
 	}
-	results.push(...Array.from(root.querySelectorAll<HTMLElement>('.callout[data-callout="epub"]')));
+	results.push(
+		...Array.from(
+			root.querySelectorAll<HTMLElement>('.callout[data-callout="epub"]'),
+		),
+	);
 	return results;
 }
 
@@ -56,7 +89,9 @@ function extractCalloutQuoteText(linkEl: HTMLElement): string {
 	}
 
 	const quoteLines: string[] = [];
-	for (const block of Array.from(callout.querySelectorAll<HTMLElement>(".callout-content blockquote p"))) {
+	for (const block of Array.from(
+		callout.querySelectorAll<HTMLElement>(".callout-content blockquote p"),
+	)) {
 		const text = String(block.textContent || "")
 			.replace(/\s+/g, " ")
 			.trim();
@@ -119,7 +154,7 @@ function normalizeFilterText(value: unknown): string {
 function collectAnnotationFilterOptions(
 	lines: HTMLElement[],
 	valueAttr: "chapterKey" | "semanticId",
-	labelAttr: "chapterTitle" | "semanticLabel"
+	labelAttr: "chapterTitle" | "semanticLabel",
 ): AnnotationNoteFilterOption[] {
 	const options = new Map<string, string>();
 	for (const line of lines) {
@@ -132,7 +167,10 @@ function collectAnnotationFilterOptions(
 			options.set(value, label);
 		}
 	}
-	return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
+	return Array.from(options.entries()).map(([value, label]) => ({
+		value,
+		label,
+	}));
 }
 
 function createAnnotationFilterSelect(
@@ -140,7 +178,7 @@ function createAnnotationFilterSelect(
 	className: string,
 	ariaLabel: string,
 	allLabel: string,
-	options: AnnotationNoteFilterOption[]
+	options: AnnotationNoteFilterOption[],
 ): HTMLSelectElement {
 	const select = doc.createElement("select");
 	select.className = className;
@@ -158,14 +196,18 @@ function createAnnotationFilterSelect(
 	return select;
 }
 
-function getAnnotationFilterOptionsSignature(options: AnnotationNoteFilterOption[]): string {
-	return options.map((option) => `${option.value}\u0000${option.label}`).join("\u0001");
+function getAnnotationFilterOptionsSignature(
+	options: AnnotationNoteFilterOption[],
+): string {
+	return options
+		.map((option) => `${option.value}\u0000${option.label}`)
+		.join("\u0001");
 }
 
 function syncAnnotationFilterSelectOptions(
 	select: HTMLSelectElement,
 	allLabel: string,
-	options: AnnotationNoteFilterOption[]
+	options: AnnotationNoteFilterOption[],
 ): void {
 	const signature = getAnnotationFilterOptionsSignature(options);
 	if (select.dataset.optionsSignature === signature) {
@@ -183,7 +225,9 @@ function syncAnnotationFilterSelectOptions(
 		optionEl.textContent = option.label;
 		select.appendChild(optionEl);
 	}
-	select.value = options.some((option) => option.value === previousValue) ? previousValue : "";
+	select.value = options.some((option) => option.value === previousValue)
+		? previousValue
+		: "";
 	select.dataset.optionsSignature = signature;
 }
 
@@ -194,13 +238,16 @@ function findAnnotationNoteMarker(root: HTMLElement): HTMLElement | null {
 	return root.querySelector<HTMLElement>(".weave-annotation-note-root");
 }
 
-function resolveAnnotationNoteScope(marker: HTMLElement, fallback: HTMLElement): HTMLElement {
+function resolveAnnotationNoteScope(
+	marker: HTMLElement,
+	fallback: HTMLElement,
+): HTMLElement {
 	return (
 		marker.closest<HTMLElement>(
-			".markdown-preview-view, .markdown-rendered, .markdown-source-view, .view-content"
+			".markdown-preview-view, .markdown-rendered, .markdown-source-view, .view-content",
 		) ||
 		fallback.closest<HTMLElement>(
-			".markdown-preview-view, .markdown-rendered, .markdown-source-view, .view-content"
+			".markdown-preview-view, .markdown-rendered, .markdown-source-view, .view-content",
 		) ||
 		fallback.parentElement ||
 		fallback
@@ -210,32 +257,44 @@ function resolveAnnotationNoteScope(marker: HTMLElement, fallback: HTMLElement):
 function resolveAnnotationNoteContainer(fallback: HTMLElement): HTMLElement {
 	return (
 		fallback.closest<HTMLElement>(
-			".markdown-preview-view, .markdown-rendered, .markdown-source-view, .view-content"
+			".markdown-preview-view, .markdown-rendered, .markdown-source-view, .view-content",
 		) ||
 		fallback.parentElement ||
 		fallback
 	);
 }
 
-function findMountedAnnotationNoteMarker(root: HTMLElement): AnnotationNoteFilterMarker | null {
-	const direct = findAnnotationNoteMarker(root) as AnnotationNoteFilterMarker | null;
+function findMountedAnnotationNoteMarker(
+	root: HTMLElement,
+): AnnotationNoteFilterMarker | null {
+	const direct = findAnnotationNoteMarker(
+		root,
+	) as AnnotationNoteFilterMarker | null;
 	if (direct) {
 		return direct;
 	}
-	return resolveAnnotationNoteContainer(root).querySelector<AnnotationNoteFilterMarker>(
-		".weave-annotation-note-root"
-	);
+	return resolveAnnotationNoteContainer(
+		root,
+	).querySelector<AnnotationNoteFilterMarker>(".weave-annotation-note-root");
 }
 
-function findAnnotationNoteDualWindowButton(target: EventTarget | null, scope: HTMLElement): HTMLButtonElement | null {
+function findAnnotationNoteDualWindowButton(
+	target: EventTarget | null,
+	scope: HTMLElement,
+): HTMLButtonElement | null {
 	if (!(target instanceof HTMLElement)) {
 		return null;
 	}
-	const button = target.closest<HTMLButtonElement>('[data-weave-dual-window-action="open"]');
+	const button = target.closest<HTMLButtonElement>(
+		'[data-weave-dual-window-action="open"]',
+	);
 	return button && scope.contains(button) ? button : null;
 }
 
-function findAnnotationNoteLineFromEvent(target: EventTarget | null, scope: HTMLElement): HTMLElement | null {
+function findAnnotationNoteLineFromEvent(
+	target: EventTarget | null,
+	scope: HTMLElement,
+): HTMLElement | null {
 	if (!(target instanceof HTMLElement)) {
 		return null;
 	}
@@ -243,52 +302,71 @@ function findAnnotationNoteLineFromEvent(target: EventTarget | null, scope: HTML
 	return line && scope.contains(line) ? line : null;
 }
 
-function didLeaveAnnotationNoteLine(event: MouseEvent, line: HTMLElement): boolean {
+function didLeaveAnnotationNoteLine(
+	event: MouseEvent,
+	line: HTMLElement,
+): boolean {
 	const relatedTarget = event.relatedTarget;
 	return !(relatedTarget instanceof Node && line.contains(relatedTarget));
 }
 
 function hasAnnotationNoteDualWindowTargets(root: HTMLElement): boolean {
 	return Boolean(
-		root.matches('[data-weave-dual-window-action="open"], .weave-annotation-note-line') ||
-			root.querySelector('[data-weave-dual-window-action="open"], .weave-annotation-note-line')
+		root.matches(
+			'[data-weave-dual-window-action="open"], .weave-annotation-note-line',
+		) ||
+			root.querySelector(
+				'[data-weave-dual-window-action="open"], .weave-annotation-note-line',
+			),
 	);
 }
 
 function readAnnotationNoteIdentity(
 	target: HTMLElement,
-	marker: AnnotationNoteFilterMarker | null
+	marker: AnnotationNoteFilterMarker | null,
 ): { bookId: string; filePath: string } {
 	return {
-		bookId: String(target.dataset.bookId || marker?.dataset.bookId || "").trim(),
-		filePath: String(target.dataset.sourceFile || marker?.dataset.sourceFile || "").trim(),
+		bookId: String(
+			target.dataset.bookId || marker?.dataset.bookId || "",
+		).trim(),
+		filePath: String(
+			target.dataset.sourceFile || marker?.dataset.sourceFile || "",
+		).trim(),
 	};
 }
 
-function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void {
+function bindAnnotationNoteDualWindowControls(
+	app: App,
+	root: HTMLElement,
+): void {
 	const marker = findMountedAnnotationNoteMarker(root);
 	if (!marker && !hasAnnotationNoteDualWindowTargets(root)) {
 		return;
 	}
-	const scope = marker ? resolveAnnotationNoteScope(marker, root) : resolveAnnotationNoteContainer(root);
+	const scope = marker
+		? resolveAnnotationNoteScope(marker, root)
+		: resolveAnnotationNoteContainer(root);
 	const dualWindowMode = marker?.dataset.dualWindowMode === "true";
 
 	const emitAnnotationEvent = (
 		line: HTMLElement,
-		phase: "enter" | "leave" | "click"
+		phase: "enter" | "leave" | "click",
 	): void => {
 		const { bookId, filePath } = readAnnotationNoteIdentity(line, marker);
-		dispatchEpubDualWindowAnnotationEvent(scope.ownerDocument.defaultView || window, {
-			mode: "book-annotation-note",
-			phase,
-			bookId,
-			filePath,
-			cfiRange: line.dataset.cfiRange,
-			chapterIndex: line.dataset.chapterIndex,
-			annotationId: line.dataset.annotationId,
-			semanticId: line.dataset.semanticId,
-			text: line.dataset.annotationText,
-		});
+		dispatchEpubDualWindowAnnotationEvent(
+			scope.ownerDocument.defaultView || window,
+			{
+				mode: "book-annotation-note",
+				phase,
+				bookId,
+				filePath,
+				cfiRange: line.dataset.cfiRange,
+				chapterIndex: line.dataset.chapterIndex,
+				annotationId: line.dataset.annotationId,
+				semanticId: line.dataset.semanticId,
+				text: line.dataset.annotationText,
+			},
+		);
 	};
 
 	const boundTarget = (marker || scope) as AnnotationNoteFilterMarker;
@@ -298,7 +376,9 @@ function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void
 	boundTarget.__weaveDualWindowControlsBound = true;
 
 	const handleDualWindowClick = (event: MouseEvent) => {
-		const button = dualWindowMode ? null : findAnnotationNoteDualWindowButton(event.target, scope);
+		const button = dualWindowMode
+			? null
+			: findAnnotationNoteDualWindowButton(event.target, scope);
 		if (button) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -341,7 +421,10 @@ function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void
 
 function requestAnnotationNoteFilterRefresh(root: HTMLElement): void {
 	const marker = findMountedAnnotationNoteMarker(root);
-	if (!marker?.__weaveApplyAnnotationNoteFilters || marker.__weaveFilterRefreshPending) {
+	if (
+		!marker?.__weaveApplyAnnotationNoteFilters ||
+		marker.__weaveFilterRefreshPending
+	) {
 		return;
 	}
 	marker.__weaveFilterRefreshPending = true;
@@ -356,18 +439,24 @@ function requestAnnotationNoteFilterRefresh(root: HTMLElement): void {
 function scheduleAnnotationNoteFilterMount(
 	marker: HTMLElement,
 	fallback: HTMLElement,
-	attempt: number
+	attempt: number,
 ): void {
-	if (attempt >= ANNOTATION_NOTE_FILTER_MAX_RETRY || marker.dataset.filterPending === "true") {
+	if (
+		attempt >= ANNOTATION_NOTE_FILTER_MAX_RETRY ||
+		marker.dataset.filterPending === "true"
+	) {
 		return;
 	}
 	marker.dataset.filterPending = "true";
 	const activeWindow = marker.ownerDocument.defaultView || window;
-	activeWindow.setTimeout(() => {
-		marker.dataset.filterPending = "";
-		const scope = resolveAnnotationNoteScope(marker, fallback);
-		mountAnnotationNoteFilter(scope, attempt + 1);
-	}, attempt === 0 ? 0 : ANNOTATION_NOTE_FILTER_RETRY_DELAY_MS);
+	activeWindow.setTimeout(
+		() => {
+			marker.dataset.filterPending = "";
+			const scope = resolveAnnotationNoteScope(marker, fallback);
+			mountAnnotationNoteFilter(scope, attempt + 1);
+		},
+		attempt === 0 ? 0 : ANNOTATION_NOTE_FILTER_RETRY_DELAY_MS,
+	);
 }
 
 function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
@@ -382,7 +471,7 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 	}
 
 	const lines = Array.from(
-		scope.querySelectorAll<HTMLElement>(".weave-annotation-note-line")
+		scope.querySelectorAll<HTMLElement>(".weave-annotation-note-line"),
 	);
 	if (lines.length === 0) {
 		scheduleAnnotationNoteFilterMount(marker, root, attempt);
@@ -399,14 +488,14 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 		"weave-annotation-note-filter-chapter",
 		"章节筛选",
 		"全部章节",
-		collectAnnotationFilterOptions(lines, "chapterKey", "chapterTitle")
+		collectAnnotationFilterOptions(lines, "chapterKey", "chapterTitle"),
 	);
 	const semanticSelect = createAnnotationFilterSelect(
 		doc,
 		"weave-annotation-note-filter-semantic",
 		"语义筛选",
 		"全部语义",
-		collectAnnotationFilterOptions(lines, "semanticId", "semanticLabel")
+		collectAnnotationFilterOptions(lines, "semanticId", "semanticLabel"),
 	);
 	const searchInput = doc.createElement("input");
 	searchInput.className = "weave-annotation-note-filter-search";
@@ -421,19 +510,29 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 	marker.dataset.filterMounted = "true";
 
 	const collectLines = () =>
-		Array.from(scope.querySelectorAll<HTMLElement>(".weave-annotation-note-line"));
+		Array.from(
+			scope.querySelectorAll<HTMLElement>(".weave-annotation-note-line"),
+		);
 
 	const refreshFilterOptions = (): HTMLElement[] => {
 		const currentLines = collectLines();
 		syncAnnotationFilterSelectOptions(
 			chapterSelect,
 			"全部章节",
-			collectAnnotationFilterOptions(currentLines, "chapterKey", "chapterTitle")
+			collectAnnotationFilterOptions(
+				currentLines,
+				"chapterKey",
+				"chapterTitle",
+			),
 		);
 		syncAnnotationFilterSelectOptions(
 			semanticSelect,
 			"全部语义",
-			collectAnnotationFilterOptions(currentLines, "semanticId", "semanticLabel")
+			collectAnnotationFilterOptions(
+				currentLines,
+				"semanticId",
+				"semanticLabel",
+			),
 		);
 		return currentLines;
 	};
@@ -447,9 +546,13 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 		let visibleCount = 0;
 
 		for (const line of lines) {
-			const matchesChapter = !chapterValue || line.dataset.chapterKey === chapterValue;
-			const matchesSemantic = !semanticValue || line.dataset.semanticId === semanticValue;
-			const text = normalizeFilterText(line.dataset.annotationText || line.textContent || "");
+			const matchesChapter =
+				!chapterValue || line.dataset.chapterKey === chapterValue;
+			const matchesSemantic =
+				!semanticValue || line.dataset.semanticId === semanticValue;
+			const text = normalizeFilterText(
+				line.dataset.annotationText || line.textContent || "",
+			);
 			const matchesSearch = !searchValue || text.includes(searchValue);
 			const visible = matchesChapter && matchesSemantic && matchesSearch;
 			line.classList.toggle("is-hidden", !visible);
@@ -463,13 +566,16 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 		}
 
 		for (const chapter of Array.from(
-			scope.querySelectorAll<HTMLElement>(".weave-annotation-note-chapter")
+			scope.querySelectorAll<HTMLElement>(".weave-annotation-note-chapter"),
 		)) {
 			const chapterKey = String(chapter.dataset.chapterKey || "").trim();
 			if (!chapterKey) {
 				continue;
 			}
-			chapter.classList.toggle("is-hidden", !visibleChapterKeys.has(chapterKey));
+			chapter.classList.toggle(
+				"is-hidden",
+				!visibleChapterKeys.has(chapterKey),
+			);
 		}
 		countEl.textContent = `${visibleCount} / ${lines.length}`;
 	};
@@ -477,7 +583,388 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 	chapterSelect.addEventListener("change", applyFilters);
 	semanticSelect.addEventListener("change", applyFilters);
 	searchInput.addEventListener("input", applyFilters);
-	(marker as AnnotationNoteFilterMarker).__weaveApplyAnnotationNoteFilters = applyFilters;
+	(marker as AnnotationNoteFilterMarker).__weaveApplyAnnotationNoteFilters =
+		applyFilters;
+	applyFilters();
+
+	const activeWindow = marker.ownerDocument.defaultView || window;
+	for (const delay of ANNOTATION_NOTE_FILTER_REFRESH_DELAYS_MS) {
+		activeWindow.setTimeout(() => {
+			if (marker.isConnected) {
+				applyFilters();
+			}
+		}, delay);
+	}
+}
+
+function findAiReadingNoteMarker(root: HTMLElement): HTMLElement | null {
+	if (root.matches(".weave-epub-ai-reading-note-root")) {
+		return root;
+	}
+	return root.querySelector<HTMLElement>(".weave-epub-ai-reading-note-root");
+}
+
+function findMountedAiReadingNoteMarker(
+	root: HTMLElement,
+): AiReadingNoteFilterMarker | null {
+	const direct = findAiReadingNoteMarker(
+		root,
+	) as AiReadingNoteFilterMarker | null;
+	if (direct) {
+		return direct;
+	}
+	return resolveAnnotationNoteContainer(
+		root,
+	).querySelector<AiReadingNoteFilterMarker>(
+		".weave-epub-ai-reading-note-root",
+	);
+}
+
+function requestAiReadingNoteFilterRefresh(root: HTMLElement): void {
+	const marker = findMountedAiReadingNoteMarker(root);
+	if (
+		!marker?.__weaveApplyAiReadingNoteFilters ||
+		marker.__weaveAiReadingFilterRefreshPending
+	) {
+		return;
+	}
+	marker.__weaveAiReadingFilterRefreshPending = true;
+	queueMicrotask(() => {
+		marker.__weaveAiReadingFilterRefreshPending = false;
+		if (marker.isConnected) {
+			marker.__weaveApplyAiReadingNoteFilters?.();
+		}
+	});
+}
+
+function scheduleAiReadingNoteFilterMount(
+	marker: HTMLElement,
+	fallback: HTMLElement,
+	attempt: number,
+): void {
+	if (
+		attempt >= ANNOTATION_NOTE_FILTER_MAX_RETRY ||
+		marker.dataset.aiFilterPending === "true"
+	) {
+		return;
+	}
+	marker.dataset.aiFilterPending = "true";
+	const activeWindow = marker.ownerDocument.defaultView || window;
+	activeWindow.setTimeout(
+		() => {
+			marker.dataset.aiFilterPending = "";
+			const scope = resolveAnnotationNoteScope(marker, fallback);
+			mountAiReadingNoteFilter(scope, attempt + 1);
+		},
+		attempt === 0 ? 0 : ANNOTATION_NOTE_FILTER_RETRY_DELAY_MS,
+	);
+}
+
+function resolveAiReadingNoteType(title: string): AnnotationNoteFilterOption {
+	const text = normalizeFilterText(title);
+	if (/范围摘要|章节总览|本章摘要|内容概要|摘要|总览/u.test(text)) {
+		return { value: "summary", label: "总览/摘要" };
+	}
+	if (/核心结论|主要结论|核心重点|重点/u.test(text)) {
+		return { value: "core", label: "结论/重点" };
+	}
+	if (/关键知识点|概念\/术语|术语|知识点/u.test(text)) {
+		return { value: "knowledge", label: "知识点" };
+	}
+	if (/按小节精读|逐小节精读|小节精读|下级小节/u.test(text)) {
+		return { value: "sections", label: "小节精读" };
+	}
+	if (/重要原文|原文索引|原文/u.test(text)) {
+		return { value: "quotes", label: "重要原文" };
+	}
+	if (/章节关系|小节关系|跨章关系|关系/u.test(text)) {
+		return { value: "relations", label: "章节关系" };
+	}
+	if (/建议精读|精读路径|精读顺序|行动清单/u.test(text)) {
+		return { value: "path", label: "精读路径" };
+	}
+	return { value: "other", label: "其他" };
+}
+
+function getAiReadingNoteBlockElement(
+	element: HTMLElement,
+	scope: HTMLElement,
+): HTMLElement {
+	const parent = element.parentElement;
+	if (
+		parent &&
+		parent !== scope &&
+		/\bel-(?:h[1-6]|p|ul|ol|blockquote|pre|table)\b/.test(parent.className)
+	) {
+		return parent;
+	}
+	return element;
+}
+
+function isAfterAiReadingNoteMarker(
+	element: HTMLElement,
+	marker: HTMLElement,
+): boolean {
+	return Boolean(
+		marker.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING,
+	);
+}
+
+function getAiReadingHeadingLevel(element: HTMLElement): number {
+	const match = element.tagName.match(/^H([1-6])$/i);
+	return match ? Number(match[1]) : 0;
+}
+
+function createAiReadingSectionKey(label: string, index: number): string {
+	const normalized = normalizeFilterText(label).replace(/\s+/g, "-");
+	return `${normalized || "section"}-${index}`;
+}
+
+function collectAiReadingSegmentOptions(
+	segments: AiReadingNoteFilterSegment[],
+	getValue: (segment: AiReadingNoteFilterSegment) => string,
+	getLabel: (segment: AiReadingNoteFilterSegment) => string,
+): AnnotationNoteFilterOption[] {
+	const options = new Map<string, string>();
+	for (const segment of segments) {
+		const value = getValue(segment);
+		const label = getLabel(segment);
+		if (value && !options.has(value)) {
+			options.set(value, label || value);
+		}
+	}
+	return Array.from(options.entries()).map(([value, label]) => ({
+		value,
+		label,
+	}));
+}
+
+function orderAiReadingTypeOptions(
+	options: AnnotationNoteFilterOption[],
+): AnnotationNoteFilterOption[] {
+	const present = new Map(options.map((option) => [option.value, option]));
+	return AI_READING_NOTE_TYPE_DEFINITIONS.filter((option) =>
+		present.has(option.value),
+	).map((option) => present.get(option.value) || option);
+}
+
+function collectAiReadingNoteFilterSegments(
+	marker: HTMLElement,
+	scope: HTMLElement,
+): AiReadingNoteFilterSegment[] {
+	const headingAndBody = Array.from(
+		scope.querySelectorAll<HTMLElement>(
+			"h2,h3,h4,p,ul,ol,blockquote,pre,table",
+		),
+	).filter(
+		(element) =>
+			isAfterAiReadingNoteMarker(element, marker) &&
+			!element.closest(".weave-epub-ai-reading-note-filter"),
+	);
+	const seenBlocks = new Set<HTMLElement>();
+	const segments: AiReadingNoteFilterSegment[] = [];
+	let currentType: AnnotationNoteFilterOption = {
+		value: "other",
+		label: "其他",
+	};
+	let pendingGroup: { element: HTMLElement; typeKey: string } | null = null;
+	let draft: Omit<AiReadingNoteFilterSegment, "text"> | null = null;
+
+	const finishDraft = () => {
+		if (!draft) {
+			return;
+		}
+		if (draft.elements.length === 1 && draft.typeKey === "sections") {
+			pendingGroup = {
+				element: draft.elements[0],
+				typeKey: draft.typeKey,
+			};
+			draft.elements[0].classList.add(
+				"weave-epub-ai-reading-note-filtered-group",
+			);
+			draft = null;
+			return;
+		}
+		for (const element of draft.elements) {
+			element.classList.add("weave-epub-ai-reading-note-filtered-block");
+		}
+		segments.push({
+			...draft,
+			text: normalizeFilterText(
+				draft.elements.map((element) => element.textContent || "").join(" "),
+			),
+		});
+		draft = null;
+	};
+
+	for (const element of headingAndBody) {
+		const block = getAiReadingNoteBlockElement(element, scope);
+		if (seenBlocks.has(block)) {
+			continue;
+		}
+		seenBlocks.add(block);
+		const headingLevel = getAiReadingHeadingLevel(element);
+		if (headingLevel === 2) {
+			finishDraft();
+			pendingGroup = null;
+			const title = String(element.textContent || "").trim();
+			currentType = resolveAiReadingNoteType(title);
+			draft = {
+				typeKey: currentType.value,
+				typeLabel: currentType.label,
+				sectionKey: createAiReadingSectionKey(title, segments.length),
+				sectionLabel: title || currentType.label,
+				elements: [block],
+				groupElement: null,
+			};
+			continue;
+		}
+		if (headingLevel === 3 || headingLevel === 4) {
+			finishDraft();
+			const title = String(element.textContent || "").trim();
+			draft = {
+				typeKey: currentType.value,
+				typeLabel: currentType.label,
+				sectionKey: createAiReadingSectionKey(title, segments.length),
+				sectionLabel: title || currentType.label,
+				elements: [block],
+				groupElement:
+					pendingGroup?.typeKey === currentType.value
+						? pendingGroup.element
+						: null,
+			};
+			continue;
+		}
+		if (draft) {
+			draft.elements.push(block);
+		}
+	}
+	finishDraft();
+	return segments;
+}
+
+function mountAiReadingNoteFilter(root: HTMLElement, attempt = 0): void {
+	const marker = findAiReadingNoteMarker(root);
+	if (!marker || marker.dataset.aiReadingFilterMounted === "true") {
+		return;
+	}
+	const scope = resolveAnnotationNoteScope(marker, root);
+	if (scope.querySelector(".weave-epub-ai-reading-note-filter")) {
+		marker.dataset.aiReadingFilterMounted = "true";
+		return;
+	}
+	const initialSegments = collectAiReadingNoteFilterSegments(marker, scope);
+	if (initialSegments.length === 0) {
+		scheduleAiReadingNoteFilterMount(marker, root, attempt);
+		return;
+	}
+
+	const doc = marker.ownerDocument;
+	const toolbar = doc.createElement("div");
+	toolbar.className = "weave-epub-ai-reading-note-filter";
+	toolbar.setAttribute("role", "search");
+
+	const typeSelect = createAnnotationFilterSelect(
+		doc,
+		"weave-epub-ai-reading-note-filter-type",
+		"AI 阅读类型筛选",
+		"全部类型",
+		orderAiReadingTypeOptions(
+			collectAiReadingSegmentOptions(
+				initialSegments,
+				(segment) => segment.typeKey,
+				(segment) => segment.typeLabel,
+			),
+		),
+	);
+	const sectionSelect = createAnnotationFilterSelect(
+		doc,
+		"weave-epub-ai-reading-note-filter-section",
+		"AI 阅读小节筛选",
+		"全部小节",
+		collectAiReadingSegmentOptions(
+			initialSegments,
+			(segment) => segment.sectionKey,
+			(segment) => segment.sectionLabel,
+		),
+	);
+	const searchInput = doc.createElement("input");
+	searchInput.className = "weave-epub-ai-reading-note-filter-search";
+	searchInput.type = "search";
+	searchInput.placeholder = "搜索 AI 阅读内容";
+	searchInput.setAttribute("aria-label", "搜索 AI 阅读内容");
+	const countEl = doc.createElement("span");
+	countEl.className = "weave-epub-ai-reading-note-filter-count";
+
+	toolbar.append(typeSelect, sectionSelect, searchInput, countEl);
+	marker.insertAdjacentElement("afterend", toolbar);
+	marker.dataset.aiReadingFilterMounted = "true";
+
+	const refreshFilterOptions = (): AiReadingNoteFilterSegment[] => {
+		const segments = collectAiReadingNoteFilterSegments(marker, scope);
+		syncAnnotationFilterSelectOptions(
+			typeSelect,
+			"全部类型",
+			orderAiReadingTypeOptions(
+				collectAiReadingSegmentOptions(
+					segments,
+					(segment) => segment.typeKey,
+					(segment) => segment.typeLabel,
+				),
+			),
+		);
+		syncAnnotationFilterSelectOptions(
+			sectionSelect,
+			"全部小节",
+			collectAiReadingSegmentOptions(
+				segments,
+				(segment) => segment.sectionKey,
+				(segment) => segment.sectionLabel,
+			),
+		);
+		return segments;
+	};
+
+	const applyFilters = () => {
+		const segments = refreshFilterOptions();
+		const typeValue = typeSelect.value;
+		const sectionValue = sectionSelect.value;
+		const searchValue = normalizeFilterText(searchInput.value);
+		const visibleGroups = new Set<HTMLElement>();
+		const allGroups = new Set<HTMLElement>();
+		let visibleCount = 0;
+
+		for (const segment of segments) {
+			if (segment.groupElement) {
+				allGroups.add(segment.groupElement);
+			}
+			const matchesType = !typeValue || segment.typeKey === typeValue;
+			const matchesSection =
+				!sectionValue || segment.sectionKey === sectionValue;
+			const matchesSearch = !searchValue || segment.text.includes(searchValue);
+			const visible = matchesType && matchesSection && matchesSearch;
+			for (const element of segment.elements) {
+				element.classList.toggle("is-hidden", !visible);
+			}
+			if (visible) {
+				visibleCount += 1;
+				if (segment.groupElement) {
+					visibleGroups.add(segment.groupElement);
+				}
+			}
+		}
+
+		for (const group of allGroups) {
+			group.classList.toggle("is-hidden", !visibleGroups.has(group));
+		}
+		countEl.textContent = `${visibleCount} / ${segments.length}`;
+	};
+
+	typeSelect.addEventListener("change", applyFilters);
+	sectionSelect.addEventListener("change", applyFilters);
+	searchInput.addEventListener("input", applyFilters);
+	(marker as AiReadingNoteFilterMarker).__weaveApplyAiReadingNoteFilters =
+		applyFilters;
 	applyFilters();
 
 	const activeWindow = marker.ownerDocument.defaultView || window;
@@ -497,7 +984,9 @@ function resolveProtocolLocatorHref(href: string): string | null {
 	}
 
 	try {
-		const url = new URL(href.startsWith("obsidian://") ? href : `obsidian://${href}`);
+		const url = new URL(
+			href.startsWith("obsidian://") ? href : `obsidian://${href}`,
+		);
 		const params = Object.fromEntries(url.searchParams.entries());
 		if ((!params.file && !params.sid) || !params.cfi) {
 			return null;
@@ -519,9 +1008,11 @@ function resolveProtocolLocatorHref(href: string): string | null {
 				includeText: Boolean(String(parsed.text || "").trim()),
 				includeChapter: parsed.chapter !== undefined,
 				preferCompactLocator: true,
-			}
+			},
 		);
-		return locatorHref && isSupportedBookLocatorHref(locatorHref) ? locatorHref : null;
+		return locatorHref && isSupportedBookLocatorHref(locatorHref)
+			? locatorHref
+			: null;
 	} catch {
 		return null;
 	}
@@ -532,7 +1023,7 @@ function bindEpubLocatorLink(
 	linkEl: HTMLAnchorElement,
 	locatorHref: string,
 	ctx: MarkdownPostProcessorContext,
-	displayText?: string
+	displayText?: string,
 ): void {
 	const boundLinkEl = linkEl as BoundEpubLinkElement;
 	const hashIdx = locatorHref.indexOf("#");
@@ -568,24 +1059,28 @@ function bindEpubLocatorLink(
 		displayText ||
 			linkEl.textContent ||
 			stripSupportedBookExtension(filePath.split("/").pop() || "") ||
-			"Book"
+			"Book",
 	);
 
 	boundLinkEl.__weaveEpubBoundHref = locatorHref;
 	const navigateFromLink = () => {
 		void (async () => {
 			const linkService = new EpubLinkService(app);
-			const sourceMarkdownPath = String(ctx?.sourcePath || "").trim() || undefined;
+			const sourceMarkdownPath =
+				String(ctx?.sourcePath || "").trim() || undefined;
 			const calloutQuoteText = String(parsed.cfi || "").trim()
 				? ""
 				: extractCalloutQuoteText(boundLinkEl);
-			const quoteText = resolveEpubSourceNavigationTextHint(parsed, calloutQuoteText);
+			const quoteText = resolveEpubSourceNavigationTextHint(
+				parsed,
+				calloutQuoteText,
+			);
 			await linkService.navigateToEpubLocation(
 				filePath,
 				parsed.cfi,
 				quoteText,
 				parsed.sourceId,
-				sourceMarkdownPath
+				sourceMarkdownPath,
 			);
 		})();
 	};
@@ -606,6 +1101,8 @@ export function createEpubLinkPostProcessor(app: App) {
 		applyEpubCalloutAppearanceAttributes(el);
 		mountAnnotationNoteFilter(el);
 		requestAnnotationNoteFilterRefresh(el);
+		mountAiReadingNoteFilter(el);
+		requestAiReadingNoteFilterRefresh(el);
 		bindAnnotationNoteDualWindowControls(app, el);
 
 		const sourcePath = String(ctx?.sourcePath || "").trim();
@@ -615,11 +1112,18 @@ export function createEpubLinkPostProcessor(app: App) {
 				void (async () => {
 					try {
 						const sourceFile = app.vault.getAbstractFileByPath(sourcePath);
-						if (!(sourceFile instanceof TFile) || sourceFile.extension !== "md") {
+						if (
+							!(sourceFile instanceof TFile) ||
+							sourceFile.extension !== "md"
+						) {
 							return;
 						}
 						const originalContent = await app.vault.cachedRead(sourceFile);
-						await maybeMigrateEpubLinksInMarkdownFile(app, sourceFile, originalContent);
+						await maybeMigrateEpubLinksInMarkdownFile(
+							app,
+							sourceFile,
+							originalContent,
+						);
 					} catch {
 						// ignore background enrichment failures
 					}
@@ -630,7 +1134,7 @@ export function createEpubLinkPostProcessor(app: App) {
 		const links = el.querySelectorAll("a");
 
 		links.forEach((linkEl) => {
-			if (!(linkEl.instanceOf(HTMLAnchorElement))) {
+			if (!linkEl.instanceOf(HTMLAnchorElement)) {
 				return;
 			}
 
@@ -642,16 +1146,21 @@ export function createEpubLinkPostProcessor(app: App) {
 				return;
 			}
 
-			const rawHref = linkEl.getAttribute("href") || linkEl.getAttribute("data-href") || "";
+			const rawHref =
+				linkEl.getAttribute("href") || linkEl.getAttribute("data-href") || "";
 			const protocolLocatorHref = resolveProtocolLocatorHref(rawHref);
-			const locatorHref = protocolLocatorHref || (isSupportedBookLocatorHref(rawHref) ? rawHref : "");
+			const locatorHref =
+				protocolLocatorHref ||
+				(isSupportedBookLocatorHref(rawHref) ? rawHref : "");
 
 			if (!locatorHref) {
 				clearBoundEpubHandler(linkEl as BoundEpubLinkElement);
 				return;
 			}
 
-			const displayText = protocolLocatorHref ? linkEl.textContent || undefined : undefined;
+			const displayText = protocolLocatorHref
+				? linkEl.textContent || undefined
+				: undefined;
 			bindEpubLocatorLink(app, linkEl, locatorHref, ctx, displayText);
 		});
 	};
@@ -663,7 +1172,9 @@ function styleEpubLink(linkEl: Element, displayText: string): void {
 	linkEl.empty();
 
 	const inEpubCalloutTitle = Boolean(
-		(linkEl as HTMLElement).closest('.callout[data-callout="epub"] .callout-title')
+		(linkEl as HTMLElement).closest(
+			'.callout[data-callout="epub"] .callout-title',
+		),
 	);
 	if (!inEpubCalloutTitle) {
 		const iconSpan = (linkEl as HTMLElement).createSpan({

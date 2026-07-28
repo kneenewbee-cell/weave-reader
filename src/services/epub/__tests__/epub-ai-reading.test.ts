@@ -9,6 +9,7 @@ import {
 	extractKimiChatCompletionText,
 	parseEpubAiReadingEnv,
 	requestEpubAiReading,
+	resolveEpubAiReadingOutputPlan,
 	upsertEpubAiReadingNote,
 } from "../epub-ai-reading";
 import type { EpubAiReadingSourceBlock } from "../epub-ai-reading-source-blocks";
@@ -56,12 +57,14 @@ function createMemoryApp(initialFiles: Record<string, string> = {}) {
 						return true;
 					}
 					const prefix = path.replace(/\/+$/, "") + "/";
-					return Array.from(files.keys()).some((filePath) => filePath.startsWith(prefix));
+					return Array.from(files.keys()).some((filePath) =>
+						filePath.startsWith(prefix),
+					);
 				}),
 				read: vi.fn(async (path: string) => files.get(path) || ""),
 			},
 			getAbstractFileByPath: vi.fn((path: string) =>
-				files.has(path) ? createVaultFile(path) : null
+				files.has(path) ? createVaultFile(path) : null,
 			),
 			create: vi.fn(async (path: string, content: string) => {
 				files.set(path, content);
@@ -109,13 +112,13 @@ describe("epub-ai-reading", () => {
 	it("builds paragraph-located AI messages when source blocks are available", () => {
 		const sourceBlocks: EpubAiReadingSourceBlock[] = [
 			{
-				id: "P001",
+				id: "段001",
 				chapterHref: "Text/chapter1.xhtml",
 				cfi: "epubcfi(/6/2)",
 				text: "LaTeX is a document markup language.",
 				headingPath: ["Chapter 1", "What is LaTeX?"],
 				kind: "paragraph",
-				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]",
+				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
 			},
 		];
 
@@ -129,10 +132,239 @@ describe("epub-ai-reading", () => {
 			sourceBlocks,
 		});
 
-		expect(messages.user).toContain("# \u5f53\u524d\u7ae0\u8282\u5b9a\u4f4d\u6b63\u6587\u5757");
-		expect(messages.user).toContain("[P001] kind=paragraph path=Chapter 1 > What is LaTeX?");
-		expect(messages.user).toContain("P001");
-		expect(messages.user).not.toContain("# \u5f53\u524d\u7ae0\u8282\u6b63\u6587\nFallback chapter text");
+		expect(messages.user).toContain(
+			"# \u7cbe\u8bfb\u8303\u56f4\u6b63\u6587\u5757",
+		);
+		expect(messages.user).toContain(
+			"[段001] kind=paragraph path=Chapter 1 > What is LaTeX?",
+		);
+		expect(messages.user).toContain("段001");
+		expect(messages.user).not.toContain("[P001]");
+		expect(messages.user).not.toContain(
+			"# \u5f53\u524d\u7ae0\u8282\u6b63\u6587\nFallback chapter text",
+		);
+	});
+
+	it("builds scoped close-reading instructions with compact source rules", () => {
+		const sourceBlocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "段001",
+				chapterHref: "Text/ch1.xhtml#install",
+				cfi: "epubcfi(/6/2)",
+				text: "Install TeX Live before writing the first LaTeX document.",
+				headingPath: ["Chapter 1", "Installing and using LaTeX"],
+				kind: "paragraph",
+				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
+			},
+		];
+
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Guide",
+			filePath: "Books/latex.epub",
+			chapterTitle: "Installing and using LaTeX",
+			chapterHref: "Text/ch1.xhtml#install",
+			chapterText: "Install TeX Live before writing the first LaTeX document.",
+			tocItems,
+			sourceBlocks,
+			scope: {
+				label: "Installing and using LaTeX",
+				pathLabels: ["Chapter 1", "Installing and using LaTeX", "\u5168\u90e8"],
+				href: "Text/ch1.xhtml#install",
+				includeDescendants: true,
+				flatIndex: 1,
+				endFlatIndex: 3,
+			},
+			scopeContext: "Next sibling: Overleaf",
+		});
+
+		expect(messages.user).toContain("## \u8303\u56f4\u6458\u8981");
+		expect(messages.user).toContain("## \u6838\u5fc3\u7ed3\u8bba");
+		expect(messages.user).toContain(
+			"## \u91cd\u8981\u539f\u6587\u4e0e\u89e3\u8bfb",
+		);
+		expect(messages.user).toContain(
+			"- \u9605\u8bfb\u8303\u56f4\uff1aChapter 1 > Installing and using LaTeX > \u5168\u90e8",
+		);
+		expect(messages.user).toContain(
+			"\u6458\u8981\u3001\u6838\u5fc3\u7ed3\u8bba\u3001\u77e5\u8bc6\u70b9\u548c\u91cd\u8981\u539f\u6587\u53ea\u80fd\u6765\u81ea\u7cbe\u8bfb\u8303\u56f4\u6b63\u6587",
+		);
+		expect(messages.user).toContain(
+			"\u6bcf\u6761\u6700\u591a 2 \u4e2a\u6bb5\u843d\u7f16\u53f7",
+		);
+		expect(messages.user).toContain("[段001]");
+		expect(messages.user).not.toContain("[P001]");
+		expect(messages.user).toContain("\u4e0d\u8981\u8f93\u51fa H1");
+		expect(messages.user).not.toContain("## \u672c\u7ae0\u6458\u8981");
+	});
+
+	it("plans chapter-scale AI reading output without the legacy 4096 cap", () => {
+		const sourceBlocks: EpubAiReadingSourceBlock[] = Array.from(
+			{ length: 80 },
+			(_, index) => ({
+				id: `段${String(index + 1).padStart(3, "0")}`,
+				chapterHref: "Text/ch1.xhtml",
+				text: `paragraph ${index + 1}`,
+				headingPath: ["Chapter 1", `Section ${index + 1}`],
+				kind: "paragraph" as const,
+			}),
+		);
+
+		const plan = resolveEpubAiReadingOutputPlan({
+			scope: {
+				label: "Chapter 1",
+				pathLabels: ["Chapter 1", "全部"],
+				href: "Text/ch1.xhtml",
+				includeDescendants: true,
+				flatIndex: 0,
+				endFlatIndex: 80,
+			},
+			sourceBlocks,
+		});
+
+		expect(plan.level).toBe("chapter");
+		expect(plan.maxCompletionTokens).toBe(131072);
+		expect(plan.promptLines.join("\n")).toContain("按最低级标题逐项精读");
+		expect(plan.promptLines.join("\n")).toContain(
+			"高级层数量不包含下级小节数据",
+		);
+	});
+
+	it("adds range-scale output rules to higher-level prompts", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Guide",
+			filePath: "Books/latex.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "Text/ch1.xhtml",
+			chapterText: "Chapter body",
+			tocItems,
+			scope: {
+				label: "Chapter 1",
+				pathLabels: ["Chapter 1", "全部"],
+				href: "Text/ch1.xhtml",
+				includeDescendants: true,
+				flatIndex: 0,
+				endFlatIndex: 8,
+			},
+		});
+
+		expect(messages.user).toContain("## 按小节精读");
+		expect(messages.user).toContain("一级章节");
+		expect(messages.user).toContain("高级层数量不包含下级小节数据");
+		expect(messages.user).toContain("不需要填满输出上限");
+	});
+
+	it("requires chapter ranges to preserve leaf-level detail for every lowest-level section", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex-cookbook.epub",
+			chapterTitle: "第五章：图像处理",
+			chapterHref: "chapter5.xhtml",
+			tocMarkdown:
+				"- 第五章：图像处理\n  - 图像对齐\n    - 操作指南\n    - 运行原理",
+			chapterText: "操作指南正文。\n\n运行原理正文。",
+			scope: {
+				label: "第五章：图像处理 > 全部",
+				pathLabels: ["第五章：图像处理", "全部"],
+				includeDescendants: true,
+			},
+			sourceBlocks: [
+				{
+					id: "段001",
+					readerParagraphId: "p1",
+					chapterIndex: 4,
+					chapterTitle: "第五章：图像处理",
+					chapterHref: "chapter5.xhtml",
+					kind: "paragraph",
+					text: "操作指南正文。",
+					headingPath: [
+						"第五章：图像处理",
+						"图像对齐",
+						"操作指南",
+					],
+				},
+			],
+		});
+
+		const prompt = messages.user;
+		expect(prompt).toContain("基础精析层");
+		expect(prompt).toContain(
+			"每个最低级小节都必须按最低级小节/精读范围的同一标准输出",
+		);
+		expect(prompt).toContain(
+			"高级范围只能额外增加总览、摘要、主线、关系和全局观",
+		);
+		expect(prompt).not.toContain(
+			"每个最低级小节可写摘要 1-3 句、重点 2-4 条、重要原文 1-3 处",
+		);
+	});
+
+	it("requires mid-level ranges to use the same base close-reading template as leaf ranges", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex-cookbook.epub",
+			chapterTitle: "图像对齐",
+			chapterHref: "chapter5.xhtml#image-align",
+			tocMarkdown: "- 图像对齐\n  - 操作指南\n  - 运行原理",
+			chapterText: "操作指南正文。\n\n运行原理正文。",
+			scope: {
+				label: "第五章：图像处理 > 图像对齐 > 全部",
+				pathLabels: [
+					"第五章：图像处理",
+					"图像对齐",
+					"全部",
+				],
+				includeDescendants: true,
+			},
+			sourceBlocks: [
+				{
+					id: "段001",
+					readerParagraphId: "p1",
+					chapterIndex: 4,
+					chapterTitle: "图像对齐",
+					chapterHref: "chapter5.xhtml#image-align",
+					kind: "paragraph",
+					text: "操作指南正文。",
+					headingPath: [
+						"第五章：图像处理",
+						"图像对齐",
+						"操作指南",
+					],
+				},
+			],
+		});
+
+		const prompt = messages.user;
+		expect(prompt).toContain("基础精析层");
+		expect(prompt).toContain(
+			"小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点",
+		);
+		expect(prompt).not.toContain(
+			"每个下级小节可写摘要 1-3 句、重点 2-4 条、重要原文 1-3 处",
+		);
+	});
+
+	it("formats higher-level results with detailed per-section close reading plus separate global layers", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex-cookbook.epub",
+			chapterTitle: "第五章：图像处理",
+			chapterHref: "chapter5.xhtml",
+			tocMarkdown: "- 第五章：图像处理\n  - 图像对齐\n    - 操作指南",
+			chapterText: "操作指南正文。",
+			scope: {
+				label: "第五章：图像处理 > 全部",
+				pathLabels: ["第五章：图像处理", "全部"],
+				includeDescendants: true,
+			},
+		});
+
+		expect(messages.user).toContain("## 按小节精读");
+		expect(messages.user).toContain(
+			"每个小节建议包含：小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点、与上下文关系",
+		);
+		expect(messages.user).toContain(
+			"范围摘要、核心结论、章节关系属于全局总结层",
+		);
 	});
 
 	it("includes scope context as relationship guidance without replacing scoped body text", () => {
@@ -141,7 +373,8 @@ describe("epub-ai-reading", () => {
 			filePath: "Books/scoped.epub",
 			chapterTitle: "Selected section",
 			chapterHref: "Text/chapter.xhtml#selected",
-			chapterText: "Only this selected section body should be treated as the close reading source.",
+			chapterText:
+				"Only this selected section body should be treated as the close reading source.",
 			tocItems,
 			scopeContext: [
 				"Selected path: Chapter 1 > Selected section",
@@ -150,10 +383,18 @@ describe("epub-ai-reading", () => {
 			].join("\n"),
 		});
 
-		expect(messages.user).toContain("# \u9605\u8bfb\u8303\u56f4\u4e0e\u5916\u90e8\u7ed3\u6784\u7ebf\u7d22");
-		expect(messages.user).toContain("Selected path: Chapter 1 > Selected section");
-		expect(messages.user).toContain("\u5916\u90e8\u7ebf\u7d22\u53ea\u7528\u4e8e\u7406\u89e3\u7ae0\u8282\u5173\u7cfb");
-		expect(messages.user).toContain("Only this selected section body should be treated as the close reading source.");
+		expect(messages.user).toContain(
+			"# \u9605\u8bfb\u8303\u56f4\u4e0e\u5916\u90e8\u7ed3\u6784\u7ebf\u7d22",
+		);
+		expect(messages.user).toContain(
+			"Selected path: Chapter 1 > Selected section",
+		);
+		expect(messages.user).toContain(
+			"\u5916\u90e8\u7ebf\u7d22\u53ea\u7528\u4e8e\u7406\u89e3\u7ae0\u8282\u5173\u7cfb",
+		);
+		expect(messages.user).toContain(
+			"Only this selected section body should be treated as the close reading source.",
+		);
 	});
 
 	it("extracts assistant content from a Kimi chat completion response", () => {
@@ -213,7 +454,7 @@ describe("epub-ai-reading", () => {
 				},
 				requester,
 				now: () => 1710000000000,
-			}
+			},
 		);
 
 		expect(result.content).toContain("本章摘要");
@@ -225,7 +466,7 @@ describe("epub-ai-reading", () => {
 				headers: expect.objectContaining({
 					Authorization: "Bearer test-key",
 				}),
-			})
+			}),
 		);
 	});
 
@@ -258,14 +499,56 @@ describe("epub-ai-reading", () => {
 					model: "k3",
 				},
 				requester,
-			}
+			},
 		);
 
 		const request = requester.mock.calls[0]?.[0];
 		const body = JSON.parse(String(request.body));
 		expect(request.url).toBe("https://api.kimi.com/coding/v1/chat/completions");
 		expect(body.temperature).toBe(1);
-		expect(body.max_tokens).toBe(4096);
+		expect(body.max_tokens).toBeUndefined();
+		expect(body.max_completion_tokens).toBe(16000);
+	});
+
+	it("ignores legacy max token env and sends a dynamic max_completion_tokens value", async () => {
+		const requester = vi.fn(async () => ({
+			json: {
+				choices: [
+					{
+						message: {
+							content: "AI reading result",
+						},
+					},
+				],
+			},
+		}));
+
+		await requestEpubAiReading(
+			{
+				bookTitle: "Demo",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Complete chapter text",
+				tocItems,
+			},
+			{
+				config: {
+					apiKey: "test-key",
+					baseUrl: "https://api.kimi.com/coding/v1",
+					model: "k3",
+				},
+				runtimeEnv: {
+					KIMI_MAX_TOKENS: "4096",
+				},
+				requester,
+			},
+		);
+
+		const request = requester.mock.calls[0]?.[0];
+		const body = JSON.parse(String(request.body));
+		expect(body.max_tokens).toBeUndefined();
+		expect(body.max_completion_tokens).toBe(16000);
 	});
 
 	it("emits stage updates while preparing and requesting AI reading", async () => {
@@ -300,7 +583,7 @@ describe("epub-ai-reading", () => {
 				requester,
 				onStage: (stage) => stages.push(stage),
 				enableStreaming: false,
-			}
+			},
 		);
 
 		expect(stages).toEqual([
@@ -316,10 +599,14 @@ describe("epub-ai-reading", () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
 				controller.enqueue(
-					encoder.encode('data: {"choices":[{"delta":{"content":"第一段"}}]}\n\n')
+					encoder.encode(
+						'data: {"choices":[{"delta":{"content":"第一段"}}]}\n\n',
+					),
 				);
 				controller.enqueue(
-					encoder.encode('data: {"choices":[{"delta":{"content":"第二段"}}]}\n\n')
+					encoder.encode(
+						'data: {"choices":[{"delta":{"content":"第二段"}}]}\n\n',
+					),
 				);
 				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
 				controller.close();
@@ -347,7 +634,7 @@ describe("epub-ai-reading", () => {
 				requester,
 				fetcher,
 				onPartialContent: (content) => partials.push(content),
-			}
+			},
 		);
 
 		expect(result.content).toBe("第一段第二段");
@@ -359,7 +646,9 @@ describe("epub-ai-reading", () => {
 	it("uses a runtime stream requester before falling back to requestUrl", async () => {
 		const streamRequester = vi.fn(async (request) => {
 			const body = JSON.parse(request.body);
-			expect(request.url).toBe("https://api.kimi.com/coding/v1/chat/completions");
+			expect(request.url).toBe(
+				"https://api.kimi.com/coding/v1/chat/completions",
+			);
 			expect(request.headers.Accept).toBe("text/event-stream");
 			expect(body.stream).toBe(true);
 			return "Node streaming result";
@@ -384,7 +673,7 @@ describe("epub-ai-reading", () => {
 				requester,
 				streamRequester,
 				onPartialContent: vi.fn(),
-			}
+			},
 		);
 
 		expect(result.content).toBe("Node streaming result");
@@ -397,10 +686,14 @@ describe("epub-ai-reading", () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
 				controller.enqueue(
-					encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"hidden reasoning"}}]}\n\n')
+					encoder.encode(
+						'data: {"choices":[{"delta":{"reasoning_content":"hidden reasoning"}}]}\n\n',
+					),
 				);
 				controller.enqueue(
-					encoder.encode('data: {"choices":[{"delta":{"content":"visible answer"}}]}\n\n')
+					encoder.encode(
+						'data: {"choices":[{"delta":{"content":"visible answer"}}]}\n\n',
+					),
 				);
 				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
 				controller.close();
@@ -428,14 +721,18 @@ describe("epub-ai-reading", () => {
 				fetcher: vi.fn(async () => new Response(stream, { status: 200 })),
 				onStage: (stage) => stages.push(stage),
 				onPartialContent: (content) => partials.push(content),
-			}
+			},
 		);
 
 		expect(result.content).toBe("visible answer");
 		expect(result.content).not.toContain("hidden reasoning");
 		expect(partials).toEqual(["visible answer"]);
-		expect(stages).toContain("AI \u6b63\u5728\u5206\u6790\u6b63\u6587\u548c\u7ae0\u8282\u5173\u7cfb");
-		expect(stages).toContain("\u6b63\u5728\u6d41\u5f0f\u8f93\u51fa AI \u9605\u8bfb\u7ed3\u679c");
+		expect(stages).toContain(
+			"AI \u6b63\u5728\u5206\u6790\u6b63\u6587\u548c\u7ae0\u8282\u5173\u7cfb",
+		);
+		expect(stages).toContain(
+			"\u6b63\u5728\u6d41\u5f0f\u8f93\u51fa AI \u9605\u8bfb\u7ed3\u679c",
+		);
 	});
 
 	it("decorates AI source markers in request results and generated notes", async () => {
@@ -444,7 +741,8 @@ describe("epub-ai-reading", () => {
 				choices: [
 					{
 						message: {
-							content: "## Important Excerpts\nLaTeX definition matters. [P001]",
+							content:
+								"## Important Excerpts\nLaTeX definition matters. [段001]",
 						},
 					},
 				],
@@ -452,13 +750,13 @@ describe("epub-ai-reading", () => {
 		}));
 		const sourceBlocks: EpubAiReadingSourceBlock[] = [
 			{
-				id: "P001",
+				id: "段001",
 				chapterHref: "Text/chapter1.xhtml",
 				cfi: "epubcfi(/6/2)",
 				text: "LaTeX is a document markup language.",
 				headingPath: ["Chapter 1"],
 				kind: "paragraph",
-				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]",
+				sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
 			},
 		];
 
@@ -481,13 +779,15 @@ describe("epub-ai-reading", () => {
 				requester,
 				enableStreaming: false,
 				now: () => 1710000000000,
-			}
+			},
 		);
 
-		expect(result.content).toContain("[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]");
+		expect(result.content).toContain(
+			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
+		);
 		expect(result.sourceBlocks).toEqual(sourceBlocks);
 		expect(buildEpubAiReadingNoteSection(result)).toContain(
-			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|P001]]"
+			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
 		);
 	});
 
@@ -520,7 +820,7 @@ describe("epub-ai-reading", () => {
 				chapterText: "完整章节正文",
 				tocItems,
 			},
-			{ app, requester }
+			{ app, requester },
 		);
 
 		expect(requester).toHaveBeenCalledWith(
@@ -529,7 +829,7 @@ describe("epub-ai-reading", () => {
 				headers: expect.objectContaining({
 					Authorization: "Bearer runtime-key",
 				}),
-			})
+			}),
 		);
 	});
 
@@ -571,7 +871,7 @@ describe("epub-ai-reading", () => {
 				tocItems,
 				sourceLink: "obsidian://weave-reader?book=demo",
 			},
-			{ app, requester, now: () => 1710000000000 }
+			{ app, requester, now: () => 1710000000000 },
 		);
 		const noteFile = await upsertEpubAiReadingNote(app, result);
 		const note = files.get(noteFile.path) || "";
@@ -601,6 +901,73 @@ describe("epub-ai-reading", () => {
 		expect(markdown).toContain("## 第一章 注意力");
 		expect(markdown).toContain("EPUB 跳转");
 		expect(markdown).toContain("# 本章摘要");
+	});
+
+	it("adds an AI reading note filter root marker to generated sections", () => {
+		const markdown = buildEpubAiReadingNoteSection({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "## 范围摘要\nScoped result",
+			model: "kimi-k3",
+			generatedAt: 1710000000000,
+		});
+
+		expect(markdown).toContain("weave-epub-ai-reading-note-root");
+		expect(markdown).toContain('data-source-file="Books/demo.epub"');
+		expect(markdown).toContain('data-scope-label="Chapter 1"');
+	});
+
+	it("writes scoped range and source-block diagnostics into note sections", () => {
+		const markdown = buildEpubAiReadingNoteSection({
+			bookTitle: "LaTeX Guide",
+			filePath: "Books/latex.epub",
+			chapterTitle: "Installing and using LaTeX",
+			chapterHref: "Text/ch1.xhtml#install",
+			sourceLink: "obsidian://weave-reader?book=latex",
+			scope: {
+				label: "Installing and using LaTeX",
+				pathLabels: ["Chapter 1", "Installing and using LaTeX", "全部"],
+				href: "Text/ch1.xhtml#install",
+				includeDescendants: true,
+				flatIndex: 1,
+				endFlatIndex: 3,
+			},
+			sourceBlocks: [
+				{
+					id: "段001",
+					chapterHref: "Text/ch1.xhtml#install",
+					text: "Install TeX Live.",
+					headingPath: ["Chapter 1"],
+					kind: "paragraph",
+				},
+				{
+					id: "段002",
+					chapterHref: "Text/ch1.xhtml#install",
+					text: "Open TeXworks.",
+					headingPath: ["Chapter 1"],
+					kind: "paragraph",
+				},
+				{
+					id: "段003",
+					chapterHref: "Text/ch1.xhtml#install",
+					text: "Typeset the first document.",
+					headingPath: ["Chapter 1"],
+					kind: "paragraph",
+				},
+			],
+			content: "## 范围摘要\nScoped result",
+			model: "kimi-k3",
+			generatedAt: 1710000000000,
+		});
+
+		expect(markdown).toContain(
+			"> 阅读范围：Chapter 1 > Installing and using LaTeX > 全部",
+		);
+		expect(markdown).toContain("> 范围策略：包含该目录项及其下级目录正文");
+		expect(markdown).toContain("> 来源块：段001-段003，共 3 段");
+		expect(markdown).toContain("## 范围摘要");
 	});
 
 	it("updates an existing chapter section instead of appending duplicates", async () => {
@@ -636,5 +1003,55 @@ describe("epub-ai-reading", () => {
 		expect(updated).toContain("新结果");
 		expect(updated).not.toContain("旧结果");
 		expect(updated.match(/weave-epub-ai-reading:start/g)).toHaveLength(1);
+	});
+
+	it("keeps different scoped ranges as separate note sections even when hrefs match", async () => {
+		const existingNote = buildEpubAiReadingNoteMarkdown({
+			bookTitle: "LaTeX Guide",
+			filePath: "Books/latex.epub",
+			sectionsMarkdown: buildEpubAiReadingNoteSection({
+				bookTitle: "LaTeX Guide",
+				filePath: "Books/latex.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "Text/ch1.xhtml",
+				scope: {
+					label: "Chapter 1",
+					pathLabels: ["Chapter 1", "全部"],
+					href: "Text/ch1.xhtml",
+					includeDescendants: true,
+					flatIndex: 0,
+					endFlatIndex: 3,
+				},
+				content: "parent range result",
+				model: "kimi-k3",
+				generatedAt: 1710000000000,
+			}),
+		});
+		const { app, files } = createMemoryApp({
+			"AI阅读笔记/LaTeX Guide - AI阅读.md": existingNote,
+		});
+
+		await upsertEpubAiReadingNote(app, {
+			bookTitle: "LaTeX Guide",
+			filePath: "Books/latex.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "Text/ch1.xhtml",
+			scope: {
+				label: "Installing and using LaTeX",
+				pathLabels: ["Chapter 1", "Installing and using LaTeX", "全部"],
+				href: "Text/ch1.xhtml",
+				includeDescendants: true,
+				flatIndex: 1,
+				endFlatIndex: 3,
+			},
+			content: "child range result",
+			model: "kimi-k3",
+			generatedAt: 1710000001000,
+		});
+
+		const updated = files.get("AI阅读笔记/LaTeX Guide - AI阅读.md") || "";
+		expect(updated).toContain("parent range result");
+		expect(updated).toContain("child range result");
+		expect(updated.match(/weave-epub-ai-reading:start/g)).toHaveLength(2);
 	});
 });

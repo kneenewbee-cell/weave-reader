@@ -5540,6 +5540,14 @@
 						chapterMarkdown: draft.markdown,
 						tocItems,
 						sourceBlocks,
+						scope: {
+							label: scope.label,
+							pathLabels: scope.pathLabels,
+							href: scope.href,
+							includeDescendants: scope.includeDescendants,
+							flatIndex: scope.flatIndex,
+							endFlatIndex: scope.endFlatIndex,
+						},
 						scopeContext: buildAiReadingScopeContext(scope, flatTocItems),
 						sourceLink: buildChapterReadingPointSourceLink(
 							draft.title || scope.label || titleHint,

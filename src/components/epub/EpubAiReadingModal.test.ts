@@ -11,7 +11,10 @@ import type { TocItem } from "../../services/epub/types";
 import { openFileWithExistingLeaf } from "../../utils/workspace-navigation";
 
 vi.mock("../../services/epub/epub-ai-reading", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("../../services/epub/epub-ai-reading")>();
+	const actual =
+		await importOriginal<
+			typeof import("../../services/epub/epub-ai-reading")
+		>();
 	return {
 		...actual,
 		requestEpubAiReading: vi.fn(),
@@ -97,15 +100,19 @@ describe("EpubAiReadingModal", () => {
 
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
-		expect((modal as unknown as { modalEl: HTMLElement }).modalEl.classList.contains(
-			"weave-epub-ai-reading-modal-host"
-		)).toBe(true);
+		expect(
+			(modal as unknown as { modalEl: HTMLElement }).modalEl.classList.contains(
+				"weave-epub-ai-reading-modal-host",
+			),
+		).toBe(true);
 
 		EpubAiReadingModal.prototype.onClose.call(modal);
 
-		expect((modal as unknown as { modalEl: HTMLElement }).modalEl.classList.contains(
-			"weave-epub-ai-reading-modal-host"
-		)).toBe(false);
+		expect(
+			(modal as unknown as { modalEl: HTMLElement }).modalEl.classList.contains(
+				"weave-epub-ai-reading-modal-host",
+			),
+		).toBe(false);
 	});
 
 	it("allows the Obsidian backdrop to close the modal", () => {
@@ -167,8 +174,8 @@ describe("EpubAiReadingModal", () => {
 		expect(modal.contentEl.textContent || "").toContain("选择 AI 阅读范围");
 		expect(
 			Array.from(modal.contentEl.querySelectorAll("button")).some(
-				(button) => button.textContent === "开始 AI 阅读" && !button.disabled
-			)
+				(button) => button.textContent === "开始 AI 阅读" && !button.disabled,
+			),
 		).toBe(true);
 	});
 
@@ -190,7 +197,7 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
 		const scopeControls = modal.contentEl.querySelectorAll<HTMLSelectElement>(
-			".weave-epub-ai-reading-scope-select"
+			".weave-epub-ai-reading-scope-select",
 		);
 		expect(scopeControls).toHaveLength(3);
 		expect(scopeControls[1].value).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
@@ -216,9 +223,13 @@ describe("EpubAiReadingModal", () => {
 
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
-		const controls = modal.contentEl.querySelector(".weave-epub-ai-reading-scope-controls");
+		const controls = modal.contentEl.querySelector(
+			".weave-epub-ai-reading-scope-controls",
+		);
 		expect(controls).not.toBeNull();
-		expect(controls?.querySelectorAll(".weave-epub-ai-reading-scope-row")).toHaveLength(3);
+		expect(
+			controls?.querySelectorAll(".weave-epub-ai-reading-scope-row"),
+		).toHaveLength(3);
 	});
 
 	it("disables generation for the full-book All placeholder", () => {
@@ -238,11 +249,13 @@ describe("EpubAiReadingModal", () => {
 
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
-		const startButton = Array.from(modal.contentEl.querySelectorAll("button")).find(
-			(button) => button.textContent === "开始 AI 阅读"
-		);
+		const startButton = Array.from(
+			modal.contentEl.querySelectorAll("button"),
+		).find((button) => button.textContent === "开始 AI 阅读");
 		expect(startButton?.disabled).toBe(true);
-		expect(modal.contentEl.textContent || "").toContain("全书 AI 阅读将在后续版本支持");
+		expect(modal.contentEl.textContent || "").toContain(
+			"全书 AI 阅读将在后续版本支持",
+		);
 	});
 
 	it("starts AI reading with the selected TOC scope input", async () => {
@@ -289,7 +302,7 @@ describe("EpubAiReadingModal", () => {
 					label: "准备工作",
 					href: "text/ch1.xhtml#setup",
 					flatIndex: 2,
-				})
+				}),
 			);
 			expect(mockedRequestEpubAiReading).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -297,9 +310,11 @@ describe("EpubAiReadingModal", () => {
 					chapterHref: "text/ch1.xhtml#setup",
 					chapterText: "Scoped text",
 				}),
-				expect.any(Object)
+				expect.any(Object),
 			);
-			expect(modal.contentEl.textContent || "").toContain("scoped AI reading result");
+			expect(modal.contentEl.textContent || "").toContain(
+				"scoped AI reading result",
+			);
 		});
 	});
 
@@ -365,7 +380,9 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(secondModal);
 
 		await waitFor(() => {
-			expect(secondModal.contentEl.textContent || "").toContain("AI 正在整理所选范围");
+			expect(secondModal.contentEl.textContent || "").toContain(
+				"AI 正在整理所选范围",
+			);
 			expect(secondModal.contentEl.textContent || "").toContain("流式片段 A");
 		});
 		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
@@ -373,7 +390,9 @@ describe("EpubAiReadingModal", () => {
 		finishGeneration();
 
 		await waitFor(() => {
-			expect(secondModal.contentEl.textContent || "").toContain("恢复后的最终结果");
+			expect(secondModal.contentEl.textContent || "").toContain(
+				"恢复后的最终结果",
+			);
 		});
 		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
 	});
@@ -402,7 +421,9 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(firstModal);
 
 		await waitFor(() => {
-			expect(firstModal.contentEl.textContent || "").toContain("cached same chapter result");
+			expect(firstModal.contentEl.textContent || "").toContain(
+				"cached same chapter result",
+			);
 		});
 		EpubAiReadingModal.prototype.onClose.call(firstModal);
 
@@ -411,9 +432,11 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(secondModal);
 
 		await waitFor(() => {
-			expect(secondModal.contentEl.textContent || "").toContain("cached same chapter result");
 			expect(secondModal.contentEl.textContent || "").toContain(
-				"\u5df2\u6062\u590d\u4e0a\u6b21 AI \u9605\u8bfb\u7ed3\u679c"
+				"cached same chapter result",
+			);
+			expect(secondModal.contentEl.textContent || "").toContain(
+				"\u5df2\u6062\u590d\u4e0a\u6b21 AI \u9605\u8bfb\u7ed3\u679c",
 			);
 		});
 		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
@@ -454,7 +477,9 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(firstModal);
 
 		await waitFor(() => {
-			expect(firstModal.contentEl.textContent || "").toContain("chapter one result");
+			expect(firstModal.contentEl.textContent || "").toContain(
+				"chapter one result",
+			);
 		});
 		EpubAiReadingModal.prototype.onClose.call(firstModal);
 
@@ -473,7 +498,7 @@ describe("EpubAiReadingModal", () => {
 
 		await waitFor(() => {
 			expect(secondModal.contentEl.textContent || "").toContain(
-				"\u4e0a\u4e00\u4efd AI \u9605\u8bfb\u7ed3\u679c\u5c1a\u672a\u751f\u6210/\u66f4\u65b0\u7b14\u8bb0"
+				"\u4e0a\u4e00\u4efd AI \u9605\u8bfb\u7ed3\u679c\u5c1a\u672a\u751f\u6210/\u66f4\u65b0\u7b14\u8bb0",
 			);
 		});
 		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(2);
@@ -505,7 +530,9 @@ describe("EpubAiReadingModal", () => {
 		await waitFor(() => {
 			expect(mockedMarkdownRender).toHaveBeenCalled();
 			expect(modal.contentEl.textContent || "").toContain("AI 阅读结果");
-			expect(modal.contentEl.textContent || "").not.toContain("AI 阅读生成失败");
+			expect(modal.contentEl.textContent || "").not.toContain(
+				"AI 阅读生成失败",
+			);
 		});
 		const renderHost = mockedMarkdownRender.mock.calls[0]?.[4];
 		expect(renderHost).not.toBe(modal);
@@ -524,7 +551,7 @@ describe("EpubAiReadingModal", () => {
 				"## \u5173\u952e\u77e5\u8bc6\u70b9",
 				"- \u77e5\u8bc6\u70b9",
 				"## \u91cd\u8981\u539f\u6587",
-				"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)|P001]]",
+				"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)|\u6bb5001]]",
 				"## \u7ae0\u8282\u5173\u7cfb",
 				"\u627f\u4e0a\u542f\u4e0b",
 				"## \u5efa\u8bae\u7cbe\u8bfb\u987a\u5e8f",
@@ -547,20 +574,82 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
 		await waitFor(() => {
-			expect(modal.contentEl.querySelectorAll(".weave-epub-ai-reading-tab")).toHaveLength(5);
-			expect(modal.contentEl.textContent || "").toContain("\u6458\u8981\u5185\u5bb9");
+			expect(
+				modal.contentEl.querySelectorAll(".weave-epub-ai-reading-tab"),
+			).toHaveLength(5);
+			expect(modal.contentEl.textContent || "").toContain(
+				"\u6458\u8981\u5185\u5bb9",
+			);
 		});
 
 		const tabs = modal.contentEl.querySelectorAll<HTMLButtonElement>(
-			".weave-epub-ai-reading-tab"
+			".weave-epub-ai-reading-tab",
 		);
 		tabs[2].click();
 
 		await waitFor(() => {
-			expect(modal.contentEl.textContent || "").toContain("P001");
+			expect(modal.contentEl.textContent || "").toContain("\u6bb5001");
 			expect(
-				modal.contentEl.querySelector(".weave-epub-ai-reading-tab.is-active")?.textContent || ""
+				modal.contentEl.querySelector(".weave-epub-ai-reading-tab.is-active")
+					?.textContent || "",
 			).toContain("\u91cd\u8981\u539f\u6587");
+		});
+	});
+
+	it("renders tabs for the close-reading output sections", async () => {
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: [
+				"## \u8303\u56f4\u6458\u8981",
+				"summary",
+				"## \u6838\u5fc3\u7ed3\u8bba",
+				"core",
+				"## \u5173\u952e\u77e5\u8bc6\u70b9",
+				"knowledge",
+				"## \u6309\u5c0f\u8282\u7cbe\u8bfb",
+				"sections",
+				"## \u91cd\u8981\u539f\u6587\u4e0e\u89e3\u8bfb",
+				"quotes",
+				"## \u5bb9\u6613\u8bef\u89e3\u7684\u70b9",
+				"pitfalls",
+				"## \u7ae0\u8282\u5173\u7cfb",
+				"relations",
+				"## \u5efa\u8bae\u7cbe\u8bfb\u4f4d\u7f6e",
+				"path",
+			].join("\n"),
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			const labels = Array.from(
+				modal.contentEl.querySelectorAll(".weave-epub-ai-reading-tab"),
+			).map((tab) => tab.textContent || "");
+			expect(labels).toEqual([
+				"\u6458\u8981",
+				"\u6838\u5fc3\u7ed3\u8bba",
+				"\u77e5\u8bc6\u70b9",
+				"\u5c0f\u8282\u7cbe\u8bfb",
+				"\u91cd\u8981\u539f\u6587",
+				"\u6613\u8bef\u89e3",
+				"\u7ae0\u8282\u5173\u7cfb",
+				"\u7cbe\u8bfb\u987a\u5e8f",
+			]);
 		});
 	});
 
@@ -601,7 +690,8 @@ describe("EpubAiReadingModal", () => {
 			filePath: "Books/demo.epub",
 			chapterTitle: "Chapter 1",
 			chapterHref: "text/chapter1.xhtml",
-			sourceLink: "obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
+			sourceLink:
+				"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
 			content: "AI 阅读结果",
 			model: "k3",
 			generatedAt: 1710000000000,
@@ -614,23 +704,76 @@ describe("EpubAiReadingModal", () => {
 				chapterHref: "text/chapter1.xhtml",
 				chapterText: "Chapter text",
 				tocItems: [],
-				sourceLink: "obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
+				sourceLink:
+					"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
 			},
 		});
 
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
 		const sourceLink = modal.contentEl.querySelector<HTMLAnchorElement>(
-			".weave-epub-ai-reading-source-link"
+			".weave-epub-ai-reading-source-link",
 		);
 		expect(sourceLink?.textContent || "").toContain("回到当前章节原文");
 		expect(sourceLink?.getAttribute("href")).toBe(
-			"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29"
+			"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
 		);
 	});
 
+	it("uses short hover text for EPUB source links", async () => {
+		const longSourceHref = "Books/demo.epub#weave-cfi=epubcfi(/6/2)";
+		mockedMarkdownRender.mockImplementationOnce(
+			async (_app, _markdown, containerEl) => {
+				const link = document.createElement("a");
+				link.href = longSourceHref;
+				link.title = longSourceHref;
+				link.textContent = "段001";
+				containerEl.appendChild(link);
+			},
+		);
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			sourceLink:
+				"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
+			content: "段001",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+				sourceLink:
+					"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29",
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			expect(modal.contentEl.querySelectorAll("a")).toHaveLength(2);
+		});
+		const sourceLinks = Array.from(
+			modal.contentEl.querySelectorAll<HTMLAnchorElement>("a"),
+		);
+
+		for (const link of sourceLinks) {
+			expect(link.getAttribute("title")).toBe("点击回到 EPUB 原文");
+			expect(link.getAttribute("aria-label")).toBe("点击回到 EPUB 原文");
+			expect(link.getAttribute("title") || "").not.toContain("weave-cfi");
+		}
+	});
+
 	it("closes after opening the chapter source link", async () => {
-		const sourceHref = "obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29";
+		const sourceHref =
+			"obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi%28%2F6%2F2%29";
 		const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
@@ -665,17 +808,19 @@ describe("EpubAiReadingModal", () => {
 	});
 
 	it("closes after a rendered paragraph source link is clicked", async () => {
-		mockedMarkdownRender.mockImplementationOnce(async (_app, _markdown, containerEl) => {
-			const link = document.createElement("a");
-			link.textContent = "P001";
-			containerEl.appendChild(link);
-		});
+		mockedMarkdownRender.mockImplementationOnce(
+			async (_app, _markdown, containerEl) => {
+				const link = document.createElement("a");
+				link.textContent = "\u6bb5001";
+				containerEl.appendChild(link);
+			},
+		);
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
 			filePath: "Books/demo.epub",
 			chapterTitle: "Chapter 1",
 			chapterHref: "text/chapter1.xhtml",
-			content: "P001",
+			content: "\u6bb5001",
 			model: "k3",
 			generatedAt: 1710000000000,
 		});
@@ -694,7 +839,7 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
 		await waitFor(() => {
-			expect(modal.contentEl.querySelector("a")?.textContent).toBe("P001");
+			expect(modal.contentEl.querySelector("a")?.textContent).toBe("\u6bb5001");
 		});
 		modal.contentEl.querySelector<HTMLAnchorElement>("a")?.click();
 
@@ -740,8 +885,20 @@ describe("EpubAiReadingModal", () => {
 
 		modal.contentEl
 			.querySelector<HTMLElement>(".weave-epub-ai-reading-header")
-			?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 120, clientY: 130 }));
-		document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 170, clientY: 190 }));
+			?.dispatchEvent(
+				new MouseEvent("mousedown", {
+					bubbles: true,
+					clientX: 120,
+					clientY: 130,
+				}),
+			);
+		document.dispatchEvent(
+			new MouseEvent("mousemove", {
+				bubbles: true,
+				clientX: 170,
+				clientY: 190,
+			}),
+		);
 		document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
 		expect(modalEl.style.position).toBe("fixed");
@@ -777,23 +934,27 @@ describe("EpubAiReadingModal", () => {
 
 		let createButton: HTMLButtonElement | undefined;
 		await waitFor(() => {
-			createButton = Array.from(modal.contentEl.querySelectorAll("button")).find(
-				(button) => button.textContent === "生成并打开笔记"
-			);
+			createButton = Array.from(
+				modal.contentEl.querySelectorAll("button"),
+			).find((button) => button.textContent === "生成并打开笔记");
 			expect(createButton?.disabled).toBe(false);
 		});
 		createButton!.click();
 
 		await waitFor(() => {
 			expect(mockedUpsertEpubAiReadingNote).toHaveBeenCalled();
-			expect(mockedOpenFileWithExistingLeaf).toHaveBeenCalledWith(app, noteFile, {
-				openInNewTab: true,
-				focus: true,
-			});
+			expect(mockedOpenFileWithExistingLeaf).toHaveBeenCalledWith(
+				app,
+				noteFile,
+				{
+					openInNewTab: true,
+					focus: true,
+				},
+			);
 			expect(
 				Array.from(modal.contentEl.querySelectorAll("button")).some(
-					(button) => button.textContent === "打开笔记"
-				)
+					(button) => button.textContent === "打开笔记",
+				),
 			).toBe(true);
 		});
 	});
@@ -835,7 +996,9 @@ describe("EpubAiReadingModal", () => {
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
 		await waitFor(() => {
-			expect(modal.contentEl.textContent || "").toContain("AI 正在整理阅读结果");
+			expect(modal.contentEl.textContent || "").toContain(
+				"AI 正在整理阅读结果",
+			);
 			expect(modal.contentEl.textContent || "").toContain("正在生成的片段");
 		});
 

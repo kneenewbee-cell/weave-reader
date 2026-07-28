@@ -22,19 +22,27 @@ export interface EpubAiReadingSourceBlock {
 }
 
 export interface BuildEpubAiReadingSourceBlockOptions {
-	sourceLinkForParagraph?: (paragraph: ReaderParagraph, blockId: string) => string;
+	sourceLinkForParagraph?: (
+		paragraph: ReaderParagraph,
+		blockId: string,
+	) => string;
 	maxBlocks?: number;
 }
 
 function normalizeBlockText(value: string): string {
-	return String(value || "").replace(/\s+/g, " ").trim();
+	return String(value || "")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 function normalizeComparableText(value: string): string {
 	return normalizeBlockText(value).replace(/\s+/g, "").toLowerCase();
 }
 
-function paragraphAppearsInDraft(paragraphText: string, draftText: string): boolean {
+function paragraphAppearsInDraft(
+	paragraphText: string,
+	draftText: string,
+): boolean {
 	const paragraph = normalizeComparableText(paragraphText);
 	const draft = normalizeComparableText(draftText);
 	if (!paragraph || !draft) {
@@ -50,8 +58,12 @@ function paragraphAppearsInDraft(paragraphText: string, draftText: string): bool
 	return draft.includes(paragraph.slice(0, probeLength));
 }
 
-function inferBlockKind(paragraph: ReaderParagraph): EpubAiReadingSourceBlockKind {
-	const html = String(paragraph.html || "").trim().toLowerCase();
+function inferBlockKind(
+	paragraph: ReaderParagraph,
+): EpubAiReadingSourceBlockKind {
+	const html = String(paragraph.html || "")
+		.trim()
+		.toLowerCase();
 	if (/^<h[1-6]\b/.test(html)) {
 		return "heading";
 	}
@@ -70,13 +82,20 @@ function inferBlockKind(paragraph: ReaderParagraph): EpubAiReadingSourceBlockKin
 	return "paragraph";
 }
 
+const SOURCE_REFERENCE_PATTERN = /\[((?:段|P)\d{3})\]/g;
+const LEGACY_SOURCE_REFERENCE_PATTERN = /^P\d{3}$/;
+
 function formatSourceBlockId(index: number): string {
-	return `P${String(index + 1).padStart(3, "0")}`;
+	return `段${String(index + 1).padStart(3, "0")}`;
+}
+
+function normalizeSourceReferenceId(id: string): string {
+	return LEGACY_SOURCE_REFERENCE_PATTERN.test(id) ? `段${id.slice(1)}` : id;
 }
 
 export function buildEpubAiReadingSourceBlocksFromParagraphs(
 	paragraphs: ReaderParagraph[],
-	options: BuildEpubAiReadingSourceBlockOptions = {}
+	options: BuildEpubAiReadingSourceBlockOptions = {},
 ): EpubAiReadingSourceBlock[] {
 	const blocks: EpubAiReadingSourceBlock[] = [];
 	for (const paragraph of paragraphs || []) {
@@ -106,17 +125,19 @@ export function buildEpubAiReadingSourceBlocksFromParagraphs(
 
 export function filterReaderParagraphsForAiReadingDraft(
 	paragraphs: ReaderParagraph[],
-	draftText: string
+	draftText: string,
 ): ReaderParagraph[] {
 	const draft = normalizeBlockText(draftText);
 	if (!draft) {
 		return paragraphs || [];
 	}
-	return (paragraphs || []).filter((paragraph) => paragraphAppearsInDraft(paragraph.text, draft));
+	return (paragraphs || []).filter((paragraph) =>
+		paragraphAppearsInDraft(paragraph.text, draft),
+	);
 }
 
 export function formatEpubAiReadingSourceBlocksForPrompt(
-	blocks: EpubAiReadingSourceBlock[]
+	blocks: EpubAiReadingSourceBlock[],
 ): string {
 	return (blocks || [])
 		.map((block) => {
@@ -133,13 +154,43 @@ export function formatEpubAiReadingSourceBlocksForPrompt(
 		.join("\n\n");
 }
 
+export function limitEpubAiReadingSourceReferencesPerLine(
+	markdown: string,
+	maxReferencesPerLine = 2,
+): string {
+	const maxReferences = Math.max(0, Math.floor(maxReferencesPerLine));
+	let insideFence = false;
+	return String(markdown || "")
+		.split(/\r?\n/g)
+		.map((line) => {
+			if (/^\s*```/.test(line)) {
+				insideFence = !insideFence;
+				return line;
+			}
+			if (insideFence) {
+				return line;
+			}
+			let referenceCount = 0;
+			return line
+				.replace(SOURCE_REFERENCE_PATTERN, (match) => {
+					referenceCount += 1;
+					return referenceCount <= maxReferences ? match : "";
+				})
+				.replace(/[ \t]{2,}/g, " ")
+				.replace(/[ \t]+$/g, "");
+		})
+		.join("\n");
+}
+
 export function decorateEpubAiReadingSourceReferences(
 	markdown: string,
-	blocks: EpubAiReadingSourceBlock[] = []
+	blocks: EpubAiReadingSourceBlock[] = [],
 ): string {
 	const byId = new Map(blocks.map((block) => [block.id, block]));
-	return String(markdown || "").replace(/\[(P\d{3})\]/g, (match, id: string) => {
-		const block = byId.get(id);
-		return block?.sourceLink || match;
-	});
+	return String(markdown || "")
+		.replace(SOURCE_REFERENCE_PATTERN, (match, id: string) => {
+			const block = byId.get(id) || byId.get(normalizeSourceReferenceId(id));
+			return block?.sourceLink || match;
+		})
+		.replace(/\]\]\s*(?=\[\[)/g, "]] ");
 }

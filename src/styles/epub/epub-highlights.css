@@ -871,7 +871,9 @@
 }
 
 .markdown-rendered .weave-annotation-note-filter,
-.markdown-preview-view .weave-annotation-note-filter {
+.markdown-preview-view .weave-annotation-note-filter,
+.markdown-rendered .weave-epub-ai-reading-note-filter,
+.markdown-preview-view .weave-epub-ai-reading-note-filter {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
@@ -885,7 +887,11 @@
 .markdown-rendered .weave-annotation-note-filter select,
 .markdown-preview-view .weave-annotation-note-filter select,
 .markdown-rendered .weave-annotation-note-filter input,
-.markdown-preview-view .weave-annotation-note-filter input {
+.markdown-preview-view .weave-annotation-note-filter input,
+.markdown-rendered .weave-epub-ai-reading-note-filter select,
+.markdown-preview-view .weave-epub-ai-reading-note-filter select,
+.markdown-rendered .weave-epub-ai-reading-note-filter input,
+.markdown-preview-view .weave-epub-ai-reading-note-filter input {
 	height: 32px;
 	min-width: 128px;
 	border-radius: 6px;
@@ -897,14 +903,18 @@
 }
 
 .markdown-rendered .weave-annotation-note-filter input,
-.markdown-preview-view .weave-annotation-note-filter input {
+.markdown-preview-view .weave-annotation-note-filter input,
+.markdown-rendered .weave-epub-ai-reading-note-filter input,
+.markdown-preview-view .weave-epub-ai-reading-note-filter input {
 	flex: 1 1 180px;
 	min-width: min(220px, 100%);
 	padding-inline: 10px;
 }
 
 .markdown-rendered .weave-annotation-note-filter-count,
-.markdown-preview-view .weave-annotation-note-filter-count {
+.markdown-preview-view .weave-annotation-note-filter-count,
+.markdown-rendered .weave-epub-ai-reading-note-filter-count,
+.markdown-preview-view .weave-epub-ai-reading-note-filter-count {
 	margin-left: auto;
 	font-size: var(--font-ui-small);
 	font-weight: 600;
@@ -915,7 +925,11 @@
 .markdown-rendered .weave-annotation-note-line.is-hidden,
 .markdown-preview-view .weave-annotation-note-line.is-hidden,
 .markdown-rendered .weave-annotation-note-chapter.is-hidden,
-.markdown-preview-view .weave-annotation-note-chapter.is-hidden {
+.markdown-preview-view .weave-annotation-note-chapter.is-hidden,
+.markdown-rendered .weave-epub-ai-reading-note-filtered-block.is-hidden,
+.markdown-preview-view .weave-epub-ai-reading-note-filtered-block.is-hidden,
+.markdown-rendered .weave-epub-ai-reading-note-filtered-group.is-hidden,
+.markdown-preview-view .weave-epub-ai-reading-note-filtered-group.is-hidden {
 	display: none;
 }
 
@@ -928,20 +942,28 @@
 
 @media (max-width: 720px) {
 	.markdown-rendered .weave-annotation-note-filter,
-	.markdown-preview-view .weave-annotation-note-filter {
+	.markdown-preview-view .weave-annotation-note-filter,
+	.markdown-rendered .weave-epub-ai-reading-note-filter,
+	.markdown-preview-view .weave-epub-ai-reading-note-filter {
 		align-items: stretch;
 	}
 
 	.markdown-rendered .weave-annotation-note-filter select,
 	.markdown-preview-view .weave-annotation-note-filter select,
 	.markdown-rendered .weave-annotation-note-filter input,
-	.markdown-preview-view .weave-annotation-note-filter input {
+	.markdown-preview-view .weave-annotation-note-filter input,
+	.markdown-rendered .weave-epub-ai-reading-note-filter select,
+	.markdown-preview-view .weave-epub-ai-reading-note-filter select,
+	.markdown-rendered .weave-epub-ai-reading-note-filter input,
+	.markdown-preview-view .weave-epub-ai-reading-note-filter input {
 		flex: 1 1 100%;
 		width: 100%;
 	}
 
 	.markdown-rendered .weave-annotation-note-filter-count,
-	.markdown-preview-view .weave-annotation-note-filter-count {
+	.markdown-preview-view .weave-annotation-note-filter-count,
+	.markdown-rendered .weave-epub-ai-reading-note-filter-count,
+	.markdown-preview-view .weave-epub-ai-reading-note-filter-count {
 		margin-left: 0;
 	}
 }
