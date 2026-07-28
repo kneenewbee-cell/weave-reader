@@ -1032,7 +1032,7 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
-	it("moves selected ink strokes with transforms during drag instead of repainting the page", async () => {
+	it("moves selected ink strokes as one drag group instead of repainting or updating every stroke", async () => {
 		const restoreCanvas = installCanvasMock();
 		const { pdf } = createMockPdfDocument(1);
 		vi.mocked(loadPdfJs).mockResolvedValue({
@@ -1108,24 +1108,33 @@ describe("PdfView custom PDF reader", () => {
 		expect(layer!.querySelectorAll(".weave-pdf-ink-stroke.selected")).toHaveLength(2);
 
 		const replaceChildrenSpy = vi.spyOn(layer!, "replaceChildren");
+		const querySelectorAllSpy = vi.spyOn(layer!, "querySelectorAll");
 		dispatchPointerEvent(layer!, "pointerdown", { clientX: 20, clientY: 28, pointerType: "mouse" });
 		dispatchPointerEvent(layer!, "pointermove", { clientX: 40, clientY: 56, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointermove", { clientX: 60, clientY: 84, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointermove", { clientX: 80, clientY: 112, pointerType: "mouse" });
 
 		expect(replaceChildrenSpy).not.toHaveBeenCalled();
+		expect(querySelectorAllSpy).toHaveBeenCalledTimes(1);
+		expect(
+			layer!
+				.querySelector<SVGGElement>('[data-weave-pdf-ink-drag-group="true"]')
+				?.getAttribute("transform")
+		).toBe("translate(0.3 0.3)");
 		expect(
 			layer!
 				.querySelector<SVGElement>('.weave-pdf-ink-stroke.selected[data-stroke-id="stroke-a"]')
 				?.getAttribute("transform")
-		).toBe("translate(0.1 0.1)");
+		).toBeNull();
 		expect(
 			layer!
 				.querySelector<SVGElement>('.weave-pdf-ink-selection-halo[data-stroke-id="stroke-a"]')
 				?.getAttribute("transform")
-		).toBe("translate(0.1 0.1)");
+		).toBeNull();
 
 		dispatchPointerEvent(layer!, "pointerup", {
-			clientX: 40,
-			clientY: 56,
+			clientX: 80,
+			clientY: 112,
 			buttons: 0,
 			pointerType: "mouse",
 		});
@@ -1213,6 +1222,86 @@ describe("PdfView custom PDF reader", () => {
 
 		const root = view.contentEl.querySelector<HTMLElement>(".weave-pdf-reader");
 		expect(root?.dataset.weavePdfTool).toBe("select");
+		restoreCanvas();
+	});
+
+	it("selects PDF text by text flow between drag anchors", async () => {
+		const restoreCanvas = installCanvasMock();
+		const originalClipboard = navigator.clipboard;
+		const clipboard = { writeText: vi.fn(async () => undefined) };
+		Object.defineProperty(navigator, "clipboard", {
+			value: clipboard,
+			configurable: true,
+		});
+		const textPage = {
+			getViewport: vi.fn(({ scale }: { scale: number }) => ({
+				width: 200 * scale,
+				height: 280 * scale,
+			})),
+			render: vi.fn(() => ({ promise: Promise.resolve() })),
+			getTextContent: vi.fn(async () => ({
+				items: [
+					{ str: "Header", transform: [10, 0, 0, 10, 20, 260], width: 44, height: 10, fontName: "f1", dir: "ltr" },
+					{ str: "Line 1 left", transform: [10, 0, 0, 10, 20, 230], width: 70, height: 10, fontName: "f1", dir: "ltr" },
+					{ str: "Line 1 right", transform: [10, 0, 0, 10, 112, 230], width: 78, height: 10, fontName: "f1", dir: "ltr" },
+					{ str: "Line 2 full", transform: [10, 0, 0, 10, 20, 200], width: 78, height: 10, fontName: "f1", dir: "ltr" },
+					{ str: "Line 3 left", transform: [10, 0, 0, 10, 20, 170], width: 70, height: 10, fontName: "f1", dir: "ltr" },
+					{ str: "Line 3 right", transform: [10, 0, 0, 10, 112, 170], width: 78, height: 10, fontName: "f1", dir: "ltr" },
+				],
+				styles: { f1: { ascent: 0.8 } },
+			})),
+		};
+		const pdf = {
+			numPages: 1,
+			getPage: vi.fn(async () => textPage),
+			destroy: vi.fn(),
+		};
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view } = createPdfView();
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="select"]')?.click();
+
+		const textLayer = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-layer");
+		expect(textLayer).toBeTruthy();
+		textLayer!.getBoundingClientRect = vi.fn(() => ({
+			top: 0,
+			bottom: 280,
+			height: 280,
+			left: 0,
+			right: 200,
+			width: 200,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect));
+
+		dispatchPointerEvent(textLayer!, "pointerdown", { clientX: 18, clientY: 43, pointerType: "mouse" });
+		dispatchPointerEvent(textLayer!, "pointermove", { clientX: 198, clientY: 103, pointerType: "mouse" });
+		dispatchPointerEvent(textLayer!, "pointerup", {
+			clientX: 198,
+			clientY: 103,
+			buttons: 0,
+			pointerType: "mouse",
+		});
+
+		expect(textLayer!.querySelectorAll(".weave-pdf-text-selection-highlight").length).toBeGreaterThan(0);
+		view.contentEl.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true })
+		);
+		expect(clipboard.writeText).toHaveBeenCalledWith(
+			"Line 1 left Line 1 right\nLine 2 full\nLine 3 left Line 3 right"
+		);
+		expect(clipboard.writeText).not.toHaveBeenCalledWith(expect.stringContaining("Header"));
+
+		Object.defineProperty(navigator, "clipboard", {
+			value: originalClipboard,
+			configurable: true,
+		});
 		restoreCanvas();
 	});
 

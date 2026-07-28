@@ -397,11 +397,22 @@
 
 .weave-pdf-reader[data-weave-pdf-tool="select"] .weave-pdf-text-layer {
 	pointer-events: auto;
-	user-select: text;
+	cursor: text;
+	user-select: none;
 }
 
 .weave-pdf-reader[data-weave-pdf-tool="select"] .weave-pdf-text-layer span {
-	user-select: text;
+	pointer-events: none;
+	user-select: none;
+}
+
+.weave-pdf-text-selection-highlight {
+	position: absolute;
+	z-index: 2;
+	border-radius: 2px;
+	background: color-mix(in srgb, var(--interactive-accent) 28%, transparent);
+	mix-blend-mode: multiply;
+	pointer-events: none;
 }
 
 .weave-pdf-annotation-layer {
@@ -446,6 +457,15 @@
 		drop-shadow(0 0 2px var(--interactive-accent))
 		drop-shadow(0 0 5px color-mix(in srgb, var(--interactive-accent) 54%, transparent));
 	opacity: 1;
+}
+
+.weave-pdf-annotation-layer.is-moving-ink .weave-pdf-ink-stroke.selected,
+.weave-pdf-annotation-layer.is-moving-ink .weave-pdf-ink-selection-halo {
+	filter: none;
+}
+
+.weave-pdf-ink-drag-group {
+	will-change: transform;
 }
 
 .weave-pdf-ink-highlighter {

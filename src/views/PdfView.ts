@@ -26,6 +26,7 @@ import {
 	type PdfInkPoint,
 	type PdfInkStroke,
 	type PdfTextAnnotation,
+	type PdfTextAnnotationRect,
 } from "../services/pdf/pdf-ink-annotation-store";
 
 export const VIEW_TYPE_PDF = EPUB_RUNTIME.viewTypes.pdfReader;
@@ -54,6 +55,24 @@ interface PdfDocumentLike {
 	numPages: number;
 	getPage(pageNumber: number): Promise<PdfPageLike>;
 	destroy?: () => Promise<void> | void;
+}
+
+interface PdfTextFlowFragment {
+	text: string;
+	flowIndex: number;
+	lineIndex: number;
+	rect: PdfTextAnnotationRect;
+}
+
+interface PdfTextSelectionAnchor {
+	flowIndex: number;
+	offset: number;
+}
+
+interface PdfTextSelectionSegment {
+	text: string;
+	lineIndex: number;
+	rect: PdfTextAnnotationRect;
 }
 
 const PDF_INK_DEFAULTS = {
@@ -91,6 +110,7 @@ export class PdfView extends ItemView {
 	private toolsRailEl: HTMLElement | null = null;
 	private pageEls: Map<number, HTMLElement> = new Map();
 	private annotationLayers: Map<number, SVGSVGElement> = new Map();
+	private textLayers: Map<number, HTMLElement> = new Map();
 	private textAnnotationLayers: Map<number, HTMLElement> = new Map();
 	private visitedPages: Set<number> = new Set();
 	private activeTool: PdfAnnotationTool = "pan";
@@ -109,6 +129,8 @@ export class PdfView extends ItemView {
 	private eraserSessionBefore: PdfInkStroke[] | null = null;
 	private eraserSessionChanged = false;
 	private selectedInkStrokeIds: Set<string> = new Set();
+	private selectedInkDragGroupEl: SVGGElement | null = null;
+	private selectedInkDragPageNumber: number | null = null;
 	private strokeSelectionDrag: {
 		kind: "marquee" | "move";
 		pageNumber: number;
@@ -125,6 +147,17 @@ export class PdfView extends ItemView {
 	private captureSelection: {
 		pageNumber: number;
 		box: { left: number; top: number; right: number; bottom: number };
+	} | null = null;
+	private activeTextSelectionPointerId: number | null = null;
+	private textSelectionDrag: {
+		pageNumber: number;
+		anchor: PdfTextSelectionAnchor;
+		moved: boolean;
+	} | null = null;
+	private selectedPdfTextSelection: {
+		pageNumber: number;
+		text: string;
+		rects: PdfTextAnnotationRect[];
 	} | null = null;
 	private strokeClipboard: PdfInkStroke[] = [];
 	private pasteSequence = 0;
@@ -246,12 +279,16 @@ export class PdfView extends ItemView {
 		this.captureDrag = null;
 		this.captureRectEl = null;
 		this.captureSelection = null;
+		this.activeTextSelectionPointerId = null;
+		this.textSelectionDrag = null;
+		this.selectedPdfTextSelection = null;
 		this.strokeClipboard = [];
 		this.pasteSequence = 0;
 		this.annotationsDirty = false;
 		this.lastPersistedProgressCfi = "";
 		this.pageEls.clear();
 		this.annotationLayers.clear();
+		this.textLayers.clear();
 		this.textAnnotationLayers.clear();
 		this.pagesScrollEl = null;
 		this.toolsRailEl = null;
@@ -690,6 +727,9 @@ export class PdfView extends ItemView {
 		if (tool !== "capture") {
 			this.clearCaptureSelection();
 		}
+		if (tool !== "select") {
+			this.clearPdfTextSelection();
+		}
 		if (tool === "pen" || tool === "highlighter") {
 			this.activeInkTool = tool;
 			this.toolSettingsOpen = true;
@@ -1009,6 +1049,24 @@ export class PdfView extends ItemView {
 		});
 	}
 
+	private bindTextLayer(layer: HTMLElement, pageNumber: number): void {
+		layer.addEventListener("pointerdown", (event) => {
+			this.handleTextSelectionPointerDown(event, pageNumber, layer);
+		});
+		layer.addEventListener("pointermove", (event) => {
+			this.handleTextSelectionPointerMove(event, pageNumber, layer);
+		});
+		layer.addEventListener("pointerup", (event) => {
+			this.handleTextSelectionPointerUp(event, pageNumber, layer);
+		});
+		layer.addEventListener("pointercancel", (event) => {
+			this.handleTextSelectionPointerCancel(event, pageNumber, layer);
+		});
+		layer.addEventListener("lostpointercapture", (event) => {
+			this.handleTextSelectionPointerCancel(event, pageNumber, layer);
+		});
+	}
+
 	private async renderThumbnails(
 		pdf: PdfDocumentLike,
 		token: number
@@ -1099,8 +1157,10 @@ export class PdfView extends ItemView {
 					"aria-label": `PDF page ${pageNumber} text`,
 				},
 			});
+			this.textLayers.set(pageNumber, layer);
 			layer.style.width = `${Math.max(1, Math.ceil(cssWidth))}px`;
 			layer.style.height = `${Math.max(1, Math.ceil(cssHeight))}px`;
+			let textIndex = 0;
 			for (const item of textContent.items) {
 				const text = String(item?.str || "");
 				if (!text) {
@@ -1118,13 +1178,21 @@ export class PdfView extends ItemView {
 						dir: item.dir === "rtl" ? "rtl" : "ltr",
 					},
 				});
+				span.setAttribute("data-weave-pdf-text-fragment", "true");
+				span.setAttribute("data-weave-pdf-text-index", String(textIndex));
+				span.setAttribute("data-weave-pdf-text-x", this.formatInkNumber(left / Math.max(1, cssWidth)));
+				span.setAttribute("data-weave-pdf-text-y", this.formatInkNumber(top / Math.max(1, cssHeight)));
+				span.setAttribute("data-weave-pdf-text-width", this.formatInkNumber(width / Math.max(1, cssWidth)));
+				span.setAttribute("data-weave-pdf-text-height", this.formatInkNumber(height / Math.max(1, cssHeight)));
 				span.style.left = `${this.formatPdfCssNumber(left)}px`;
 				span.style.top = `${this.formatPdfCssNumber(top)}px`;
 				span.style.width = `${this.formatPdfCssNumber(width)}px`;
 				span.style.height = `${this.formatPdfCssNumber(height)}px`;
 				span.style.fontSize = `${this.formatPdfCssNumber(fontSize * scaleY)}px`;
 				span.style.lineHeight = `${this.formatPdfCssNumber(height)}px`;
+				textIndex += 1;
 			}
+			this.bindTextLayer(layer, pageNumber);
 		} catch {
 			// Text extraction is best-effort; rendering the PDF page should not fail because of it.
 		}
@@ -1402,6 +1470,7 @@ export class PdfView extends ItemView {
 				beforeStrokes: clonePdfInkStrokes(this.inkStrokes),
 				moved: false,
 			};
+			this.beginSelectedInkDragPreview(pageNumber, layer);
 			return;
 		}
 
@@ -1448,6 +1517,7 @@ export class PdfView extends ItemView {
 		this.selectionRectEl = null;
 		this.activeInkPointerId = null;
 		if (!drag || drag.pageNumber !== pageNumber) {
+			this.releaseSelectedInkDragPreview(pageNumber);
 			return;
 		}
 
@@ -1478,6 +1548,7 @@ export class PdfView extends ItemView {
 			this.trimInkHistory();
 			this.redoInkStack = [];
 			this.annotationsDirty = true;
+			this.releaseSelectedInkDragPreview(pageNumber);
 			this.renderInkStrokesForPage(pageNumber);
 			this.updateToolbarState();
 			this.syncAsActivePdfDocument();
@@ -1523,6 +1594,466 @@ export class PdfView extends ItemView {
 		this.renderInkStrokesForPage(pageNumber);
 	}
 
+	private handleTextSelectionPointerDown(
+		event: PointerEvent,
+		pageNumber: number,
+		layer: HTMLElement
+	): void {
+		if (this.activeTool !== "select") {
+			return;
+		}
+		const point = this.eventToTextLayerPoint(event, layer);
+		if (!point) {
+			return;
+		}
+		const anchor = this.findTextSelectionAnchor(layer, point);
+		if (!anchor) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		document.getSelection()?.removeAllRanges();
+		this.clearPdfTextSelection();
+		this.contentEl.focus?.({ preventScroll: true });
+		this.activeTextSelectionPointerId = Number.isFinite(event.pointerId) ? event.pointerId : 1;
+		try {
+			layer.setPointerCapture?.(this.activeTextSelectionPointerId);
+		} catch {
+			// Pointer capture is optional in the embedded Obsidian webview.
+		}
+		this.textSelectionDrag = {
+			pageNumber,
+			anchor,
+			moved: false,
+		};
+	}
+
+	private handleTextSelectionPointerMove(
+		event: PointerEvent,
+		pageNumber: number,
+		layer: HTMLElement
+	): void {
+		if (
+			this.activeTextSelectionPointerId === null ||
+			event.pointerId !== this.activeTextSelectionPointerId ||
+			this.activeTool !== "select"
+		) {
+			return;
+		}
+		const drag = this.textSelectionDrag;
+		const point = this.eventToTextLayerPoint(event, layer);
+		if (!drag || drag.pageNumber !== pageNumber || !point) {
+			return;
+		}
+		const focus = this.findTextSelectionAnchor(layer, point);
+		if (!focus) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		drag.moved = drag.moved || this.hasMeaningfulTextAnchorMove(drag.anchor, focus);
+		this.updatePdfTextSelectionFromAnchors(pageNumber, layer, drag.anchor, focus);
+	}
+
+	private handleTextSelectionPointerUp(
+		event: PointerEvent,
+		pageNumber: number,
+		layer: HTMLElement
+	): void {
+		if (
+			this.activeTextSelectionPointerId === null ||
+			event.pointerId !== this.activeTextSelectionPointerId
+		) {
+			return;
+		}
+		const drag = this.textSelectionDrag;
+		const point = this.eventToTextLayerPoint(event, layer);
+		event.preventDefault();
+		event.stopPropagation();
+		this.releaseTextSelectionPointer(layer, event.pointerId);
+		this.activeTextSelectionPointerId = null;
+		this.textSelectionDrag = null;
+		if (!drag || drag.pageNumber !== pageNumber || !point) {
+			this.clearPdfTextSelection();
+			return;
+		}
+		const focus = this.findTextSelectionAnchor(layer, point);
+		if (!focus || (!drag.moved && !this.hasMeaningfulTextAnchorMove(drag.anchor, focus))) {
+			this.clearPdfTextSelection();
+			return;
+		}
+		this.updatePdfTextSelectionFromAnchors(pageNumber, layer, drag.anchor, focus);
+	}
+
+	private handleTextSelectionPointerCancel(
+		event: PointerEvent,
+		pageNumber: number,
+		layer: HTMLElement
+	): void {
+		if (
+			this.activeTextSelectionPointerId === null ||
+			event.pointerId !== this.activeTextSelectionPointerId
+		) {
+			return;
+		}
+		this.releaseTextSelectionPointer(layer, event.pointerId);
+		this.activeTextSelectionPointerId = null;
+		this.textSelectionDrag = null;
+		this.renderPdfTextSelectionForPage(pageNumber);
+	}
+
+	private eventToTextLayerPoint(event: PointerEvent, layer: HTMLElement): PdfInkPoint | null {
+		const rect = layer.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) {
+			return null;
+		}
+		return {
+			x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+			y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+			t: Number.isFinite(event.timeStamp) ? event.timeStamp : Date.now(),
+			pressure: Number.isFinite(event.pressure) ? event.pressure : undefined,
+		};
+	}
+
+	private findTextSelectionAnchor(
+		layer: HTMLElement,
+		point: PdfInkPoint
+	): PdfTextSelectionAnchor | null {
+		const fragments = this.readPdfTextFlowFragments(layer);
+		if (fragments.length === 0) {
+			return null;
+		}
+		const lines = this.groupPdfTextFragmentsByLine(fragments);
+		if (lines.length === 0) {
+			return null;
+		}
+		const line = this.findClosestPdfTextLine(lines, point.y);
+		if (!line || line.fragments.length === 0) {
+			return null;
+		}
+		const first = line.fragments[0];
+		const last = line.fragments[line.fragments.length - 1];
+		if (point.x <= first.rect.x) {
+			return { flowIndex: first.flowIndex, offset: 0 };
+		}
+		if (point.x >= last.rect.x + last.rect.width) {
+			return { flowIndex: last.flowIndex, offset: last.text.length };
+		}
+		for (let index = 0; index < line.fragments.length; index += 1) {
+			const fragment = line.fragments[index];
+			const right = fragment.rect.x + fragment.rect.width;
+			if (point.x >= fragment.rect.x && point.x <= right) {
+				return {
+					flowIndex: fragment.flowIndex,
+					offset: this.estimateTextOffset(fragment, point.x),
+				};
+			}
+			const next = line.fragments[index + 1];
+			if (next && point.x > right && point.x < next.rect.x) {
+				const gapMiddle = right + (next.rect.x - right) / 2;
+				return point.x < gapMiddle
+					? { flowIndex: fragment.flowIndex, offset: fragment.text.length }
+					: { flowIndex: next.flowIndex, offset: 0 };
+			}
+		}
+		return { flowIndex: last.flowIndex, offset: last.text.length };
+	}
+
+	private readPdfTextFlowFragments(layer: HTMLElement): PdfTextFlowFragment[] {
+		const rawFragments = Array.from(layer.querySelectorAll<HTMLElement>("[data-weave-pdf-text-fragment]"))
+			.map((element) => {
+				const text = element.textContent || "";
+				const x = Number(element.getAttribute("data-weave-pdf-text-x"));
+				const y = Number(element.getAttribute("data-weave-pdf-text-y"));
+				const width = Number(element.getAttribute("data-weave-pdf-text-width"));
+				const height = Number(element.getAttribute("data-weave-pdf-text-height"));
+				if (!text || ![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+					return null;
+				}
+				return {
+					text,
+					rect: { x, y, width, height },
+				};
+			})
+			.filter((fragment): fragment is { text: string; rect: PdfTextAnnotationRect } =>
+				Boolean(fragment)
+			);
+		return this.groupPdfTextFragmentsByLine(
+			rawFragments.map((fragment, index) => ({
+				...fragment,
+				flowIndex: index,
+				lineIndex: 0,
+			}))
+		)
+			.flatMap((line, lineIndex) =>
+				line.fragments.map((fragment) => ({
+					...fragment,
+					lineIndex,
+				}))
+			)
+			.map((fragment, flowIndex) => ({
+				...fragment,
+				flowIndex,
+			}));
+	}
+
+	private groupPdfTextFragmentsByLine(
+		fragments: PdfTextFlowFragment[]
+	): Array<{ centerY: number; height: number; top: number; bottom: number; fragments: PdfTextFlowFragment[] }> {
+		const lines: Array<{
+			centerY: number;
+			height: number;
+			top: number;
+			bottom: number;
+			fragments: PdfTextFlowFragment[];
+		}> = [];
+		for (const fragment of [...fragments].sort((a, b) => {
+			const yDelta = a.rect.y - b.rect.y;
+			if (Math.abs(yDelta) > Math.max(a.rect.height, b.rect.height, 0.008) * 0.75) {
+				return yDelta;
+			}
+			return a.rect.x - b.rect.x;
+		})) {
+			const centerY = fragment.rect.y + fragment.rect.height / 2;
+			let line = lines.find(
+				(candidate) =>
+					Math.abs(candidate.centerY - centerY) <=
+					Math.max(candidate.height, fragment.rect.height, 0.008) * 0.8
+			);
+			if (!line) {
+				line = {
+					centerY,
+					height: fragment.rect.height,
+					top: fragment.rect.y,
+					bottom: fragment.rect.y + fragment.rect.height,
+					fragments: [],
+				};
+				lines.push(line);
+			}
+			line.fragments.push(fragment);
+			line.top = Math.min(line.top, fragment.rect.y);
+			line.bottom = Math.max(line.bottom, fragment.rect.y + fragment.rect.height);
+			line.height = Math.max(line.height, fragment.rect.height);
+			line.centerY = line.top + (line.bottom - line.top) / 2;
+		}
+		lines.sort((a, b) => a.top - b.top);
+		for (const line of lines) {
+			line.fragments.sort((a, b) => a.rect.x - b.rect.x);
+		}
+		return lines;
+	}
+
+	private findClosestPdfTextLine(
+		lines: Array<{ centerY: number; height: number; top: number; bottom: number; fragments: PdfTextFlowFragment[] }>,
+		y: number
+	): { centerY: number; height: number; top: number; bottom: number; fragments: PdfTextFlowFragment[] } | null {
+		let closest = lines[0] ?? null;
+		let closestDistance = Number.POSITIVE_INFINITY;
+		for (const line of lines) {
+			const tolerance = Math.max(line.height, 0.008) * 0.8;
+			if (y >= line.top - tolerance && y <= line.bottom + tolerance) {
+				return line;
+			}
+			const distance = Math.abs(line.centerY - y);
+			if (distance < closestDistance) {
+				closestDistance = distance;
+				closest = line;
+			}
+		}
+		return closest;
+	}
+
+	private estimateTextOffset(fragment: PdfTextFlowFragment, x: number): number {
+		const ratio = Math.max(0, Math.min(1, (x - fragment.rect.x) / Math.max(0.0001, fragment.rect.width)));
+		return Math.max(0, Math.min(fragment.text.length, Math.round(fragment.text.length * ratio)));
+	}
+
+	private hasMeaningfulTextAnchorMove(
+		start: PdfTextSelectionAnchor,
+		end: PdfTextSelectionAnchor
+	): boolean {
+		return start.flowIndex !== end.flowIndex || Math.abs(start.offset - end.offset) > 0;
+	}
+
+	private updatePdfTextSelectionFromAnchors(
+		pageNumber: number,
+		layer: HTMLElement,
+		anchor: PdfTextSelectionAnchor,
+		focus: PdfTextSelectionAnchor
+	): void {
+		const selection = this.buildPdfTextSelection(layer, anchor, focus);
+		this.selectedPdfTextSelection = selection
+			? {
+					pageNumber,
+					text: selection.text,
+					rects: selection.rects,
+			  }
+			: null;
+		this.renderPdfTextSelectionForPage(pageNumber);
+	}
+
+	private buildPdfTextSelection(
+		layer: HTMLElement,
+		anchor: PdfTextSelectionAnchor,
+		focus: PdfTextSelectionAnchor
+	): { text: string; rects: PdfTextAnnotationRect[] } | null {
+		const fragments = this.readPdfTextFlowFragments(layer);
+		if (fragments.length === 0 || !this.hasMeaningfulTextAnchorMove(anchor, focus)) {
+			return null;
+		}
+		const [start, end] = this.compareTextSelectionAnchors(anchor, focus) <= 0
+			? [anchor, focus]
+			: [focus, anchor];
+		const segments: PdfTextSelectionSegment[] = [];
+		for (const fragment of fragments) {
+			if (fragment.flowIndex < start.flowIndex || fragment.flowIndex > end.flowIndex) {
+				continue;
+			}
+			const startOffset = fragment.flowIndex === start.flowIndex ? start.offset : 0;
+			const endOffset = fragment.flowIndex === end.flowIndex ? end.offset : fragment.text.length;
+			if (endOffset <= startOffset) {
+				continue;
+			}
+			const text = fragment.text.slice(startOffset, endOffset);
+			if (!text) {
+				continue;
+			}
+			segments.push({
+				text,
+				lineIndex: fragment.lineIndex,
+				rect: this.slicePdfTextFragmentRect(fragment, startOffset, endOffset),
+			});
+		}
+		if (segments.length === 0) {
+			return null;
+		}
+		const text = this.buildPdfTextSelectionText(segments);
+		return text.trim()
+			? {
+					text,
+					rects: segments.map((segment) => segment.rect),
+			  }
+			: null;
+	}
+
+	private compareTextSelectionAnchors(
+		left: PdfTextSelectionAnchor,
+		right: PdfTextSelectionAnchor
+	): number {
+		if (left.flowIndex !== right.flowIndex) {
+			return left.flowIndex - right.flowIndex;
+		}
+		return left.offset - right.offset;
+	}
+
+	private slicePdfTextFragmentRect(
+		fragment: PdfTextFlowFragment,
+		startOffset: number,
+		endOffset: number
+	): PdfTextAnnotationRect {
+		const textLength = Math.max(1, fragment.text.length);
+		const startRatio = Math.max(0, Math.min(1, startOffset / textLength));
+		const endRatio = Math.max(startRatio, Math.min(1, endOffset / textLength));
+		return {
+			x: fragment.rect.x + fragment.rect.width * startRatio,
+			y: fragment.rect.y,
+			width: Math.max(0.001, fragment.rect.width * (endRatio - startRatio)),
+			height: fragment.rect.height,
+		};
+	}
+
+	private buildPdfTextSelectionText(segments: PdfTextSelectionSegment[]): string {
+		const lines: Array<{ lineIndex: number; parts: string[] }> = [];
+		for (const segment of segments.sort((a, b) => {
+			if (a.lineIndex !== b.lineIndex) {
+				return a.lineIndex - b.lineIndex;
+			}
+			return a.rect.x - b.rect.x;
+		})) {
+			let line = lines.find((candidate) => candidate.lineIndex === segment.lineIndex);
+			if (!line) {
+				line = { lineIndex: segment.lineIndex, parts: [] };
+				lines.push(line);
+			}
+			line.parts.push(segment.text);
+		}
+		return lines
+			.map((line) => this.joinPdfTextFragments(line.parts))
+			.filter(Boolean)
+			.join("\n");
+	}
+
+	private joinPdfTextFragments(parts: string[]): string {
+		return parts.reduce((line, part) => {
+			if (!line) {
+				return part;
+			}
+			return this.shouldInsertPdfTextSpace(line, part) ? `${line} ${part}` : `${line}${part}`;
+		}, "");
+	}
+
+	private shouldInsertPdfTextSpace(left: string, right: string): boolean {
+		if (!left || !right || /\s$/.test(left) || /^\s/.test(right)) {
+			return false;
+		}
+		return /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right);
+	}
+
+	private renderPdfTextSelectionForPage(pageNumber: number): void {
+		const layer = this.textLayers.get(pageNumber);
+		if (!layer) {
+			return;
+		}
+		layer.querySelectorAll(".weave-pdf-text-selection-highlight").forEach((element) => element.remove());
+		const selection = this.selectedPdfTextSelection;
+		if (!selection || selection.pageNumber !== pageNumber) {
+			return;
+		}
+		for (const rect of selection.rects) {
+			const highlight = layer.createDiv({ cls: "weave-pdf-text-selection-highlight" });
+			highlight.style.left = `${this.formatPdfCssNumber(rect.x * 100)}%`;
+			highlight.style.top = `${this.formatPdfCssNumber(rect.y * 100)}%`;
+			highlight.style.width = `${this.formatPdfCssNumber(rect.width * 100)}%`;
+			highlight.style.height = `${this.formatPdfCssNumber(rect.height * 100)}%`;
+		}
+	}
+
+	private clearPdfTextSelection(): void {
+		document.getSelection()?.removeAllRanges();
+		this.selectedPdfTextSelection = null;
+		this.textSelectionDrag = null;
+		this.activeTextSelectionPointerId = null;
+		for (const pageNumber of this.textLayers.keys()) {
+			this.renderPdfTextSelectionForPage(pageNumber);
+		}
+	}
+
+	private async copyPdfTextSelection(): Promise<void> {
+		const selection = this.selectedPdfTextSelection;
+		if (!selection || !selection.text.trim()) {
+			new Notice("请先选择 PDF 文本");
+			return;
+		}
+		try {
+			if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+				await navigator.clipboard.writeText(selection.text);
+				new Notice("文本已复制");
+				return;
+			}
+		} catch {
+			// Fall through to the user-facing failure notice below.
+		}
+		new Notice("当前环境不支持复制文本");
+	}
+
+	private releaseTextSelectionPointer(layer: HTMLElement, pointerId: number): void {
+		try {
+			layer.releasePointerCapture?.(pointerId);
+		} catch {
+			// Pointer capture is optional in the embedded Obsidian webview.
+		}
+	}
+
 	private createInkSelectionRect(layer: SVGSVGElement, className: string): SVGRectElement {
 		const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
 		rect.classList.add(className);
@@ -1553,32 +2084,55 @@ export class PdfView extends ItemView {
 		this.renderAllInkStrokes();
 	}
 
+	private beginSelectedInkDragPreview(pageNumber: number, layer: SVGSVGElement): void {
+		this.releaseSelectedInkDragPreview(pageNumber);
+		const selectedElements = Array.from(layer.querySelectorAll<SVGElement>("[data-stroke-id]")).filter(
+			(element) => {
+				const strokeId = element.getAttribute("data-stroke-id");
+				return Boolean(strokeId && this.selectedInkStrokeIds.has(strokeId));
+			}
+		);
+		if (selectedElements.length === 0) {
+			return;
+		}
+		const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+		group.classList.add("weave-pdf-ink-drag-group");
+		group.setAttribute("data-weave-pdf-ink-drag-group", "true");
+		for (const element of selectedElements) {
+			group.appendChild(element);
+		}
+		layer.appendChild(group);
+		layer.classList.add("is-moving-ink");
+		this.selectedInkDragGroupEl = group;
+		this.selectedInkDragPageNumber = pageNumber;
+	}
+
+	private releaseSelectedInkDragPreview(pageNumber: number): void {
+		if (this.selectedInkDragPageNumber !== pageNumber && !this.selectedInkDragGroupEl) {
+			return;
+		}
+		const activePageNumber = this.selectedInkDragPageNumber ?? pageNumber;
+		this.annotationLayers.get(activePageNumber)?.classList.remove("is-moving-ink");
+		this.selectedInkDragGroupEl = null;
+		this.selectedInkDragPageNumber = null;
+	}
+
 	private applySelectedInkDragTransform(pageNumber: number, dx: number, dy: number): void {
-		const layer = this.annotationLayers.get(pageNumber);
-		if (!layer) {
+		if (!this.selectedInkDragGroupEl || this.selectedInkDragPageNumber !== pageNumber) {
 			return;
 		}
 		const transform = `translate(${this.formatInkNumber(dx)} ${this.formatInkNumber(dy)})`;
-		for (const element of Array.from(layer.querySelectorAll<SVGElement>("[data-stroke-id]"))) {
-			const strokeId = element.getAttribute("data-stroke-id");
-			if (!strokeId || !this.selectedInkStrokeIds.has(strokeId)) {
-				continue;
-			}
-			element.setAttribute("transform", transform);
-		}
+		this.selectedInkDragGroupEl.setAttribute("transform", transform);
 	}
 
 	private clearSelectedInkDragTransform(pageNumber: number): void {
 		const layer = this.annotationLayers.get(pageNumber);
-		if (!layer) {
-			return;
+		if (layer) {
+			layer.classList.remove("is-moving-ink");
 		}
-		for (const element of Array.from(layer.querySelectorAll<SVGElement>("[data-stroke-id]"))) {
-			const strokeId = element.getAttribute("data-stroke-id");
-			if (strokeId && this.selectedInkStrokeIds.has(strokeId)) {
-				element.removeAttribute("transform");
-			}
-		}
+		this.selectedInkDragGroupEl = null;
+		this.selectedInkDragPageNumber = null;
+		this.renderInkStrokesForPage(pageNumber);
 	}
 
 	private clearCapturePreview(): void {
@@ -1636,6 +2190,24 @@ export class PdfView extends ItemView {
 	}
 
 	private createTextHighlightFromSelection(): void {
+		if (this.selectedPdfTextSelection?.text.trim()) {
+			const selection = this.selectedPdfTextSelection;
+			this.textAnnotations.push({
+				id: this.createInkId(),
+				pageNumber: selection.pageNumber,
+				color: this.highlighterColor,
+				text: selection.text,
+				rects: selection.rects,
+				createdAt: Date.now(),
+			});
+			this.clearPdfTextSelection();
+			this.annotationsDirty = true;
+			this.renderTextAnnotationsForPage(selection.pageNumber);
+			this.updateToolbarState();
+			this.syncAsActivePdfDocument();
+			void this.persistPdfAnnotations();
+			return;
+		}
 		const selection = document.getSelection();
 		if (!selection || selection.isCollapsed || selection.rangeCount <= 0) {
 			new Notice("请先选择 PDF 文本");
@@ -1798,6 +2370,7 @@ export class PdfView extends ItemView {
 			this.closeMoreToolsPanel();
 			this.clearInkSelection();
 			this.clearCaptureSelection();
+			this.clearPdfTextSelection();
 			this.finishActiveInkInput();
 			return;
 		}
@@ -1810,6 +2383,11 @@ export class PdfView extends ItemView {
 			return;
 		}
 		const key = event.key.toLowerCase();
+		if (key === "c" && this.selectedPdfTextSelection?.text.trim()) {
+			event.preventDefault();
+			void this.copyPdfTextSelection();
+			return;
+		}
 		if (key === "c" && this.selectedInkStrokeIds.size > 0) {
 			event.preventDefault();
 			this.copySelectedInkStrokes();
@@ -1935,6 +2513,7 @@ export class PdfView extends ItemView {
 		if (!layer) {
 			return;
 		}
+		this.releaseSelectedInkDragPreview(pageNumber);
 		layer.replaceChildren(
 			...this.inkStrokes
 				.filter((stroke) => stroke.pageNumber === pageNumber)
