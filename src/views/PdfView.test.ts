@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App, TFile, WorkspaceLeaf, loadPdfJs } from "obsidian";
 import { epubActiveDocumentStore } from "../stores/epub-active-document-store";
@@ -137,6 +138,7 @@ describe("PdfView custom PDF reader", () => {
 			beginPath: vi.fn(),
 			moveTo: vi.fn(),
 			lineTo: vi.fn(),
+			quadraticCurveTo: vi.fn(),
 			arc: vi.fn(),
 			stroke: vi.fn(),
 			fillStyle: "",
@@ -224,6 +226,119 @@ describe("PdfView custom PDF reader", () => {
 		view.contentEl
 			.querySelector<HTMLButtonElement>(`[data-weave-pdf-ink-mode="${mode}"]`)
 			?.click();
+	}
+
+	function createSingleTextPdf(text = "Hello") {
+		const textPage = {
+			getViewport: vi.fn(({ scale }: { scale: number }) => ({
+				width: 200 * scale,
+				height: 280 * scale,
+			})),
+			render: vi.fn(() => ({ promise: Promise.resolve() })),
+			getTextContent: vi.fn(async () => ({
+				items: [
+					{
+						str: text,
+						transform: [10, 0, 0, 10, 20, 240],
+						width: 32,
+						height: 10,
+						fontName: "f1",
+						dir: "ltr",
+					},
+				],
+				styles: { f1: { ascent: 0.8 } },
+			})),
+		};
+		return {
+			numPages: 1,
+			getPage: vi.fn(async () => textPage),
+			destroy: vi.fn(),
+		};
+	}
+
+	function applyPdfSemanticPluginSettings(
+		app: App,
+		overrides: Record<string, unknown> = {}
+	) {
+		const settings = {
+			readerUiMode: "expert",
+			expertModeEnabled: true,
+			annotationSemanticsEnabled: true,
+			semanticSchemeId: "test",
+			expertSemanticLimit: 3,
+			standardSemanticIds: ["definition", "quote", "theme"],
+			annotationSemantics: [
+				{
+					id: "definition",
+					label: "定义",
+					color: "blue",
+					style: "underline",
+					group: "study",
+					description: "",
+					active: true,
+				},
+				{
+					id: "quote",
+					label: "引用",
+					color: "teal",
+					style: "highlight",
+					group: "study",
+					description: "",
+					active: true,
+				},
+				{
+					id: "question",
+					label: "疑问",
+					color: "purple",
+					style: "wavy",
+					group: "study",
+					description: "",
+					active: true,
+				},
+				{
+					id: "mask",
+					label: "马赛克",
+					color: "orange",
+					style: "strikethrough",
+					group: "study",
+					description: "",
+					active: true,
+				},
+			],
+			...overrides,
+		};
+		(app as any).plugins = {
+			getPlugin: vi.fn((pluginId: string) =>
+				pluginId === "weave-reader" ? { settings } : null
+			),
+		};
+		return settings;
+	}
+
+	async function selectSinglePdfText(view: PdfView) {
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="select"]')?.click();
+		const textLayer = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-layer");
+		expect(textLayer).toBeTruthy();
+		textLayer!.getBoundingClientRect = vi.fn(() => ({
+			top: 0,
+			bottom: 280,
+			height: 280,
+			left: 0,
+			right: 200,
+			width: 200,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect));
+		dispatchPointerEvent(textLayer!, "pointerdown", { clientX: 20, clientY: 30, pointerType: "mouse" });
+		dispatchPointerEvent(textLayer!, "pointermove", { clientX: 52, clientY: 35, pointerType: "mouse" });
+		dispatchPointerEvent(textLayer!, "pointerup", {
+			clientX: 52,
+			clientY: 35,
+			buttons: 0,
+			pointerType: "mouse",
+		});
+		return textLayer!;
 	}
 
 	it("renders pages and thumbnails with Obsidian pdf.js instead of an iframe", async () => {
@@ -1251,7 +1366,7 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
-	it("uses Chinese labels for PDF tool button tooltips", async () => {
+	it("uses Chinese aria labels without native PDF tool button titles", async () => {
 		const restoreCanvas = installCanvasMock();
 		const { pdf } = createMockPdfDocument(1);
 		vi.mocked(loadPdfJs).mockResolvedValue({
@@ -1269,11 +1384,21 @@ describe("PdfView custom PDF reader", () => {
 			view.contentEl
 				.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="stroke-select"]')
 				?.getAttribute("title")
+		).toBeNull();
+		expect(
+			view.contentEl
+				.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="stroke-select"]')
+				?.getAttribute("aria-label")
 		).toBe("选择笔迹");
 		expect(
 			view.contentEl
 				.querySelector<HTMLButtonElement>('[data-weave-pdf-action="ink-tools"]')
 				?.getAttribute("title")
+		).toBeNull();
+		expect(
+			view.contentEl
+				.querySelector<HTMLButtonElement>('[data-weave-pdf-action="ink-tools"]')
+				?.getAttribute("aria-label")
 		).toBe("画笔工具");
 		restoreCanvas();
 	});
@@ -1368,7 +1493,8 @@ describe("PdfView custom PDF reader", () => {
 		vi.mocked(loadPdfJs).mockResolvedValue({
 			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
 		} as any);
-		const { view } = createPdfView();
+		const { app, view } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
 
 		await view.onOpen();
 		await Promise.resolve();
@@ -1399,6 +1525,57 @@ describe("PdfView custom PDF reader", () => {
 		});
 
 		expect(textLayer!.querySelectorAll(".weave-pdf-text-selection-highlight").length).toBeGreaterThan(0);
+		const actionBar = view.contentEl.querySelector(".weave-pdf-text-action-bar");
+		expect(actionBar).toBeTruthy();
+		expect(actionBar).toHaveClass("epub-selection-toolbar", "visible");
+		expect(actionBar?.hasAttribute("aria-label")).toBe(false);
+		expect(actionBar?.querySelector(".selection-main-row")).toBeTruthy();
+		expect(actionBar?.querySelector(".selection-actions-shell")).toBeTruthy();
+		expect(actionBar?.querySelector(".weave-epub-expert-semantic-row")).toBeTruthy();
+		expect(actionBar?.querySelector(".selection-actions-row")).toBeTruthy();
+		expect(actionBar?.querySelector(".toolbar-arrow")).toBeTruthy();
+		expect(
+			actionBar?.querySelector(".weave-epub-expert-semantic-row")?.hasAttribute("aria-label")
+		).toBe(false);
+		const semanticButtons = Array.from(
+			actionBar!.querySelectorAll<HTMLElement>('[data-weave-pdf-action="semantic-text-selection"]')
+		);
+		expect(semanticButtons.map((button) => button.getAttribute("data-semantic-id"))).toEqual([
+			"definition",
+			"quote",
+			"question",
+			"other",
+		]);
+		expect(semanticButtons.map((button) => button.getAttribute("data-semantic-style"))).toEqual([
+			"underline",
+			"highlight",
+			"wavy",
+			"wavy",
+		]);
+		expect(semanticButtons.map((button) => button.style.getPropertyValue("--weave-semantic-color"))).toEqual([
+			"#0EA5E9",
+			"#14B8A6",
+			"#8B5CF6",
+			"#111827",
+		]);
+		for (const button of semanticButtons) {
+			expect(button).toHaveClass("action-item", "weave-epub-semantic-chip");
+			expect(button.hasAttribute("title")).toBe(false);
+			expect(button.getAttribute("aria-label")).toBeTruthy();
+			expect(button.querySelector(".action-icon.weave-epub-semantic-dot")).toBeTruthy();
+			expect(button.querySelector(".action-label.weave-epub-semantic-label")).toBeTruthy();
+		}
+		const noteAction = actionBar!.querySelector<HTMLElement>('[data-weave-pdf-action="note-text-selection"]');
+		const cancelAction = actionBar!.querySelector<HTMLElement>('[data-weave-pdf-action="cancel-text-selection"]');
+		expect(noteAction).toHaveTextContent("想法");
+		expect(noteAction?.hasAttribute("title")).toBe(false);
+		expect(noteAction?.getAttribute("aria-label")).toBe("想法");
+		expect(cancelAction).toHaveTextContent("取消");
+		expect(cancelAction?.hasAttribute("title")).toBe(false);
+		expect(cancelAction?.getAttribute("aria-label")).toBe("取消");
+		expect(
+			view.contentEl.querySelector('[data-weave-pdf-action="copy-text-selection"]')
+		).toBeNull();
 		view.contentEl.dispatchEvent(
 			new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true })
 		);
@@ -1414,88 +1591,48 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
-	it("creates and saves a PDF text highlight from the current text selection", async () => {
+	it("uses the EPUB dark floating panel colors for the PDF semantic text toolbar", () => {
+		const css = readFileSync("src/styles/pdf/pdf-reader.css", "utf8");
+		const source = readFileSync("src/views/PdfView.ts", "utf8");
+		expect(css).toContain(
+			".weave-pdf-text-action-bar.epub-selection-toolbar .selection-actions-shell"
+		);
+		expect(css).toContain("background: rgba(15, 23, 42, 0.92);");
+		expect(css).toContain("border: 1px solid rgba(255, 255, 255, 0.06);");
+		expect(css).toContain("border-top: 6px solid rgba(15, 23, 42, 0.92);");
+		expect(css).toContain("border-bottom: 6px solid rgba(15, 23, 42, 0.92);");
+		expect(css).toContain(
+			".weave-pdf-text-action-bar.epub-selection-toolbar .weave-pdf-text-action-button.action-item"
+		);
+		expect(css).toContain("color: rgba(248, 250, 252, 0.86);");
+		expect(css).toContain("color: rgba(255, 255, 255, 0.98);");
+		expect(source).not.toContain('"aria-label": "语义标注"');
+		expect(source).not.toContain('"aria-label": "文本标注操作"');
+	});
+
+	it("creates and saves a PDF text highlight from the floating text menu", async () => {
 		const restoreCanvas = installCanvasMock();
-		const textPage = {
-			getViewport: vi.fn(({ scale }: { scale: number }) => ({
-				width: 200 * scale,
-				height: 280 * scale,
-			})),
-			render: vi.fn(() => ({ promise: Promise.resolve() })),
-			getTextContent: vi.fn(async () => ({
-				items: [
-					{
-						str: "Hello",
-						transform: [10, 0, 0, 10, 20, 240],
-						width: 32,
-						height: 10,
-						fontName: "f1",
-						dir: "ltr",
-					},
-				],
-				styles: { f1: { ascent: 0.8 } },
-			})),
-		};
-		const pdf = {
-			numPages: 1,
-			getPage: vi.fn(async () => textPage),
-			destroy: vi.fn(),
-		};
+		const pdf = createSingleTextPdf();
 		vi.mocked(loadPdfJs).mockResolvedValue({
 			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
 		} as any);
-		const { view, adapter } = createPdfView();
+		const { app, view, adapter } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
 
 		await view.onOpen();
 		await Promise.resolve();
 		await Promise.resolve();
-		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="select"]')?.click();
-
-		const textLayer = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-layer");
-		const span = textLayer?.querySelector("span");
-		expect(textLayer).toBeTruthy();
-		expect(span).toBeTruthy();
-		textLayer!.getBoundingClientRect = vi.fn(() => ({
-			top: 0,
-			bottom: 280,
-			height: 280,
-			left: 0,
-			right: 200,
-			width: 200,
-			x: 0,
-			y: 0,
-			toJSON: () => ({}),
-		} as DOMRect));
-		const removeAllRanges = vi.fn();
-		vi.spyOn(document, "getSelection").mockReturnValue({
-			isCollapsed: false,
-			rangeCount: 1,
-			toString: () => "Hello",
-			removeAllRanges,
-			getRangeAt: () => ({
-				commonAncestorContainer: span!.firstChild ?? span!,
-				getClientRects: () => [
-					{
-						top: 24,
-						bottom: 40,
-						height: 16,
-						left: 20,
-						right: 80,
-						width: 60,
-						x: 20,
-						y: 24,
-						toJSON: () => ({}),
-					},
-				],
-			}),
-		} as any);
+		await selectSinglePdfText(view);
 
 		view.contentEl
-			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="highlight-text"]')
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
 			?.click();
 
 		expect(view.contentEl.querySelector(".weave-pdf-text-annotation")).toBeTruthy();
-		expect(removeAllRanges).toHaveBeenCalled();
+		expect(
+			view.contentEl.querySelector(".weave-pdf-text-annotation")?.getAttribute("data-semantic-id")
+		).toBe("quote");
+		expect(view.contentEl.querySelector(".weave-pdf-text-action-bar")).toBeNull();
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
@@ -1504,8 +1641,134 @@ describe("PdfView custom PDF reader", () => {
 		expect(payload.textAnnotations).toHaveLength(1);
 		expect(payload.textAnnotations[0]).toMatchObject({
 			pageNumber: 1,
-			color: "#ffd54a",
+			color: "#14B8A6",
 			text: "Hello",
+			kind: "highlight",
+			semanticId: "quote",
+			semanticLabel: "引用",
+			semanticStyle: "highlight",
+		});
+		restoreCanvas();
+	});
+
+	it("creates and saves a PDF text underline from the floating text menu", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="definition"]')
+			?.click();
+
+		expect(view.contentEl.querySelector(".weave-pdf-text-annotation--underline")).toBeTruthy();
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
+		const payload = JSON.parse(String(writtenJson || "{}"));
+		expect(payload.textAnnotations[0]).toMatchObject({
+			pageNumber: 1,
+			text: "Hello",
+			kind: "underline",
+			color: "#0EA5E9",
+			semanticId: "definition",
+			semanticLabel: "定义",
+			semanticStyle: "underline",
+		});
+		restoreCanvas();
+	});
+
+	it("creates and saves PDF text semantic wavy and strikethrough marks", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		applyPdfSemanticPluginSettings(app, { expertSemanticLimit: "all" });
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="question"]')
+			?.click();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="mask"]')
+			?.click();
+
+		expect(view.contentEl.querySelector(".weave-pdf-text-annotation--wavy")).toBeTruthy();
+		expect(view.contentEl.querySelector(".weave-pdf-text-annotation--strikethrough")).toBeTruthy();
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
+		const payload = JSON.parse(String(writtenJson || "{}"));
+		expect(payload.textAnnotations.map((annotation: any) => annotation.kind)).toEqual([
+			"wavy",
+			"strikethrough",
+		]);
+		expect(payload.textAnnotations[0]).toMatchObject({
+			color: "#8B5CF6",
+			semanticId: "question",
+			semanticLabel: "疑问",
+			semanticStyle: "wavy",
+		});
+		expect(payload.textAnnotations[1]).toMatchObject({
+			color: "#F97316",
+			semanticId: "mask",
+			semanticLabel: "马赛克",
+			semanticStyle: "strikethrough",
+		});
+		restoreCanvas();
+	});
+
+	it("creates and saves a PDF text note from the floating text menu", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="note-text-selection"]')
+			?.click();
+		const noteInput = view.contentEl.querySelector<HTMLTextAreaElement>(".weave-pdf-text-note-input");
+		expect(noteInput).toBeTruthy();
+		noteInput!.value = "需要回看";
+		noteInput!.dispatchEvent(new Event("input", { bubbles: true }));
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="save-text-note"]')
+			?.click();
+
+		expect(view.contentEl.querySelector(".weave-pdf-text-annotation--note")).toBeTruthy();
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
+		const payload = JSON.parse(String(writtenJson || "{}"));
+		expect(payload.textAnnotations[0]).toMatchObject({
+			pageNumber: 1,
+			text: "Hello",
+			kind: "note",
+			note: "需要回看",
 		});
 		restoreCanvas();
 	});

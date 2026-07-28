@@ -32,11 +32,19 @@ export interface PdfTextAnnotationRect {
 	height: number;
 }
 
+export type PdfTextAnnotationKind = "highlight" | "underline" | "wavy" | "strikethrough" | "note";
+
 export interface PdfTextAnnotation {
 	id: string;
 	pageNumber: number;
+	kind: PdfTextAnnotationKind;
 	color: string;
 	text: string;
+	note?: string;
+	semanticId?: string;
+	semanticLabel?: string;
+	semanticColor?: string;
+	semanticStyle?: string;
 	rects: PdfTextAnnotationRect[];
 	createdAt: number;
 }
@@ -190,11 +198,28 @@ function normalizeTextAnnotation(value: unknown, pageCount: number): PdfTextAnno
 			1,
 			Math.min(Math.max(1, Math.floor(Number(pageCount) || 1)), Math.floor(Number(record.pageNumber) || 1))
 		),
+		kind: normalizeTextAnnotationKind(record.kind),
 		color: normalizeColor(record.color, "#ffd54a"),
 		text: typeof record.text === "string" ? record.text : "",
+		note: typeof record.note === "string" ? record.note : undefined,
+		semanticId: normalizeOptionalText(record.semanticId),
+		semanticLabel: normalizeOptionalText(record.semanticLabel),
+		semanticColor: normalizeOptionalText(record.semanticColor),
+		semanticStyle: normalizeOptionalText(record.semanticStyle),
 		rects,
 		createdAt: normalizeTimestamp(record.createdAt),
 	};
+}
+
+function normalizeTextAnnotationKind(value: unknown): PdfTextAnnotationKind {
+	return value === "underline" || value === "wavy" || value === "strikethrough" || value === "note"
+		? value
+		: "highlight";
+}
+
+function normalizeOptionalText(value: unknown): string | undefined {
+	const text = typeof value === "string" ? value.trim() : "";
+	return text ? text : undefined;
 }
 
 function normalizeTextRect(value: unknown): PdfTextAnnotationRect | null {
