@@ -428,6 +428,16 @@
 	mix-blend-mode: multiply;
 }
 
+.weave-pdf-text-annotation-focus {
+	position: absolute;
+	z-index: 5;
+	border: 2px solid var(--interactive-accent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+	box-shadow: 0 0 0 4px color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+	pointer-events: none;
+}
+
 .weave-pdf-text-layer span {
 	position: absolute;
 	display: block;

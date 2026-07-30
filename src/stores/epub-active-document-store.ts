@@ -37,6 +37,19 @@ export interface PdfPageThumbnail {
 	image: string;
 }
 
+export interface PdfSharedAnnotation {
+	id: string;
+	pageNumber: number;
+	kind: "highlight" | "underline" | "wavy" | "strikethrough" | "note";
+	color: string;
+	text: string;
+	note?: string;
+	semanticId?: string;
+	semanticLabel?: string;
+	semanticStyle?: string;
+	createdAt?: number;
+}
+
 export interface PdfSharedState {
 	filePath: string;
 	title: string;
@@ -47,8 +60,11 @@ export interface PdfSharedState {
 	visitedPageCount?: number;
 	activeTool?: "pan" | "select" | "stroke-select" | "capture" | "pen" | "highlighter" | "eraser";
 	inkStrokeCount?: number;
+	annotationCount?: number;
 	thumbnails?: PdfPageThumbnail[];
+	annotations?: PdfSharedAnnotation[];
 	onNavigatePage?: ((pageNumber: number) => void) | null;
+	onNavigateAnnotation?: ((annotationId: string) => void) | null;
 }
 
 export interface EpubSharedState {
@@ -195,6 +211,14 @@ class EpubActiveDocumentStore {
 		if (Number.isFinite(input.inkStrokeCount)) {
 			pdf.inkStrokeCount = Math.max(0, Math.floor(Number(input.inkStrokeCount)));
 		}
+		if (Array.isArray(input.annotations)) {
+			pdf.annotations = input.annotations
+				.map(normalizePdfSharedAnnotation)
+				.filter((annotation): annotation is PdfSharedAnnotation => Boolean(annotation));
+			pdf.annotationCount = pdf.annotations.length;
+		} else if (Number.isFinite(input.annotationCount)) {
+			pdf.annotationCount = Math.max(0, Math.floor(Number(input.annotationCount)));
+		}
 		if (Array.isArray(input.thumbnails)) {
 			pdf.thumbnails = input.thumbnails
 				.filter((thumbnail) => thumbnail?.pageNumber && thumbnail?.image)
@@ -205,6 +229,9 @@ class EpubActiveDocumentStore {
 		}
 		if (typeof input.onNavigatePage === "function") {
 			pdf.onNavigatePage = input.onNavigatePage;
+		}
+		if (typeof input.onNavigateAnnotation === "function") {
+			pdf.onNavigateAnnotation = input.onNavigateAnnotation;
 		}
 
 		this.state = {
@@ -259,6 +286,56 @@ class EpubActiveDocumentStore {
 			callback(this.state);
 		}
 	}
+}
+
+function normalizePdfSharedAnnotation(value: unknown): PdfSharedAnnotation | null {
+	if (!value || typeof value !== "object") {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const id = String(record.id || "").trim();
+	if (!id) {
+		return null;
+	}
+	const kind =
+		record.kind === "underline" ||
+		record.kind === "wavy" ||
+		record.kind === "strikethrough" ||
+		record.kind === "note"
+			? record.kind
+			: "highlight";
+	const annotation: PdfSharedAnnotation = {
+		id,
+		pageNumber: Math.max(1, Math.floor(Number(record.pageNumber) || 1)),
+		kind,
+		color: normalizePdfSharedText(record.color) || "#ffd54a",
+		text: normalizePdfSharedText(record.text),
+	};
+	const note = normalizePdfSharedText(record.note);
+	if (note) {
+		annotation.note = note;
+	}
+	const semanticId = normalizePdfSharedText(record.semanticId);
+	if (semanticId) {
+		annotation.semanticId = semanticId;
+	}
+	const semanticLabel = normalizePdfSharedText(record.semanticLabel);
+	if (semanticLabel) {
+		annotation.semanticLabel = semanticLabel;
+	}
+	const semanticStyle = normalizePdfSharedText(record.semanticStyle);
+	if (semanticStyle) {
+		annotation.semanticStyle = semanticStyle;
+	}
+	const createdAt = Number(record.createdAt);
+	if (Number.isFinite(createdAt)) {
+		annotation.createdAt = createdAt;
+	}
+	return annotation;
+}
+
+function normalizePdfSharedText(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
 }
 
 export const epubActiveDocumentStore = new EpubActiveDocumentStore();

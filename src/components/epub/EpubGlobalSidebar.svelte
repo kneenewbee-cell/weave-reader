@@ -1,22 +1,22 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
- 	import { Notice, setIcon } from 'obsidian';
+	import { Notice, setIcon } from 'obsidian';
 	import { tr } from '../../utils/i18n';
 	import type { App } from 'obsidian';
- 	import { logger } from '../../utils/logger';
+	import { logger } from '../../utils/logger';
 	import { findOpenEpubLeaf } from '../../utils/epub-leaf-utils';
 	import { EPUB_RUNTIME, type EpubBook, type TocItem } from '../../services/epub';
 	import type { EpubTocChapterMark } from '../../services/epub/epub-toc-chapter-mark';
 	import type { FlatTocExportItem } from '../../services/epub/epub-toc-export-scope';
 	import { EpubBookmarkService, type EpubBookmarkRecord } from '../../services/epub/EpubBookmarkService';
-  	import { epubActiveDocumentStore } from '../../stores/epub-active-document-store';
-  	import type { EpubNavigationRequest, EpubSharedState } from '../../stores/epub-active-document-store';
+	import { epubActiveDocumentStore } from '../../stores/epub-active-document-store';
+	import type { EpubNavigationRequest, EpubSharedState, PdfSharedAnnotation } from '../../stores/epub-active-document-store';
 	import EpubSearchInput from './EpubSearchInput.svelte';
-  	import TableOfContents from './TableOfContents.svelte';
+	import TableOfContents from './TableOfContents.svelte';
 	import { resolveLastReadTocHref, resolveActiveTocHref } from '../../utils/epub-toc-reading-position';
 	import EpubBookmarksPanel from './EpubBookmarksPanel.svelte';
-  	import NotesPanel from './NotesPanel.svelte';
-  	import BookshelfView from './BookshelfView.svelte';
+	import NotesPanel from './NotesPanel.svelte';
+	import BookshelfView from './BookshelfView.svelte';
 	import EpubLoadingState from './EpubLoadingState.svelte';
 
 	interface Props {
@@ -32,6 +32,7 @@
 
 	let sharedState = $state<EpubSharedState | null>(null);
 	let activeTab = $state<'toc' | 'bookmarks' | 'highlights'>('toc');
+	let pdfActiveTab = $state<'pages' | 'annotations'>('pages');
   	let sidebarView = $state<'details' | 'bookshelf'>('details');
   	let tocItems = $state<TocItem[]>([]);
   	let bookshelfRefreshToken = $state(0);
@@ -81,6 +82,8 @@
 	let sidebarProgressPercent = $derived(Math.max(0, Math.min(100, Math.round(sharedState?.progress ?? 0))));
 	let pdfProgressPercent = $derived(Math.max(0, Math.min(100, Math.round(activePdf?.progress ?? 0))));
 	let pdfCoverImage = $derived(activePdf?.thumbnails?.[0]?.image ?? '');
+	let pdfAnnotations = $derived(activePdf?.annotations ?? []);
+	let pdfAnnotationCount = $derived(activePdf?.annotationCount ?? pdfAnnotations.length);
 	let pdfProgressSegments = $derived(
 		Array.from({ length: SIDEBAR_PROGRESS_SEGMENT_COUNT }, (_, index) => ({
 			index,
@@ -405,6 +408,36 @@
 
 	function handlePdfPageNavigate(pageNumber: number) {
 		activePdf?.onNavigatePage?.(pageNumber);
+	}
+
+	function handlePdfAnnotationNavigate(annotationId: string) {
+		activePdf?.onNavigateAnnotation?.(annotationId);
+	}
+
+	function getPdfAnnotationKindLabel(annotation: PdfSharedAnnotation) {
+		if (annotation.semanticLabel) {
+			return annotation.semanticLabel;
+		}
+		switch (annotation.kind) {
+			case 'underline':
+				return '下划线';
+			case 'wavy':
+				return '波浪线';
+			case 'strikethrough':
+				return '删除线';
+			case 'note':
+				return '想法';
+			default:
+				return '高亮';
+		}
+	}
+
+	function getPdfAnnotationPreview(annotation: PdfSharedAnnotation) {
+		const note = String(annotation.note || '').trim();
+		if (annotation.kind === 'note' && note) {
+			return note;
+		}
+		return String(annotation.text || note || '').trim() || '无文本内容';
 	}
 
 	async function loadHighlightCount(
@@ -850,16 +883,29 @@
 				</div>
 			</div>
 			<div class="epub-global-sidebar-tabs pdf-sidebar-tabs">
-				<button class="epub-global-tab active" type="button">
+				<button
+					class="epub-global-tab"
+					class:active={pdfActiveTab === 'pages'}
+					type="button"
+					onclick={() => pdfActiveTab = 'pages'}
+				>
 					<span class="tab-icon" use:icon={'layers'}></span>
 					<span class="tab-label">页面</span>
 					{#if activePdf.pageCount}
 						<span class="tab-count">{activePdf.pageCount}</span>
 					{/if}
 				</button>
-				<button class="epub-global-tab pdf-disabled-tab" type="button" disabled>
+				<button
+					class="epub-global-tab"
+					class:active={pdfActiveTab === 'annotations'}
+					type="button"
+					onclick={() => pdfActiveTab = 'annotations'}
+				>
 					<span class="tab-icon" use:icon={'highlighter'}></span>
 					<span class="tab-label">标注</span>
+					{#if pdfAnnotationCount}
+						<span class="tab-count">{pdfAnnotationCount}</span>
+					{/if}
 				</button>
 				<button class="epub-global-tab pdf-disabled-tab" type="button" disabled>
 					<span class="tab-icon" use:icon={'bookmark'}></span>
@@ -867,24 +913,60 @@
 				</button>
 			</div>
 			<div class="epub-sidebar-content epub-global-sidebar-pdf-content" aria-label="PDF">
-				{#if activePdf.thumbnails?.length}
-					<div class="pdf-page-list" role="list" aria-label="PDF pages">
-						{#each activePdf.thumbnails as thumbnail (thumbnail.pageNumber)}
-							<button
-								class="pdf-page-item"
-								class:active={thumbnail.pageNumber === activePdf.currentPage}
-								type="button"
-								onclick={() => handlePdfPageNavigate(thumbnail.pageNumber)}
-							>
-								<img src={thumbnail.image} alt={`PDF page ${thumbnail.pageNumber}`} class="pdf-page-thumb" />
-								<span class="pdf-page-number">{thumbnail.pageNumber}</span>
-							</button>
-						{/each}
-					</div>
+				{#if pdfActiveTab === 'annotations'}
+					{#if pdfAnnotations.length}
+						<div class="pdf-annotation-list" role="list" aria-label="PDF annotations">
+							{#each pdfAnnotations as annotation (annotation.id)}
+								<button
+									class="pdf-annotation-item"
+									type="button"
+									onclick={() => handlePdfAnnotationNavigate(annotation.id)}
+								>
+									<span
+										class="pdf-annotation-color"
+										style={`--pdf-annotation-color: ${annotation.color};`}
+										aria-hidden="true"
+									></span>
+									<span class="pdf-annotation-main">
+										<span class="pdf-annotation-meta">
+											<span>{getPdfAnnotationKindLabel(annotation)}</span>
+											<span> · </span>
+											<span>第 {annotation.pageNumber} 页</span>
+										</span>
+										<span class="pdf-annotation-text">{getPdfAnnotationPreview(annotation)}</span>
+										{#if annotation.note && annotation.kind !== 'note'}
+											<span class="pdf-annotation-note">{annotation.note}</span>
+										{/if}
+									</span>
+								</button>
+							{/each}
+						</div>
+					{:else}
+						<div class="pdf-page-list-empty pdf-annotation-list-empty">
+							<span use:icon={'highlighter'}></span>
+							<span>暂无 PDF 标注</span>
+						</div>
+					{/if}
 				{:else}
-					<div class="pdf-page-list-empty">
-						<span use:icon={'file-text'}></span>
-					</div>
+					{#if activePdf.thumbnails?.length}
+						<div class="pdf-page-list" role="list" aria-label="PDF pages">
+							{#each activePdf.thumbnails as thumbnail (thumbnail.pageNumber)}
+								<button
+									class="pdf-page-item"
+									class:active={thumbnail.pageNumber === activePdf.currentPage}
+									type="button"
+									onclick={() => handlePdfPageNavigate(thumbnail.pageNumber)}
+								>
+									<img src={thumbnail.image} alt={`PDF page ${thumbnail.pageNumber}`} class="pdf-page-thumb" />
+									<span class="pdf-page-number">{thumbnail.pageNumber}</span>
+								</button>
+							{/each}
+						</div>
+					{:else}
+						<div class="pdf-page-list-empty">
+							<span use:icon={'file-text'}></span>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
@@ -1272,6 +1354,91 @@
 	.pdf-page-list-empty :global(.svg-icon) {
 		width: 24px;
 		height: 24px;
+	}
+
+	.pdf-annotation-list {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: var(--size-4-2);
+		width: 100%;
+	}
+
+	.pdf-annotation-item {
+		appearance: none;
+		-webkit-appearance: none;
+		display: grid;
+		grid-template-columns: 12px minmax(0, 1fr);
+		align-items: start;
+		gap: var(--size-4-2);
+		width: 100%;
+		min-height: 64px;
+		margin: 0;
+		padding: var(--size-4-2) var(--size-4-3);
+		border: 1px solid transparent;
+		border-radius: var(--radius-s);
+		background: transparent;
+		color: var(--text-normal);
+		text-align: left;
+		cursor: pointer;
+		box-shadow: none;
+		line-height: normal;
+		overflow: hidden;
+		transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+	}
+
+	.pdf-annotation-item:hover {
+		background: var(--background-modifier-hover);
+		border-color: var(--background-modifier-border);
+	}
+
+	.pdf-annotation-color {
+		width: 10px;
+		height: 10px;
+		margin-top: 4px;
+		border-radius: 999px;
+		background: var(--pdf-annotation-color, var(--interactive-accent));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--pdf-annotation-color, var(--interactive-accent)) 50%, var(--background-modifier-border));
+	}
+
+	.pdf-annotation-main {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+
+	.pdf-annotation-meta {
+		display: flex;
+		align-items: center;
+		min-width: 0;
+		color: var(--text-muted);
+		font-size: var(--font-ui-smaller);
+		font-weight: 650;
+		line-height: 1.2;
+		white-space: nowrap;
+	}
+
+	.pdf-annotation-text,
+	.pdf-annotation-note {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		font-size: var(--font-ui-small);
+		line-height: 1.45;
+		color: var(--text-normal);
+	}
+
+	.pdf-annotation-note {
+		color: var(--text-muted);
+	}
+
+	.pdf-annotation-list-empty {
+		flex-direction: column;
+		gap: var(--size-4-2);
+		font-size: var(--font-ui-small);
 	}
 
 	.epub-global-sidebar-empty {

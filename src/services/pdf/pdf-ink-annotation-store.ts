@@ -108,7 +108,6 @@ export class PdfInkAnnotationStore {
 			sourcePath: normalizedSourcePath,
 			pageCount: Math.max(0, Math.floor(Number(document.pageCount) || 0)),
 			strokes: normalizeStrokes(document.strokes, document.pageCount),
-			textAnnotations: normalizeTextAnnotations(document.textAnnotations, document.pageCount),
 			updatedAt: Date.now(),
 		};
 		await adapter.write(this.getAnnotationPath(normalizedSourcePath), JSON.stringify(payload, null, 2));

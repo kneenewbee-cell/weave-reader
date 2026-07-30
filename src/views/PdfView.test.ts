@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+﻿import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App, TFile, WorkspaceLeaf, loadPdfJs } from "obsidian";
 import { epubActiveDocumentStore } from "../stores/epub-active-document-store";
@@ -192,6 +192,39 @@ describe("PdfView custom PDF reader", () => {
 		return { app, leaf, view, storage, adapter };
 	}
 
+	function getLastWrittenJson(
+		adapter: ReturnType<typeof createPdfView>["adapter"],
+		matchesPath: (path: string) => boolean
+	) {
+		const call = [...adapter.write.mock.calls]
+			.reverse()
+			.find(([path]) => matchesPath(String(path)));
+		expect(call).toBeTruthy();
+		const [path, json] = call ?? ["", "{}"];
+		return {
+			path: String(path),
+			payload: JSON.parse(String(json || "{}")),
+		};
+	}
+
+	function getLastPdfTextAnnotationsPayload(
+		adapter: ReturnType<typeof createPdfView>["adapter"]
+	) {
+		return getLastWrittenJson(
+			adapter,
+			(path) => path.startsWith("weave/pdf-data/books/") && path.endsWith("/annotations.json")
+		);
+	}
+
+	function getLastPdfInkAnnotationsPayload(
+		adapter: ReturnType<typeof createPdfView>["adapter"]
+	) {
+		return getLastWrittenJson(
+			adapter,
+			(path) => path.startsWith("weave/pdf-annotations/") && path.endsWith(".ink.json")
+		);
+	}
+
 	function dispatchPointerEvent(
 		target: EventTarget,
 		type: string,
@@ -270,7 +303,7 @@ describe("PdfView custom PDF reader", () => {
 			annotationSemantics: [
 				{
 					id: "definition",
-					label: "定义",
+					label: "瀹氫箟",
 					color: "blue",
 					style: "underline",
 					group: "study",
@@ -279,7 +312,7 @@ describe("PdfView custom PDF reader", () => {
 				},
 				{
 					id: "quote",
-					label: "引用",
+					label: "寮曠敤",
 					color: "teal",
 					style: "highlight",
 					group: "study",
@@ -288,7 +321,7 @@ describe("PdfView custom PDF reader", () => {
 				},
 				{
 					id: "question",
-					label: "疑问",
+					label: "鐤戦棶",
 					color: "purple",
 					style: "wavy",
 					group: "study",
@@ -297,7 +330,7 @@ describe("PdfView custom PDF reader", () => {
 				},
 				{
 					id: "mask",
-					label: "马赛克",
+					label: "遮盖",
 					color: "orange",
 					style: "strikethrough",
 					group: "study",
@@ -754,8 +787,7 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
+		const { payload } = getLastPdfInkAnnotationsPayload(adapter);
 		expect(payload).toMatchObject({
 			version: 1,
 			sourcePath: "Books/duboule-page.pdf",
@@ -865,8 +897,7 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
+		const { payload } = getLastPdfInkAnnotationsPayload(adapter);
 		expect(payload.strokes[0]).toMatchObject({
 			color: "#e53935",
 			width: 9,
@@ -936,8 +967,7 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
+		const { payload } = getLastPdfInkAnnotationsPayload(adapter);
 		expect(payload.strokes).toHaveLength(0);
 		restoreCanvas();
 	});
@@ -1007,8 +1037,7 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
+		const { payload } = getLastPdfInkAnnotationsPayload(adapter);
 		expect(payload.strokes).toHaveLength(2);
 		expect(payload.strokes[0].id).not.toBe(payload.strokes[1].id);
 		restoreCanvas();
@@ -1606,8 +1635,8 @@ describe("PdfView custom PDF reader", () => {
 		);
 		expect(css).toContain("color: rgba(248, 250, 252, 0.86);");
 		expect(css).toContain("color: rgba(255, 255, 255, 0.98);");
-		expect(source).not.toContain('"aria-label": "语义标注"');
-		expect(source).not.toContain('"aria-label": "文本标注操作"');
+		expect(source).not.toContain('"aria-label": "璇箟鏍囨敞"');
+		expect(source).not.toContain('"aria-label": "鏂囨湰鏍囨敞鎿嶄綔"');
 	});
 
 	it("creates and saves a PDF text highlight from the floating text menu", async () => {
@@ -1636,18 +1665,119 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
-		expect(payload.textAnnotations).toHaveLength(1);
-		expect(payload.textAnnotations[0]).toMatchObject({
+		const { path, payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(path).toMatch(/^weave\/pdf-data\/books\/pdf-/);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
 			pageNumber: 1,
 			color: "#14B8A6",
 			text: "Hello",
 			kind: "highlight",
 			semanticId: "quote",
-			semanticLabel: "引用",
+			semanticLabel: "寮曠敤",
 			semanticStyle: "highlight",
 		});
+		restoreCanvas();
+	});
+
+	it("syncs PDF text annotations for the sidebar and navigates to a selected annotation", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
+			?.click();
+
+		const state = epubActiveDocumentStore.getSharedState() as any;
+		expect(state.pdf?.annotations).toHaveLength(1);
+		expect(state.pdf.annotations[0]).toMatchObject({
+			pageNumber: 1,
+			kind: "highlight",
+			text: "Hello",
+			semanticId: "quote",
+			semanticLabel: "寮曠敤",
+			color: "#14B8A6",
+		});
+		expect(state.pdf.annotationCount).toBe(1);
+		expect(state.pdf.onNavigateAnnotation).toEqual(expect.any(Function));
+
+		state.pdf.onNavigateAnnotation(state.pdf.annotations[0].id);
+
+		const annotationEl = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation");
+		expect(annotationEl).toBeTruthy();
+		expect(annotationEl).not.toHaveClass("is-focused");
+		const focusFrame = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation-focus");
+		expect(focusFrame).toBeTruthy();
+		expect(focusFrame?.dataset.annotationId).toBe(state.pdf.annotations[0].id);
+		restoreCanvas();
+	});
+
+	it("shows one combined focus frame when navigating to a multi-rect PDF text annotation", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).startsWith("weave/pdf-annotations/")
+		);
+		adapter.read.mockResolvedValue(
+			JSON.stringify({
+				version: 1,
+				sourcePath: "Books/duboule-page.pdf",
+				pageCount: 1,
+				strokes: [],
+				textAnnotations: [
+					{
+						id: "multi-line-annotation",
+						pageNumber: 1,
+						kind: "highlight",
+						color: "#8B5CF6",
+						text: "video-note-producer Video Note Skill",
+						rects: [
+							{ x: 0.1, y: 0.12, width: 0.72, height: 0.05 },
+							{ x: 0.1, y: 0.18, width: 0.48, height: 0.05 },
+						],
+						createdAt: 1,
+					},
+				],
+				updatedAt: 1,
+			})
+		);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const state = epubActiveDocumentStore.getSharedState() as any;
+		expect(state.pdf?.annotations).toHaveLength(1);
+		await vi.waitFor(() => {
+			const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+			expect(payload.annotations.map((annotation: any) => annotation.id)).toEqual([
+				"multi-line-annotation",
+			]);
+		});
+		state.pdf.onNavigateAnnotation("multi-line-annotation");
+
+		const focusFrames = view.contentEl.querySelectorAll(".weave-pdf-text-annotation-focus");
+		expect(focusFrames).toHaveLength(1);
+		expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation.is-focused")).toHaveLength(0);
+		const focusFrame = focusFrames[0] as HTMLElement;
+		expect(focusFrame.style.left).toBe("9%");
+		expect(focusFrame.style.top).toBe("11%");
+		expect(focusFrame.style.width).toBe("74%");
+		expect(focusFrame.style.height).toBe("13%");
 		restoreCanvas();
 	});
 
@@ -1673,15 +1803,14 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
-		expect(payload.textAnnotations[0]).toMatchObject({
+		const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(payload.annotations[0]).toMatchObject({
 			pageNumber: 1,
 			text: "Hello",
 			kind: "underline",
 			color: "#0EA5E9",
 			semanticId: "definition",
-			semanticLabel: "定义",
+			semanticLabel: "瀹氫箟",
 			semanticStyle: "underline",
 		});
 		restoreCanvas();
@@ -1713,22 +1842,21 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
-		expect(payload.textAnnotations.map((annotation: any) => annotation.kind)).toEqual([
+		const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(payload.annotations.map((annotation: any) => annotation.kind)).toEqual([
 			"wavy",
 			"strikethrough",
 		]);
-		expect(payload.textAnnotations[0]).toMatchObject({
+		expect(payload.annotations[0]).toMatchObject({
 			color: "#8B5CF6",
 			semanticId: "question",
-			semanticLabel: "疑问",
+			semanticLabel: "鐤戦棶",
 			semanticStyle: "wavy",
 		});
-		expect(payload.textAnnotations[1]).toMatchObject({
+		expect(payload.annotations[1]).toMatchObject({
 			color: "#F97316",
 			semanticId: "mask",
-			semanticLabel: "马赛克",
+			semanticLabel: "遮盖",
 			semanticStyle: "strikethrough",
 		});
 		restoreCanvas();
@@ -1762,9 +1890,8 @@ describe("PdfView custom PDF reader", () => {
 		await vi.waitFor(() => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
-		const [, writtenJson] = adapter.write.mock.calls.at(-1) ?? [];
-		const payload = JSON.parse(String(writtenJson || "{}"));
-		expect(payload.textAnnotations[0]).toMatchObject({
+		const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(payload.annotations[0]).toMatchObject({
 			pageNumber: 1,
 			text: "Hello",
 			kind: "note",

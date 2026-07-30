@@ -32,6 +32,7 @@ import {
 import {
 	epubActiveDocumentStore,
 	type PdfPageThumbnail,
+	type PdfSharedAnnotation,
 	type PdfSharedState,
 } from "../stores/epub-active-document-store";
 import {
@@ -45,6 +46,10 @@ import {
 	type PdfTextAnnotationKind,
 	type PdfTextAnnotationRect,
 } from "../services/pdf/pdf-ink-annotation-store";
+import {
+	PdfTextAnnotationStore,
+	sortPdfTextAnnotationsByPosition,
+} from "../services/pdf/pdf-text-annotation-store";
 
 export const VIEW_TYPE_PDF = EPUB_RUNTIME.viewTypes.pdfReader;
 
@@ -165,6 +170,7 @@ export class PdfView extends ItemView {
 	private toolButtons: Map<PdfAnnotationTool, HTMLButtonElement> = new Map();
 	private inkModeButtons: Map<PdfInkDrawingTool, HTMLButtonElement> = new Map();
 	private readonly annotationStore = new PdfInkAnnotationStore(this.app);
+	private readonly textAnnotationStore = new PdfTextAnnotationStore(this.app);
 	private inkStrokes: PdfInkStroke[] = [];
 	private textAnnotations: PdfTextAnnotation[] = [];
 	private undoInkStack: PdfInkStroke[][] = [];
@@ -193,6 +199,8 @@ export class PdfView extends ItemView {
 	private captureSelection: PdfCaptureSelection | null = null;
 	private captureActionBarEl: HTMLElement | null = null;
 	private textActionBarEl: HTMLElement | null = null;
+	private focusedTextAnnotationTimer: number | null = null;
+	private focusedTextAnnotationEl: HTMLElement | null = null;
 	private activeTextSelectionPointerId: number | null = null;
 	private textSelectionDrag: {
 		pageNumber: number;
@@ -294,6 +302,7 @@ export class PdfView extends ItemView {
 		await this.persistPdfAnnotations();
 		await this.flushPendingPdfProgress();
 		await this.disposeLoadedPdf();
+		this.clearFocusedTextAnnotation();
 		this.bookshelfProgressChangedNotifier.flush();
 		this.bookshelfProgressChangedNotifier.dispose();
 		epubActiveDocumentStore.clearActiveDocument(this.getCurrentFilePath());
@@ -326,6 +335,7 @@ export class PdfView extends ItemView {
 		this.captureSelection = null;
 		this.captureActionBarEl = null;
 		this.textActionBarEl = null;
+		this.clearFocusedTextAnnotation();
 		this.activeTextSelectionPointerId = null;
 		this.textSelectionDrag = null;
 		this.selectedPdfTextSelection = null;
@@ -1229,12 +1239,32 @@ export class PdfView extends ItemView {
 		}
 
 		try {
-			const document = await this.annotationStore.load(filePath, this.pageCount);
+			const [inkDocument, textResult] = await Promise.all([
+				this.annotationStore.load(filePath, this.pageCount),
+				this.textAnnotationStore.load(filePath, this.pageCount),
+			]);
 			if (!this.isCurrentRender(token)) {
 				return;
 			}
-			this.inkStrokes = document.strokes;
-			this.textAnnotations = document.textAnnotations ?? [];
+			this.inkStrokes = inkDocument.strokes;
+			if (textResult.exists) {
+				this.textAnnotations = textResult.document.annotations;
+			} else {
+				this.textAnnotations = sortPdfTextAnnotationsByPosition(inkDocument.textAnnotations ?? []);
+				if (this.textAnnotations.length > 0) {
+					try {
+						await this.textAnnotationStore.save(
+							this.textAnnotationStore.createDocument(
+								filePath,
+								this.pageCount,
+								this.textAnnotations
+							)
+						);
+					} catch {
+						// Legacy text annotations still render even if migration cannot be written.
+					}
+				}
+			}
 			this.annotationsDirty = false;
 		} catch {
 			this.inkStrokes = [];
@@ -1253,14 +1283,22 @@ export class PdfView extends ItemView {
 		}
 
 		try {
-			await this.annotationStore.save({
-				version: 1,
-				sourcePath: filePath,
-				pageCount: this.pageCount,
-				strokes: this.inkStrokes,
-				textAnnotations: this.textAnnotations,
-				updatedAt: Date.now(),
-			});
+			await Promise.all([
+				this.annotationStore.save({
+					version: 1,
+					sourcePath: filePath,
+					pageCount: this.pageCount,
+					strokes: this.inkStrokes,
+					updatedAt: Date.now(),
+				}),
+				this.textAnnotationStore.save(
+					this.textAnnotationStore.createDocument(
+						filePath,
+						this.pageCount,
+						this.textAnnotations
+					)
+				),
+			]);
 			this.annotationsDirty = false;
 			if (options.notify) {
 				new Notice("PDF annotations saved");
@@ -2855,20 +2893,23 @@ export class PdfView extends ItemView {
 			return;
 		}
 		const semanticStyle = semantic ? normalizeAnnotationStyle(semantic.style) : undefined;
-		this.textAnnotations.push({
-			id: this.createInkId(),
-			pageNumber: selection.pageNumber,
-			kind,
-			color: semantic ? this.getSemanticColorHex(semantic.color) : this.highlighterColor,
-			text: selection.text,
-			note: kind === "note" ? note : undefined,
-			semanticId: semantic?.id,
-			semanticLabel: semantic?.label,
-			semanticColor: semantic?.color,
-			semanticStyle,
-			rects: selection.rects,
-			createdAt: Date.now(),
-		});
+		this.textAnnotations = sortPdfTextAnnotationsByPosition([
+			...this.textAnnotations,
+			{
+				id: this.createInkId(),
+				pageNumber: selection.pageNumber,
+				kind,
+				color: semantic ? this.getSemanticColorHex(semantic.color) : this.highlighterColor,
+				text: selection.text,
+				note: kind === "note" ? note : undefined,
+				semanticId: semantic?.id,
+				semanticLabel: semantic?.label,
+				semanticColor: semantic?.color,
+				semanticStyle,
+				rects: selection.rects,
+				createdAt: Date.now(),
+			},
+		]);
 		const pageNumber = selection.pageNumber;
 		this.clearPdfTextSelection();
 		this.annotationsDirty = true;
@@ -3607,12 +3648,103 @@ export class PdfView extends ItemView {
 			pdfState.visitedPageCount = this.visitedPages.size;
 			pdfState.activeTool = this.activeTool;
 			pdfState.inkStrokeCount = this.inkStrokes.length;
+			pdfState.annotationCount = this.textAnnotations.length;
+			pdfState.annotations = this.buildPdfSharedAnnotations();
 			pdfState.thumbnails = this.thumbnails;
 			pdfState.onNavigatePage = (pageNumber: number) => {
 				this.goToPage(pageNumber);
 			};
+			pdfState.onNavigateAnnotation = (annotationId: string) => {
+				this.goToTextAnnotation(annotationId);
+			};
 		}
 		epubActiveDocumentStore.setActivePdfDocument(pdfState);
+	}
+
+	private buildPdfSharedAnnotations(): PdfSharedAnnotation[] {
+		return sortPdfTextAnnotationsByPosition(this.textAnnotations)
+			.map((annotation) => ({
+				id: annotation.id,
+				pageNumber: annotation.pageNumber,
+				kind: annotation.kind,
+				color: annotation.color,
+				text: annotation.text,
+				note: annotation.note,
+				semanticId: annotation.semanticId,
+				semanticLabel: annotation.semanticLabel,
+				semanticStyle: annotation.semanticStyle,
+				createdAt: annotation.createdAt,
+			}));
+	}
+
+	private goToTextAnnotation(annotationId: string): void {
+		const id = String(annotationId || "").trim();
+		if (!id) {
+			return;
+		}
+		const annotation = this.textAnnotations.find((entry) => entry.id === id);
+		if (!annotation) {
+			return;
+		}
+		this.goToPage(annotation.pageNumber, { scroll: false });
+		const focusEl = this.focusTextAnnotation(annotation);
+		if (focusEl) {
+			focusEl.scrollIntoView?.({ block: "center", behavior: "smooth" });
+			return;
+		}
+		const annotationEl = this.findTextAnnotationElement(id);
+		if (annotationEl) {
+			annotationEl.scrollIntoView?.({ block: "center", behavior: "smooth" });
+			return;
+		}
+		this.pageEls.get(annotation.pageNumber)?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+	}
+
+	private findTextAnnotationElement(annotationId: string): HTMLElement | null {
+		return (
+			Array.from(
+				this.contentEl.querySelectorAll<HTMLElement>(".weave-pdf-text-annotation")
+			).find((element) => element.dataset.annotationId === annotationId) ?? null
+		);
+	}
+
+	private focusTextAnnotation(annotation: PdfTextAnnotation): HTMLElement | null {
+		this.clearFocusedTextAnnotation();
+		const layer = this.textAnnotationLayers.get(annotation.pageNumber);
+		if (!layer || annotation.rects.length === 0) {
+			return null;
+		}
+		const bounds = this.getPdfRectUnion(annotation.rects);
+		const padding = 0.01;
+		const left = Math.max(0, bounds.left - padding);
+		const top = Math.max(0, bounds.top - padding);
+		const right = Math.min(1, bounds.right + padding);
+		const bottom = Math.min(1, bounds.bottom + padding);
+		const focusEl = layer.createDiv({
+			cls: "weave-pdf-text-annotation-focus",
+		});
+		focusEl.dataset.annotationId = annotation.id;
+		focusEl.style.left = `${this.formatPdfCssNumber(left * 100)}%`;
+		focusEl.style.top = `${this.formatPdfCssNumber(top * 100)}%`;
+		focusEl.style.width = `${this.formatPdfCssNumber((right - left) * 100)}%`;
+		focusEl.style.height = `${this.formatPdfCssNumber((bottom - top) * 100)}%`;
+		this.focusedTextAnnotationEl = focusEl;
+		this.focusedTextAnnotationTimer = window.setTimeout(() => {
+			this.clearFocusedTextAnnotation();
+		}, 1600);
+		return focusEl;
+	}
+
+	private clearFocusedTextAnnotation(): void {
+		if (this.focusedTextAnnotationTimer !== null) {
+			window.clearTimeout(this.focusedTextAnnotationTimer);
+			this.focusedTextAnnotationTimer = null;
+		}
+		this.focusedTextAnnotationEl?.remove();
+		this.focusedTextAnnotationEl = null;
+		this.contentEl
+			.querySelectorAll<HTMLElement>(".weave-pdf-text-annotation.is-focused")
+			.forEach((element) => element.classList.remove("is-focused"));
 	}
 
 	private isCurrentRender(token: number): boolean {
