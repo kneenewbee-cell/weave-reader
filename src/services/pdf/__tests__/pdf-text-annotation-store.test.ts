@@ -4,9 +4,14 @@ import type { PdfTextAnnotation } from "../pdf-ink-annotation-store";
 import {
 	PDF_TEXT_ANNOTATIONS_FORMAT,
 	PdfTextAnnotationStore,
-	resolvePdfPortableBookDataLocation,
 	sortPdfTextAnnotationsByPosition,
 } from "../pdf-text-annotation-store";
+import {
+	PDF_PORTABLE_BOOK_FORMAT,
+	PDF_PORTABLE_INDEX_FORMAT,
+	resolveLegacyPdfPortableBookDataLocation,
+	resolvePdfPortableBookDataLocation,
+} from "../pdf-portable-data-location";
 
 function createMemoryApp(initialFiles: Record<string, unknown> = {}) {
 	const app = new App();
@@ -49,6 +54,12 @@ function textAnnotation(
 	};
 }
 
+function getWrittenJson(adapter: ReturnType<typeof createMemoryApp>["adapter"], path: string) {
+	const call = adapter.write.mock.calls.find(([writtenPath]) => writtenPath === path);
+	expect(call).toBeTruthy();
+	return JSON.parse(String(call?.[1] || "{}"));
+}
+
 describe("PdfTextAnnotationStore", () => {
 	it("sorts text annotations by page and PDF position instead of creation time", () => {
 		const sorted = sortPdfTextAnnotationsByPosition([
@@ -66,7 +77,7 @@ describe("PdfTextAnnotationStore", () => {
 		]);
 	});
 
-	it("writes sorted PDF text annotations to weave/pdf-data annotations.json", async () => {
+	it("writes sorted PDF text annotations and PDF book metadata to weave/pdf-data", async () => {
 		const { app, adapter } = createMemoryApp();
 		const store = new PdfTextAnnotationStore(app);
 		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
@@ -84,10 +95,7 @@ describe("PdfTextAnnotationStore", () => {
 			updatedAt: 1,
 		});
 
-		expect(adapter.write).toHaveBeenCalledTimes(1);
-		const [path, json] = adapter.write.mock.calls[0];
-		expect(path).toBe(location.annotationsPath);
-		const payload = JSON.parse(String(json));
+		const payload = getWrittenJson(adapter, location.annotationsPath);
 		expect(payload).toMatchObject({
 			format: PDF_TEXT_ANNOTATIONS_FORMAT,
 			version: 1,
@@ -99,6 +107,38 @@ describe("PdfTextAnnotationStore", () => {
 			"page-one",
 			"page-two",
 		]);
+		expect(getWrittenJson(adapter, location.bookMetadataPath)).toMatchObject({
+			format: PDF_PORTABLE_BOOK_FORMAT,
+			version: 1,
+			bookId: location.bookId,
+			sourcePath: "Books/demo.pdf",
+			filePath: "Books/demo.pdf",
+			fileName: "demo.pdf",
+			title: "demo",
+			pageCount: 3,
+			dataPaths: {
+				annotations: location.annotationsPath,
+				ink: location.inkPath,
+				annotationsMarkdown: location.annotationsMarkdownPath,
+				readingState: location.readingStatePath,
+			},
+		});
+		const index = getWrittenJson(adapter, location.indexPath);
+		expect(index).toMatchObject({
+			format: PDF_PORTABLE_INDEX_FORMAT,
+			version: 1,
+			books: {
+				[location.bookId]: {
+					bookId: location.bookId,
+					sourcePath: "Books/demo.pdf",
+					filePath: "Books/demo.pdf",
+					knownPaths: ["Books/demo.pdf"],
+					title: "demo",
+					fileName: "demo.pdf",
+					pageCount: 3,
+				},
+			},
+		});
 	});
 
 	it("loads existing annotations.json as the authoritative text annotation source", async () => {
@@ -125,6 +165,107 @@ describe("PdfTextAnnotationStore", () => {
 		expect(result.document.annotations.map((annotation) => annotation.id)).toEqual([
 			"first",
 			"second",
+		]);
+	});
+
+	it("loads and migrates annotations from the previous title-based PDF book directory", async () => {
+		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
+		const legacyLocation = resolveLegacyPdfPortableBookDataLocation("Books/demo.pdf");
+		const { app, adapter } = createMemoryApp({
+			[legacyLocation.annotationsPath]: {
+				format: PDF_TEXT_ANNOTATIONS_FORMAT,
+				version: 1,
+				bookId: legacyLocation.bookId,
+				sourcePath: "Books/demo.pdf",
+				pageCount: 2,
+				annotations: [textAnnotation("legacy-text", 1, 0.1, 0.1, 1)],
+				updatedAt: 1,
+			},
+		});
+		const store = new PdfTextAnnotationStore(app);
+
+		const result = await store.load("Books/demo.pdf", 2);
+
+		expect(result.exists).toBe(true);
+		expect(result.document.bookId).toBe(location.bookId);
+		expect(result.document.annotations.map((annotation) => annotation.id)).toEqual([
+			"legacy-text",
+		]);
+		expect(getWrittenJson(adapter, location.annotationsPath)).toMatchObject({
+			bookId: location.bookId,
+			annotations: [{ id: "legacy-text" }],
+		});
+		expect(getWrittenJson(adapter, location.bookMetadataPath)).toMatchObject({
+			bookId: location.bookId,
+			dataPaths: {
+				annotations: location.annotationsPath,
+				ink: location.inkPath,
+			},
+		});
+	});
+
+	it("backfills PDF book metadata when loading an existing annotations.json", async () => {
+		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
+		const { app, adapter } = createMemoryApp({
+			[location.annotationsPath]: {
+				format: PDF_TEXT_ANNOTATIONS_FORMAT,
+				version: 1,
+				bookId: location.bookId,
+				sourcePath: "Books/demo.pdf",
+				pageCount: 2,
+				annotations: [textAnnotation("existing", 1, 0.1, 0.1, 1)],
+				updatedAt: 1,
+			},
+		});
+		const store = new PdfTextAnnotationStore(app);
+
+		await store.load("Books/demo.pdf", 2);
+
+		expect(getWrittenJson(adapter, location.bookMetadataPath)).toMatchObject({
+			bookId: location.bookId,
+			sourcePath: "Books/demo.pdf",
+			dataPaths: {
+				annotations: location.annotationsPath,
+				ink: location.inkPath,
+			},
+		});
+		expect(getWrittenJson(adapter, location.indexPath).books[location.bookId]).toMatchObject({
+			bookId: location.bookId,
+			filePath: "Books/demo.pdf",
+			knownPaths: ["Books/demo.pdf"],
+		});
+	});
+
+	it("does not keep the vault root as a known PDF source path", async () => {
+		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
+		const { app, adapter } = createMemoryApp({
+			[location.indexPath]: {
+				format: PDF_PORTABLE_INDEX_FORMAT,
+				version: 1,
+				books: {
+					[location.bookId]: {
+						bookId: location.bookId,
+						sourcePath: "Books/demo.pdf",
+						filePath: "Books/demo.pdf",
+						knownPaths: ["/", "Books/old-demo.pdf"],
+						fileName: "demo.pdf",
+						title: "demo",
+						pageCount: 2,
+						createdAt: 1,
+						updatedAt: 1,
+					},
+				},
+			},
+		});
+		const store = new PdfTextAnnotationStore(app);
+
+		await store.save(
+			store.createDocument("Books/demo.pdf", 2, [textAnnotation("saved", 1, 0.1, 0.1, 1)])
+		);
+
+		expect(getWrittenJson(adapter, location.indexPath).books[location.bookId].knownPaths).toEqual([
+			"Books/old-demo.pdf",
+			"Books/demo.pdf",
 		]);
 	});
 });

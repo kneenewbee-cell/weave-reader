@@ -50,6 +50,10 @@ import {
 	PdfTextAnnotationStore,
 	sortPdfTextAnnotationsByPosition,
 } from "../services/pdf/pdf-text-annotation-store";
+import { resolvePdfPortableBookDataLocation } from "../services/pdf/pdf-portable-data-location";
+import { renderPdfAnnotationNoteMarkdown } from "../services/pdf/pdf-annotation-note-markdown";
+import { openAnnotationNoteFileWithExistingLeaf } from "../services/epub/open-annotation-note-file";
+import { DirectoryUtils } from "../utils/directory-utils";
 
 export const VIEW_TYPE_PDF = EPUB_RUNTIME.viewTypes.pdfReader;
 
@@ -77,6 +81,16 @@ interface PdfDocumentLike {
 	numPages: number;
 	getPage(pageNumber: number): Promise<PdfPageLike>;
 	destroy?: () => Promise<void> | void;
+}
+
+interface PdfAnnotationNavigationTarget {
+	annotationId?: string;
+	pageNumber?: number;
+}
+
+interface PdfAnnotationHistorySnapshot {
+	inkStrokes: PdfInkStroke[];
+	textAnnotations: PdfTextAnnotation[];
 }
 
 interface PdfTextFlowFragment {
@@ -173,8 +187,8 @@ export class PdfView extends ItemView {
 	private readonly textAnnotationStore = new PdfTextAnnotationStore(this.app);
 	private inkStrokes: PdfInkStroke[] = [];
 	private textAnnotations: PdfTextAnnotation[] = [];
-	private undoInkStack: PdfInkStroke[][] = [];
-	private redoInkStack: PdfInkStroke[][] = [];
+	private undoInkStack: PdfAnnotationHistorySnapshot[] = [];
+	private redoInkStack: PdfAnnotationHistorySnapshot[] = [];
 	private activeInkStroke: PdfInkStroke | null = null;
 	private activeInkPathEl: SVGElement | null = null;
 	private activeInkPointerId: number | null = null;
@@ -221,6 +235,7 @@ export class PdfView extends ItemView {
 	private eraserRadius = PDF_INK_DEFAULTS.eraserRadius;
 	private acceptTouchInput = PDF_INK_DEFAULTS.acceptTouchInput;
 	private annotationsDirty = false;
+	private pendingAnnotationNavigation: PdfAnnotationNavigationTarget | null = null;
 	private lastPersistedProgressCfi = "";
 	private persistProgressToken = 0;
 	private readonly bookshelfProgressChangedNotifier =
@@ -261,11 +276,18 @@ export class PdfView extends ItemView {
 	}
 
 	async setState(state: unknown, result: unknown): Promise<void> {
-		await super.setState(state, result);
+		const parentSetState = Object.getPrototypeOf(PdfView.prototype)?.setState;
+		if (typeof parentSetState === "function") {
+			await parentSetState.call(this, state, result);
+		}
 		const viewState =
 			state && typeof state === "object" && !Array.isArray(state)
 				? (state as Record<string, unknown>)
 				: {};
+		const navigationTarget = this.readAnnotationNavigationTarget(viewState);
+		if (navigationTarget) {
+			this.pendingAnnotationNavigation = navigationTarget;
+		}
 		const incomingPath = normalizePath(
 			String(viewState.filePath || viewState.file || "").trim()
 		);
@@ -276,6 +298,42 @@ export class PdfView extends ItemView {
 				await this.render();
 				this.syncAsActivePdfDocumentIfActive();
 			}
+			return;
+		}
+		if (navigationTarget && this.isOpen) {
+			this.applyPendingAnnotationNavigation();
+		}
+	}
+
+	private readAnnotationNavigationTarget(
+		viewState: Record<string, unknown>
+	): PdfAnnotationNavigationTarget | null {
+		const annotationId = String(
+			viewState.annotationId || viewState.pdfAnnotationId || ""
+		).trim();
+		const pageNumber = Math.floor(Number(viewState.pageNumber || viewState.page || 0));
+		const target: PdfAnnotationNavigationTarget = {};
+		if (annotationId) {
+			target.annotationId = annotationId;
+		}
+		if (Number.isFinite(pageNumber) && pageNumber > 0) {
+			target.pageNumber = pageNumber;
+		}
+		return target.annotationId || target.pageNumber ? target : null;
+	}
+
+	private applyPendingAnnotationNavigation(): void {
+		const target = this.pendingAnnotationNavigation;
+		if (!target) {
+			return;
+		}
+		if (target.annotationId && this.goToTextAnnotation(target.annotationId)) {
+			this.pendingAnnotationNavigation = null;
+			return;
+		}
+		if (target.pageNumber) {
+			this.goToPage(target.pageNumber, { scroll: true });
+			this.pendingAnnotationNavigation = null;
 		}
 	}
 
@@ -453,6 +511,9 @@ export class PdfView extends ItemView {
 		);
 		this.createToolbarIconButton(rail, "save", "保存标注", "save-annotations", () => {
 			void this.persistPdfAnnotations({ notify: true });
+		});
+		this.createToolbarIconButton(rail, "file-text", "标注笔记", "open-annotation-note", () => {
+			void this.openPdfAnnotationNoteMarkdown();
 		});
 		this.moreToolsButtonEl = this.createToolbarIconButton(
 			rail,
@@ -975,6 +1036,7 @@ export class PdfView extends ItemView {
 			}
 			this.updateToolbarState();
 			this.syncAsActivePdfDocumentIfActive();
+			this.applyPendingAnnotationNavigation();
 			void this.persistPdfProgress();
 		} catch (error) {
 			if (!this.isCurrentRender(token)) {
@@ -1273,13 +1335,15 @@ export class PdfView extends ItemView {
 		}
 	}
 
-	private async persistPdfAnnotations(options: { notify?: boolean } = {}): Promise<void> {
-		if (!this.annotationsDirty && !options.notify) {
-			return;
+	private async persistPdfAnnotations(
+		options: { notify?: boolean; force?: boolean; writeMarkdown?: boolean } = {}
+	): Promise<TFile | null> {
+		if (!this.annotationsDirty && !options.notify && !options.force) {
+			return null;
 		}
 		const filePath = this.getCurrentFilePath();
 		if (!filePath || this.pageCount <= 0) {
-			return;
+			return null;
 		}
 
 		try {
@@ -1299,15 +1363,59 @@ export class PdfView extends ItemView {
 					)
 				),
 			]);
+			const noteFile =
+				options.writeMarkdown === false ? null : await this.writePdfAnnotationNoteMarkdown();
 			this.annotationsDirty = false;
 			if (options.notify) {
 				new Notice("PDF annotations saved");
 			}
+			return noteFile;
 		} catch {
 			if (options.notify) {
 				new Notice("Unable to save PDF annotations");
 			}
+			return null;
 		}
+	}
+
+	private async writePdfAnnotationNoteMarkdown(): Promise<TFile | null> {
+		const filePath = this.getCurrentFilePath();
+		if (!filePath || this.pageCount <= 0) {
+			return null;
+		}
+		const location = resolvePdfPortableBookDataLocation(filePath);
+		const markdown = renderPdfAnnotationNoteMarkdown({
+			bookId: location.bookId,
+			book: {
+				title: this.getResolvedTitle(),
+				filePath,
+				pageCount: this.pageCount,
+				currentPage: this.currentPage,
+			},
+			annotations: this.textAnnotations,
+		});
+		const normalizedMarkdown = markdown.endsWith("\n") ? markdown : `${markdown}\n`;
+		await DirectoryUtils.ensureDirForFile(
+			this.app.vault.adapter,
+			location.annotationsMarkdownPath
+		);
+		const existing = this.app.vault.getAbstractFileByPath(location.annotationsMarkdownPath);
+		if (existing instanceof TFile) {
+			await this.app.vault.modify(existing, normalizedMarkdown);
+			return existing;
+		}
+		return await this.app.vault.create(location.annotationsMarkdownPath, normalizedMarkdown);
+	}
+
+	private async openPdfAnnotationNoteMarkdown(): Promise<void> {
+		const noteFile = await this.persistPdfAnnotations({ force: true });
+		if (!noteFile) {
+			new Notice("PDF 标注笔记暂不可用");
+			return;
+		}
+		await openAnnotationNoteFileWithExistingLeaf(this.app, noteFile, {
+			focus: true,
+		});
 	}
 
 	private handleInkPointerDown(
@@ -1606,9 +1714,7 @@ export class PdfView extends ItemView {
 					? this.translateInkStroke(stroke, dx, dy)
 					: clonePdfInkStrokes([stroke])[0]
 			);
-			this.undoInkStack.push(drag.beforeStrokes);
-			this.trimInkHistory();
-			this.redoInkStack = [];
+			this.pushUndoSnapshot({ inkStrokes: drag.beforeStrokes });
 			this.annotationsDirty = true;
 			this.releaseSelectedInkDragPreview(pageNumber);
 			this.renderInkStrokesForPage(pageNumber);
@@ -2893,6 +2999,7 @@ export class PdfView extends ItemView {
 			return;
 		}
 		const semanticStyle = semantic ? normalizeAnnotationStyle(semantic.style) : undefined;
+		this.pushUndoSnapshot();
 		this.textAnnotations = sortPdfTextAnnotationsByPosition([
 			...this.textAnnotations,
 			{
@@ -3067,9 +3174,7 @@ export class PdfView extends ItemView {
 
 	private finishEraserSession(): void {
 		if (this.eraserSessionChanged && this.eraserSessionBefore) {
-			this.undoInkStack.push(this.eraserSessionBefore);
-			this.trimInkHistory();
-			this.redoInkStack = [];
+			this.pushUndoSnapshot({ inkStrokes: this.eraserSessionBefore });
 			this.annotationsDirty = true;
 			this.updateToolbarState();
 			this.syncAsActivePdfDocument();
@@ -3171,6 +3276,13 @@ export class PdfView extends ItemView {
 	private renderAllInkStrokes(): void {
 		for (const pageNumber of this.annotationLayers.keys()) {
 			this.renderInkStrokesForPage(pageNumber);
+		}
+	}
+
+	private renderAllTextAnnotations(): void {
+		this.clearFocusedTextAnnotation();
+		for (const pageNumber of this.textAnnotationLayers.keys()) {
+			this.renderTextAnnotationsForPage(pageNumber);
 		}
 	}
 
@@ -3405,10 +3517,9 @@ export class PdfView extends ItemView {
 		if (!previous) {
 			return;
 		}
-		this.redoInkStack.push(clonePdfInkStrokes(this.inkStrokes));
-		this.inkStrokes = clonePdfInkStrokes(previous);
+		this.redoInkStack.push(this.createAnnotationHistorySnapshot());
+		this.restoreAnnotationHistorySnapshot(previous);
 		this.annotationsDirty = true;
-		this.renderAllInkStrokes();
 		this.updateToolbarState();
 		this.syncAsActivePdfDocument();
 		void this.persistPdfAnnotations();
@@ -3419,20 +3530,52 @@ export class PdfView extends ItemView {
 		if (!next) {
 			return;
 		}
-		this.undoInkStack.push(clonePdfInkStrokes(this.inkStrokes));
+		this.undoInkStack.push(this.createAnnotationHistorySnapshot());
 		this.trimInkHistory();
-		this.inkStrokes = clonePdfInkStrokes(next);
+		this.restoreAnnotationHistorySnapshot(next);
 		this.annotationsDirty = true;
-		this.renderAllInkStrokes();
 		this.updateToolbarState();
 		this.syncAsActivePdfDocument();
 		void this.persistPdfAnnotations();
 	}
 
-	private pushUndoSnapshot(): void {
-		this.undoInkStack.push(clonePdfInkStrokes(this.inkStrokes));
+	private pushUndoSnapshot(
+		overrides: Partial<PdfAnnotationHistorySnapshot> = {}
+	): void {
+		this.undoInkStack.push(
+			this.createAnnotationHistorySnapshot(
+				overrides.inkStrokes ?? this.inkStrokes,
+				overrides.textAnnotations ?? this.textAnnotations
+			)
+		);
 		this.trimInkHistory();
 		this.redoInkStack = [];
+	}
+
+	private createAnnotationHistorySnapshot(
+		inkStrokes: PdfInkStroke[] = this.inkStrokes,
+		textAnnotations: PdfTextAnnotation[] = this.textAnnotations
+	): PdfAnnotationHistorySnapshot {
+		return {
+			inkStrokes: clonePdfInkStrokes(inkStrokes),
+			textAnnotations: this.clonePdfTextAnnotations(textAnnotations),
+		};
+	}
+
+	private restoreAnnotationHistorySnapshot(snapshot: PdfAnnotationHistorySnapshot): void {
+		this.inkStrokes = clonePdfInkStrokes(snapshot.inkStrokes);
+		this.textAnnotations = this.clonePdfTextAnnotations(snapshot.textAnnotations);
+		this.selectedInkStrokeIds.clear();
+		this.clearPdfTextSelection();
+		this.renderAllInkStrokes();
+		this.renderAllTextAnnotations();
+	}
+
+	private clonePdfTextAnnotations(annotations: PdfTextAnnotation[]): PdfTextAnnotation[] {
+		return annotations.map((annotation) => ({
+			...annotation,
+			rects: annotation.rects.map((rect) => ({ ...rect })),
+		}));
 	}
 
 	private trimInkHistory(): void {
@@ -3677,27 +3820,28 @@ export class PdfView extends ItemView {
 			}));
 	}
 
-	private goToTextAnnotation(annotationId: string): void {
+	private goToTextAnnotation(annotationId: string): boolean {
 		const id = String(annotationId || "").trim();
 		if (!id) {
-			return;
+			return false;
 		}
 		const annotation = this.textAnnotations.find((entry) => entry.id === id);
 		if (!annotation) {
-			return;
+			return false;
 		}
 		this.goToPage(annotation.pageNumber, { scroll: false });
 		const focusEl = this.focusTextAnnotation(annotation);
 		if (focusEl) {
 			focusEl.scrollIntoView?.({ block: "center", behavior: "smooth" });
-			return;
+			return true;
 		}
 		const annotationEl = this.findTextAnnotationElement(id);
 		if (annotationEl) {
 			annotationEl.scrollIntoView?.({ block: "center", behavior: "smooth" });
-			return;
+			return true;
 		}
 		this.pageEls.get(annotation.pageNumber)?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+		return true;
 	}
 
 	private findTextAnnotationElement(annotationId: string): HTMLElement | null {

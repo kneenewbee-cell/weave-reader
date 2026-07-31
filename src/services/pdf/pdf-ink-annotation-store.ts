@@ -1,4 +1,9 @@
 import { type App, normalizePath } from "obsidian";
+import {
+	ensurePdfPortableBookData,
+	resolveLegacyPdfPortableBookDataLocation,
+	resolvePdfPortableBookDataLocation,
+} from "./pdf-portable-data-location";
 
 export type PdfInkDrawingTool = "pen" | "highlighter";
 export type PdfAnnotationTool =
@@ -65,34 +70,84 @@ interface VaultAdapterLike {
 	mkdir?: (path: string) => Promise<void>;
 }
 
-const DEFAULT_BASE_DIR = "weave/pdf-annotations";
+const LEGACY_BASE_DIR = "weave/pdf-annotations";
 
 export class PdfInkAnnotationStore {
 	constructor(
 		private readonly app: App,
-		private readonly baseDir = DEFAULT_BASE_DIR
+		private readonly legacyBaseDir = LEGACY_BASE_DIR
 	) {}
 
 	async load(sourcePath: string, pageCount: number): Promise<PdfInkAnnotationDocument> {
 		const normalizedSourcePath = normalizePath(sourcePath);
 		const path = this.getAnnotationPath(normalizedSourcePath);
+		const legacyPortablePath = resolveLegacyPdfPortableBookDataLocation(normalizedSourcePath).inkPath;
+		const legacyPath = this.getLegacyAnnotationPath(normalizedSourcePath);
 		const adapter = this.getAdapter();
-		if (!adapter || typeof adapter.exists !== "function" || !(await adapter.exists(path))) {
+		if (!adapter || typeof adapter.exists !== "function") {
 			return this.createEmpty(normalizedSourcePath, pageCount);
 		}
 
+		if (await adapter.exists(path)) {
+			return this.loadFromPath(path, normalizedSourcePath, pageCount);
+		}
+
+		if (await adapter.exists(legacyPortablePath)) {
+			const legacyPortableDocument = await this.loadFromPath(
+				legacyPortablePath,
+				normalizedSourcePath,
+				pageCount
+			);
+			await this.migrateLoadedInkDocument(legacyPortableDocument);
+			return legacyPortableDocument;
+		}
+
+		if (await adapter.exists(legacyPath)) {
+			const legacyDocument = await this.loadFromPath(
+				legacyPath,
+				normalizedSourcePath,
+				pageCount
+			);
+			await this.migrateLoadedInkDocument(legacyDocument);
+			return legacyDocument;
+		}
+
+		return this.createEmpty(normalizedSourcePath, pageCount);
+	}
+
+	private async loadFromPath(
+		path: string,
+		sourcePath: string,
+		pageCount: number
+	): Promise<PdfInkAnnotationDocument> {
+		const adapter = this.getAdapter();
+		if (!adapter || typeof adapter.read !== "function") {
+			return this.createEmpty(sourcePath, pageCount);
+		}
+
 		try {
-			const parsed = JSON.parse(await adapter.read?.(path)) as Partial<PdfInkAnnotationDocument>;
+			const parsed = JSON.parse(await adapter.read(path)) as Partial<PdfInkAnnotationDocument>;
 			return {
 				version: 1,
-				sourcePath: normalizedSourcePath,
+				sourcePath,
 				pageCount: normalizePageCount(parsed.pageCount, pageCount),
 				strokes: normalizeStrokes(parsed.strokes, pageCount),
 				textAnnotations: normalizeTextAnnotations(parsed.textAnnotations, pageCount),
 				updatedAt: normalizeTimestamp(parsed.updatedAt),
 			};
 		} catch {
-			return this.createEmpty(normalizedSourcePath, pageCount);
+			return this.createEmpty(sourcePath, pageCount);
+		}
+	}
+
+	private async migrateLoadedInkDocument(document: PdfInkAnnotationDocument): Promise<void> {
+		if (document.strokes.length === 0) {
+			return;
+		}
+		try {
+			await this.save(document);
+		} catch {
+			// Loading must stay resilient; legacy data should still open if migration fails.
 		}
 	}
 
@@ -101,8 +156,12 @@ export class PdfInkAnnotationStore {
 		if (!adapter || typeof adapter.write !== "function") {
 			throw new Error("Vault adapter is unavailable");
 		}
-		await this.ensureFolder(this.baseDir);
 		const normalizedSourcePath = normalizePath(document.sourcePath);
+		const location = await ensurePdfPortableBookData(
+			this.app,
+			normalizedSourcePath,
+			document.pageCount
+		);
 		const payload: PdfInkAnnotationDocument = {
 			version: 1,
 			sourcePath: normalizedSourcePath,
@@ -110,14 +169,18 @@ export class PdfInkAnnotationStore {
 			strokes: normalizeStrokes(document.strokes, document.pageCount),
 			updatedAt: Date.now(),
 		};
-		await adapter.write(this.getAnnotationPath(normalizedSourcePath), JSON.stringify(payload, null, 2));
+		await adapter.write(location.inkPath, JSON.stringify(payload, null, 2));
 	}
 
 	getAnnotationPath(sourcePath: string): string {
+		return resolvePdfPortableBookDataLocation(sourcePath).inkPath;
+	}
+
+	getLegacyAnnotationPath(sourcePath: string): string {
 		const normalizedSourcePath = normalizePath(sourcePath);
 		const fileName = normalizedSourcePath.split("/").pop() || "document.pdf";
 		const safeName = fileName.replace(/[^\w\-.\u4e00-\u9fa5]/g, "_") || "document.pdf";
-		return `${this.baseDir}/${safeName}.${hashString(normalizedSourcePath)}.ink.json`;
+		return `${this.legacyBaseDir}/${safeName}.${hashString(normalizedSourcePath)}.ink.json`;
 	}
 
 	private createEmpty(sourcePath: string, pageCount: number): PdfInkAnnotationDocument {
@@ -129,23 +192,6 @@ export class PdfInkAnnotationStore {
 			textAnnotations: [],
 			updatedAt: Date.now(),
 		};
-	}
-
-	private async ensureFolder(folderPath: string): Promise<void> {
-		const adapter = this.getAdapter();
-		if (!adapter || typeof adapter.mkdir !== "function") {
-			return;
-		}
-
-		const parts = normalizePath(folderPath).split("/").filter(Boolean);
-		let current = "";
-		for (const part of parts) {
-			current = current ? `${current}/${part}` : part;
-			if (typeof adapter.exists === "function" && (await adapter.exists(current))) {
-				continue;
-			}
-			await adapter.mkdir(current);
-		}
 	}
 
 	private getAdapter(): VaultAdapterLike | null {

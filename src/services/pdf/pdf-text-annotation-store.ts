@@ -4,17 +4,19 @@ import type {
 	PdfTextAnnotationKind,
 	PdfTextAnnotationRect,
 } from "./pdf-ink-annotation-store";
+import {
+	ensurePdfPortableBookData,
+	resolveLegacyPdfPortableBookDataLocation,
+	resolvePdfPortableBookDataLocation,
+} from "./pdf-portable-data-location";
 
-export const PDF_PORTABLE_DATA_ROOT = "weave/pdf-data";
 export const PDF_TEXT_ANNOTATIONS_FORMAT = "weave-reader-pdf-annotations/v1";
-
-export interface PdfPortableBookDataLocation {
-	bookId: string;
-	bookDir: string;
-	annotationsPath: string;
-	annotationsMarkdownPath: string;
-	indexPath: string;
-}
+export {
+	PDF_PORTABLE_DATA_ROOT,
+	resolveLegacyPdfPortableBookDataLocation,
+	resolvePdfPortableBookDataLocation,
+	type PdfPortableBookDataLocation,
+} from "./pdf-portable-data-location";
 
 export interface PdfTextAnnotationDocument {
 	format: typeof PDF_TEXT_ANNOTATIONS_FORMAT;
@@ -39,18 +41,6 @@ interface VaultAdapterLike {
 }
 
 const SORT_LINE_TOLERANCE = 0.012;
-
-export function resolvePdfPortableBookDataLocation(sourcePath: unknown): PdfPortableBookDataLocation {
-	const bookId = createPdfPortableBookId(sourcePath);
-	const bookDir = normalizePath(`${PDF_PORTABLE_DATA_ROOT}/books/${bookId}`);
-	return {
-		bookId,
-		bookDir,
-		annotationsPath: normalizePath(`${bookDir}/annotations.json`),
-		annotationsMarkdownPath: normalizePath(`${bookDir}/annotations.md`),
-		indexPath: normalizePath(`${PDF_PORTABLE_DATA_ROOT}/index.json`),
-	};
-}
 
 export function sortPdfTextAnnotationsByPosition(
 	annotations: PdfTextAnnotation[]
@@ -81,7 +71,19 @@ export class PdfTextAnnotationStore {
 		const normalizedSourcePath = normalizePath(sourcePath);
 		const location = resolvePdfPortableBookDataLocation(normalizedSourcePath);
 		const adapter = this.getAdapter();
-		if (!adapter || typeof adapter.exists !== "function" || !(await adapter.exists(location.annotationsPath))) {
+		if (!adapter || typeof adapter.exists !== "function") {
+			return {
+				exists: false,
+				document: this.createEmpty(normalizedSourcePath, pageCount),
+			};
+		}
+		const legacyLocation = resolveLegacyPdfPortableBookDataLocation(normalizedSourcePath);
+		const annotationsPath = await adapter.exists(location.annotationsPath)
+			? location.annotationsPath
+			: await adapter.exists(legacyLocation.annotationsPath)
+				? legacyLocation.annotationsPath
+				: "";
+		if (!annotationsPath) {
 			return {
 				exists: false,
 				document: this.createEmpty(normalizedSourcePath, pageCount),
@@ -89,10 +91,16 @@ export class PdfTextAnnotationStore {
 		}
 
 		try {
-			const parsed = JSON.parse(await adapter.read?.(location.annotationsPath)) as unknown;
+			const parsed = JSON.parse(await adapter.read?.(annotationsPath)) as unknown;
+			const document = this.normalizeDocument(parsed, normalizedSourcePath, pageCount);
+			if (annotationsPath === legacyLocation.annotationsPath) {
+				await this.save(document);
+			} else {
+				await this.ensureBookData(document);
+			}
 			return {
 				exists: true,
-				document: this.normalizeDocument(parsed, normalizedSourcePath, pageCount),
+				document,
 			};
 		} catch {
 			return {
@@ -108,8 +116,11 @@ export class PdfTextAnnotationStore {
 			throw new Error("Vault adapter is unavailable");
 		}
 		const normalizedSourcePath = normalizePath(document.sourcePath);
-		const location = resolvePdfPortableBookDataLocation(normalizedSourcePath);
-		await this.ensureFolder(location.bookDir);
+		const location = await ensurePdfPortableBookData(
+			this.app,
+			normalizedSourcePath,
+			document.pageCount
+		);
 		const payload: PdfTextAnnotationDocument = {
 			format: PDF_TEXT_ANNOTATIONS_FORMAT,
 			version: 1,
@@ -183,40 +194,21 @@ export class PdfTextAnnotationStore {
 		};
 	}
 
-	private async ensureFolder(folderPath: string): Promise<void> {
-		const adapter = this.getAdapter();
-		if (!adapter || typeof adapter.mkdir !== "function") {
-			return;
-		}
-
-		const parts = normalizePath(folderPath).split("/").filter(Boolean);
-		let current = "";
-		for (const part of parts) {
-			current = current ? `${current}/${part}` : part;
-			if (typeof adapter.exists === "function" && (await adapter.exists(current))) {
-				continue;
-			}
-			await adapter.mkdir(current);
+	private async ensureBookData(document: PdfTextAnnotationDocument): Promise<void> {
+		try {
+			await ensurePdfPortableBookData(
+				this.app,
+				document.sourcePath,
+				document.pageCount
+			);
+		} catch {
+			// Existing annotations should still load if metadata backfill is unavailable.
 		}
 	}
 
 	private getAdapter(): VaultAdapterLike | null {
 		return ((this.app.vault as unknown as { adapter?: VaultAdapterLike }).adapter ?? null);
 	}
-}
-
-function createPdfPortableBookId(sourcePath: unknown): string {
-	const normalizedSourcePath = normalizePath(String(sourcePath || "").trim());
-	const fileName = normalizedSourcePath.split("/").pop() || "document.pdf";
-	const stem = fileName.replace(/\.[^/.]+$/, "");
-	const safeStem =
-		stem
-			.trim()
-			.replace(/[^A-Za-z0-9._-]+/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-+|-+$/g, "")
-			.slice(0, 48) || "document";
-	return `pdf-${safeStem}-${hashString(normalizedSourcePath)}`;
 }
 
 function getAnnotationSortAnchor(annotation: PdfTextAnnotation): {
@@ -330,15 +322,6 @@ function normalizeTimestamp(value: unknown): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function hashString(input: string): string {
-	let hash = 2166136261;
-	for (let index = 0; index < input.length; index += 1) {
-		hash ^= input.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
-	return (hash >>> 0).toString(36);
 }
 
 function createId(): string {

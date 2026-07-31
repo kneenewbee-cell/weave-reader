@@ -17,6 +17,12 @@ vi.mock('obsidian', () => ({
 	normalizePath: (value: string) => String(value || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, ''),
 }));
 
+const openBookForSourceNavigationMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../../utils/epub-leaf-utils', () => ({
+	openBookForSourceNavigation: openBookForSourceNavigationMock,
+}));
+
 import { createEpubLinkPostProcessor } from '../EpubLinkPostProcessor';
 import { EpubLinkService } from '../EpubLinkService';
 import {
@@ -62,6 +68,7 @@ beforeAll(() => {
 describe('EpubLinkPostProcessor', () => {
 	beforeEach(() => {
 		vi.restoreAllMocks();
+		openBookForSourceNavigationMock.mockReset();
 	});
 
 	it('applies derived EPUB callout color and style attributes for combined metadata', () => {
@@ -287,6 +294,38 @@ describe('EpubLinkPostProcessor', () => {
 		searchInput!.dispatchEvent(new Event('input'));
 		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(0);
 		expect(count?.textContent).toBe('0 / 3');
+	});
+
+	it('uses PDF page filters and opens the source PDF annotation when a PDF annotation note line is clicked', async () => {
+		openBookForSourceNavigationMock.mockResolvedValue({ id: 'pdf-leaf' });
+		const container = document.createElement('div');
+		container.className = 'markdown-rendered';
+		container.innerHTML = [
+			'<div class="weave-annotation-note-root weave-pdf-annotation-note-root" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf"></div>',
+			'<h2 class="weave-annotation-note-chapter weave-pdf-annotation-note-page" data-chapter-key="page-1" data-chapter-title="第 1 页">第 1 页</h2>',
+			'<div class="weave-annotation-note-line weave-pdf-annotation-note-line" data-source-file="Books/demo.pdf" data-annotation-id="pdf-anno-1" data-page-number="1" data-chapter-key="page-1" data-chapter-title="第 1 页" data-semantic-id="quote" data-semantic-label="引用" data-annotation-text="alpha pdf">alpha</div>',
+		].join('');
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+
+		const pageSelect = container.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-chapter');
+		expect(pageSelect?.getAttribute('aria-label')).toBe('页面筛选');
+		expect(pageSelect?.options[0]?.textContent).toBe('全部页面');
+		expect(pageSelect?.options[1]?.textContent).toBe('第 1 页');
+
+		container.querySelector<HTMLElement>('.weave-pdf-annotation-note-line')?.dispatchEvent(
+			new MouseEvent('click', { bubbles: true, cancelable: true })
+		);
+
+		await vi.waitFor(() => {
+			expect(openBookForSourceNavigationMock).toHaveBeenCalledWith(
+				expect.anything(),
+				'Books/demo.pdf',
+				{ annotationId: 'pdf-anno-1', pageNumber: 1 },
+				{ focus: true }
+			);
+		});
 	});
 
 	it('binds the annotation note dual-window button to the EPUB host', () => {

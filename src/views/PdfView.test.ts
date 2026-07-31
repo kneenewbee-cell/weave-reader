@@ -167,29 +167,56 @@ describe("PdfView custom PDF reader", () => {
 		const storage = createStorageMock();
 		const app = new App();
 		const file = new TFile(filePath);
+		const files = new Map<string, string>();
+		const createdFiles = new Map<string, TFile>();
+		const noteLeaf = new WorkspaceLeaf(app);
 		const adapter = {
-			exists: vi.fn(async () => false),
-			read: vi.fn(async () => ""),
-			write: vi.fn(async () => undefined),
+			exists: vi.fn(async (path: string) => files.has(String(path))),
+			read: vi.fn(async (path: string) => files.get(String(path)) ?? ""),
+			write: vi.fn(async (path: string, data: string) => {
+				files.set(String(path), String(data));
+			}),
 			writeBinary: vi.fn(async () => undefined),
 			mkdir: vi.fn(async () => undefined),
 		};
 		(app.vault as any).adapter = adapter;
 		(app.vault as any).getConfig = vi.fn(() => "");
-		app.vault.getAbstractFileByPath = vi.fn((path: string) =>
-			path === filePath ? file : null
-		) as any;
+		app.vault.getAbstractFileByPath = vi.fn((path: string) => {
+			if (path === filePath) {
+				return file;
+			}
+			const createdFile = createdFiles.get(path);
+			if (createdFile) {
+				return createdFile;
+			}
+			if (files.has(path) && path.endsWith(".md")) {
+				const markdownFile = new TFile(path);
+				createdFiles.set(path, markdownFile);
+				return markdownFile;
+			}
+			return null;
+		}) as any;
+		app.vault.create = vi.fn(async (path: string, data: string) => {
+			files.set(String(path), String(data));
+			const createdFile = new TFile(path);
+			createdFiles.set(path, createdFile);
+			return createdFile;
+		}) as any;
+		app.vault.modify = vi.fn(async (targetFile: TFile, data: string) => {
+			files.set(targetFile.path, String(data));
+		}) as any;
 		app.vault.getResourcePath = vi.fn(() => "app://vault/pdf") as any;
 		app.vault.readBinary = vi.fn(async () => new ArrayBuffer(8)) as any;
 		app.workspace.activeLeaf = null;
 		app.workspace.on = vi.fn(() => ({ event: "active-leaf-change" }));
+		app.workspace.getLeaf = vi.fn(() => noteLeaf) as any;
 
 		const leaf = new WorkspaceLeaf(app);
 		const view = new PdfView(leaf as any);
 		leaf.view = view;
 		app.workspace.activeLeaf = leaf;
 		(view as any).filePath = filePath;
-		return { app, leaf, view, storage, adapter };
+		return { app, leaf, view, storage, adapter, files, noteLeaf };
 	}
 
 	function getLastWrittenJson(
@@ -221,8 +248,17 @@ describe("PdfView custom PDF reader", () => {
 	) {
 		return getLastWrittenJson(
 			adapter,
-			(path) => path.startsWith("weave/pdf-annotations/") && path.endsWith(".ink.json")
+			(path) => path.startsWith("weave/pdf-data/books/") && path.endsWith("/ink.json")
 		);
+	}
+
+	function getLastPdfAnnotationMarkdown(files: ReturnType<typeof createPdfView>["files"]) {
+		const entry = [...files.entries()]
+			.reverse()
+			.find(([path]) => path.startsWith("weave/pdf-data/books/") && path.endsWith("/annotations.md"));
+		expect(entry).toBeTruthy();
+		const [path, markdown] = entry ?? ["", ""];
+		return { path, markdown };
 	}
 
 	function dispatchPointerEvent(
@@ -1666,7 +1702,7 @@ describe("PdfView custom PDF reader", () => {
 			expect(adapter.write).toHaveBeenCalled();
 		});
 		const { path, payload } = getLastPdfTextAnnotationsPayload(adapter);
-		expect(path).toMatch(/^weave\/pdf-data\/books\/pdf-/);
+		expect(path).toMatch(/^weave\/pdf-data\/books\/pdf-book-[a-z0-9]+\/annotations\.json$/);
 		expect(payload.annotations).toHaveLength(1);
 		expect(payload.annotations[0]).toMatchObject({
 			pageNumber: 1,
@@ -1677,6 +1713,114 @@ describe("PdfView custom PDF reader", () => {
 			semanticLabel: "寮曠敤",
 			semanticStyle: "highlight",
 		});
+		restoreCanvas();
+	});
+
+	it("undoes and redoes a newly created PDF text annotation from the tools rail", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
+			?.click();
+
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation")).toHaveLength(1);
+		});
+		const undoButton = view.contentEl.querySelector<HTMLButtonElement>(
+			'[data-weave-pdf-action="undo-annotation"]'
+		);
+		const redoButton = view.contentEl.querySelector<HTMLButtonElement>(
+			'[data-weave-pdf-action="redo-annotation"]'
+		);
+		expect(undoButton).toBeTruthy();
+		expect(redoButton).toBeTruthy();
+		expect(undoButton!.disabled).toBe(false);
+		expect(redoButton!.disabled).toBe(true);
+
+		adapter.write.mockClear();
+		undoButton!.click();
+
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation")).toHaveLength(0);
+		});
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		expect(undoButton!.disabled).toBe(true);
+		expect(redoButton!.disabled).toBe(false);
+		const undoPayload = getLastPdfTextAnnotationsPayload(adapter).payload;
+		expect(undoPayload.annotations).toHaveLength(0);
+
+		adapter.write.mockClear();
+		redoButton!.click();
+
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation")).toHaveLength(1);
+		});
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		expect(undoButton!.disabled).toBe(false);
+		expect(redoButton!.disabled).toBe(true);
+		const redoPayload = getLastPdfTextAnnotationsPayload(adapter).payload;
+		expect(redoPayload.annotations).toHaveLength(1);
+		expect(redoPayload.annotations[0]).toMatchObject({
+			text: "Hello",
+			semanticId: "quote",
+		});
+		restoreCanvas();
+	});
+
+	it("writes and opens the PDF annotation markdown note from the tools rail", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, files, noteLeaf } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
+			?.click();
+		await vi.waitFor(() => {
+			expect(files.size).toBeGreaterThan(0);
+		});
+
+		const button = view.contentEl.querySelector<HTMLButtonElement>(
+			'[data-weave-pdf-action="open-annotation-note"]'
+		);
+		expect(button).toBeTruthy();
+		expect(button?.getAttribute("aria-label")).toBe("\u6807\u6ce8\u7b14\u8bb0");
+		button?.click();
+
+		await vi.waitFor(() => {
+			expect(noteLeaf.openFile).toHaveBeenCalled();
+		});
+		const { path, markdown } = getLastPdfAnnotationMarkdown(files);
+		expect(path).toMatch(/^weave\/pdf-data\/books\/pdf-book-[a-z0-9]+\/annotations\.md$/);
+		expect(markdown).toContain("# duboule-page - PDF \u6807\u6ce8\u7b14\u8bb0");
+		expect(markdown).toContain("Hello");
+		expect(markdown).toContain('data-annotation-id="');
+		expect(markdown).toContain('data-page-number="1"');
+		expect(noteLeaf.openFile).toHaveBeenCalledWith(
+			expect.objectContaining({ path }),
+			{ active: true, state: { mode: "preview" } }
+		);
 		restoreCanvas();
 	});
 
@@ -1719,6 +1863,58 @@ describe("PdfView custom PDF reader", () => {
 		const focusFrame = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation-focus");
 		expect(focusFrame).toBeTruthy();
 		expect(focusFrame?.dataset.annotationId).toBe(state.pdf.annotations[0].id);
+		restoreCanvas();
+	});
+
+	it("navigates to a PDF text annotation when annotationId is provided in the view state", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).endsWith("/annotations.json")
+		);
+		adapter.read.mockResolvedValue(
+			JSON.stringify({
+				format: "weave-reader-pdf-annotations/v1",
+				version: 1,
+				bookId: "pdf-book-demo",
+				sourcePath: "Books/duboule-page.pdf",
+				pageCount: 1,
+				annotations: [
+					{
+						id: "loaded-pdf-annotation",
+						pageNumber: 1,
+						kind: "highlight",
+						color: "#14B8A6",
+						text: "Loaded annotation",
+						rects: [{ x: 0.1, y: 0.2, width: 0.25, height: 0.05 }],
+						createdAt: 1,
+					},
+				],
+				updatedAt: 1,
+			})
+		);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(view.contentEl.querySelector(".weave-pdf-text-annotation-focus")).toBeNull();
+
+		await view.setState(
+			{
+				filePath: "Books/duboule-page.pdf",
+				annotationId: "loaded-pdf-annotation",
+				pageNumber: 1,
+			},
+			null
+		);
+
+		const focusFrame = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation-focus");
+		expect(focusFrame).toBeTruthy();
+		expect(focusFrame?.dataset.annotationId).toBe("loaded-pdf-annotation");
 		restoreCanvas();
 	});
 
