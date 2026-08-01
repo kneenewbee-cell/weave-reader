@@ -77,7 +77,10 @@
 		resolveEpubPortableBookDataLocation,
 		shouldUsePortableAnnotationMutationForHighlight,
 	} from '../../services/epub/epub-portable-data-location';
-	import { findOpenAnnotationNoteLeaf } from '../../services/epub/open-annotation-note-file';
+	import {
+		findOpenAnnotationNoteLeaf,
+		openAnnotationNoteFileWithExistingLeaf,
+	} from '../../services/epub/open-annotation-note-file';
 	import {
 		EpubAnnotationUndoStack,
 		type EpubAnnotationUndoPatch,
@@ -132,9 +135,22 @@
 	import { buildEpubMarkdownLocateCandidates } from '../../services/ui/source-locate-candidates';
 	import type { AIConfigHost } from '../../services/ai/ai-host';
 	import {
+		ensureEpubAiReadingNote,
+		EPUB_AI_READING_REQUEST_EVENT,
+	} from '../../services/epub/epub-ai-reading';
+	import {
 		buildEpubAiReadingSourceBlocksFromParagraphs,
 		filterReaderParagraphsForAiReadingDraft,
+		formatEpubAiReadingSourceReferenceTitle,
+		type BuildEpubAiReadingSourceBlockOptions,
+		type EpubAiReadingSourceBlock,
 	} from '../../services/epub/epub-ai-reading-source-blocks';
+	import {
+		attachSourceBlockIdsToCloseReadingUnit,
+		buildEpubAiReadingCloseReadingUnits,
+		formatEpubAiReadingUnitSourceBlockId,
+		type EpubAiReadingCloseReadingUnit,
+	} from '../../services/epub/epub-ai-reading-close-reading-units';
 	import { attachExternalHighlightSyncReload } from './external-highlight-sync-reload';
 	import {
 		attachEpubCardHighlightSyncBridge,
@@ -180,6 +196,7 @@
 			updateReaderSettings: (patch: Partial<EpubReaderSettings>) => Promise<void>;
 			setScreenshotSaveMode: (saveAsImage: boolean) => void;
 			navigateToCfi: (cfi: string, linkTextHint?: string) => void;
+			navigateToBookLocate: (nav: BookLocateIntent) => void;
 			toggleTutorial: () => void;
 			addBookmark: () => Promise<void>;
 			openAiReading: () => Promise<void>;
@@ -4851,7 +4868,26 @@
 		return link.endsWith(']]') ? `${link.slice(0, -2)}|${normalizedAlias}]]` : link;
 	}
 
-	function buildAiReadingParagraphSourceLink(paragraph: ReaderParagraph, blockId: string): string {
+	function formatAiReadingSourceExcerptId(blockId: string): string | undefined {
+		const normalized = String(blockId || '').trim().replace(/[^A-Za-z0-9_-]+/g, '-');
+		return normalized ? `ai-source-${normalized}` : undefined;
+	}
+
+	function buildAiReadingParagraphSourceLink(
+		paragraph: ReaderParagraph,
+		blockId: string,
+		headingPath?: string[]
+	): string {
+		const sourceTitle = formatEpubAiReadingSourceReferenceTitle({
+			id: blockId,
+			headingPath:
+				headingPath && headingPath.length > 0
+					? headingPath
+					: paragraph.chapterTitle
+						? [paragraph.chapterTitle]
+						: [],
+			chapterTitle: paragraph.chapterTitle,
+		});
 		const link = linkService.buildEpubLink(
 			filePath,
 			paragraph.cfiRange,
@@ -4859,7 +4895,16 @@
 			paragraph.chapterIndex,
 			paragraph.chapterTitle,
 			undefined,
-			book?.sourceId
+			book?.sourceId,
+			formatAiReadingSourceExcerptId(blockId),
+			{
+				includeText: false,
+				includeChapter: false,
+				preferCompactLocator: true,
+				flashStyle: 'highlight',
+				flashColor: 'yellow',
+				sourceTitle,
+			}
 		);
 		return replaceWikilinkAlias(link, blockId);
 	}
@@ -4916,7 +4961,20 @@
 		return lines.filter(Boolean).join('\n');
 	}
 
-	async function buildAiReadingSourceBlocksForDraft(draft: EpubChapterReadingPointDraft) {
+	type AiReadingSourceBlockBuildOptions = Pick<
+		BuildEpubAiReadingSourceBlockOptions,
+		'headingPath' | 'idForIndex' | 'maxBlocks'
+	>;
+
+	interface AiReadingCloseReadingUnitSources {
+		closeReadingUnits: EpubAiReadingCloseReadingUnit[];
+		sourceBlocks: EpubAiReadingSourceBlock[];
+	}
+
+	async function buildAiReadingSourceBlocksForDraft(
+		draft: EpubChapterReadingPointDraft,
+		options: AiReadingSourceBlockBuildOptions = {}
+	) {
 		if (typeof readerService.getParagraphsForChapter !== 'function' || draft.chapterIndex < 0) {
 			return [];
 		}
@@ -4929,14 +4987,73 @@
 				draft.markdown || draft.text
 			);
 			return buildEpubAiReadingSourceBlocksFromParagraphs(scopedParagraphs, {
-				maxBlocks: EPUB_AI_READING_SOURCE_BLOCK_LIMIT,
+				maxBlocks: options.maxBlocks ?? EPUB_AI_READING_SOURCE_BLOCK_LIMIT,
+				headingPath: options.headingPath,
+				idForIndex: options.idForIndex,
 				sourceLinkForParagraph: (paragraph, blockId) =>
-					buildAiReadingParagraphSourceLink(paragraph, blockId),
+					buildAiReadingParagraphSourceLink(paragraph, blockId, options.headingPath),
 			});
 		} catch (error) {
 			logger.warn('[EpubReaderApp] Failed to build AI reading source blocks:', error);
 			return [];
 		}
+	}
+
+	async function buildAiReadingCloseReadingUnitSources(
+		scope: EpubAiReadingScopeSelection,
+		flatTocItems: FlatTocExportItem[]
+	): Promise<AiReadingCloseReadingUnitSources | null> {
+		if (
+			scope.kind !== 'toc' ||
+			typeof scope.flatIndex !== 'number' ||
+			!readerService.getTocChapterReadingPointDraft
+		) {
+			return null;
+		}
+		const units = buildEpubAiReadingCloseReadingUnits(flatTocItems, {
+			label: scope.label,
+			pathLabels: scope.pathLabels,
+			href: scope.href,
+			includeDescendants: scope.includeDescendants,
+			flatIndex: scope.flatIndex,
+			endFlatIndex: scope.endFlatIndex,
+		});
+		if (units.length === 0) {
+			return null;
+		}
+
+		const sourceBlocks: EpubAiReadingSourceBlock[] = [];
+		const closeReadingUnits: EpubAiReadingCloseReadingUnit[] = [];
+		for (const unit of units) {
+			try {
+				const draft = await readerService.getTocChapterReadingPointDraft(
+					unit.href,
+					unit.label,
+					flatTocItems,
+					unit.flatIndex
+				);
+				if (!draft?.text?.trim()) {
+					closeReadingUnits.push(attachSourceBlockIdsToCloseReadingUnit(unit, []));
+					continue;
+				}
+				const unitBlocks = await buildAiReadingSourceBlocksForDraft(draft, {
+					headingPath: unit.pathLabels,
+					idForIndex: (index) => formatEpubAiReadingUnitSourceBlockId(unit.id, index),
+				});
+				sourceBlocks.push(...unitBlocks);
+				closeReadingUnits.push(
+					attachSourceBlockIdsToCloseReadingUnit(
+						unit,
+						unitBlocks.map((block) => block.id)
+					)
+				);
+			} catch (error) {
+				logger.warn('[EpubReaderApp] Failed to build AI reading unit source:', error);
+				closeReadingUnits.push(attachSourceBlockIdsToCloseReadingUnit(unit, []));
+			}
+		}
+
+		return { closeReadingUnits, sourceBlocks };
 	}
 
 	function formatTimestamp(date: Date): string {
@@ -5443,7 +5560,7 @@
 		}
 	}
 
-	async function openAiReading() {
+	async function openAiReading(options: { initialScopeIds?: string[] } = {}) {
 		try {
 			if (!book) {
 				new Notice(t('epub.reader.bookNotReady'));
@@ -5501,7 +5618,10 @@
 					tocItems,
 				},
 				tocItems,
-				initialScopeIds: resolveDefaultEpubAiReadingScopeIds(tocItems, chapterHref),
+				initialScopeIds:
+					options.initialScopeIds && options.initialScopeIds.length > 0
+						? options.initialScopeIds
+						: resolveDefaultEpubAiReadingScopeIds(tocItems, chapterHref),
 				resolveScopedInput: async (scope) => {
 					let draft: EpubChapterReadingPointDraft | null = null;
 					if (
@@ -5529,7 +5649,11 @@
 						new Notice(t('epub.reader.chapterExtractFailed'));
 						return null;
 					}
-					const sourceBlocks = await buildAiReadingSourceBlocksForDraft(draft);
+					const unitSources = await buildAiReadingCloseReadingUnitSources(scope, flatTocItems);
+					const sourceBlocks =
+						unitSources?.sourceBlocks.length
+							? unitSources.sourceBlocks
+							: await buildAiReadingSourceBlocksForDraft(draft);
 					return {
 						filePath,
 						bookTitle: book.metadata.title,
@@ -5540,6 +5664,9 @@
 						chapterMarkdown: draft.markdown,
 						tocItems,
 						sourceBlocks,
+						closeReadingUnits: unitSources?.sourceBlocks.length
+							? unitSources.closeReadingUnits
+							: [],
 						scope: {
 							label: scope.label,
 							pathLabels: scope.pathLabels,
@@ -5561,6 +5688,44 @@
 			logger.error('[EpubReaderApp] Failed to open AI reading:', error);
 			new Notice(`AI阅读打开失败：${error instanceof Error ? error.message : String(error)}`);
 		}
+	}
+
+	async function openAiReadingNote() {
+		try {
+			if (!book) {
+				new Notice(t('epub.reader.bookNotReady'));
+				return;
+			}
+			const noteFile = await ensureEpubAiReadingNote(app, {
+				bookTitle: book.metadata.title,
+				filePath,
+			});
+			await openAnnotationNoteFileWithExistingLeaf(app, noteFile, {
+				openMode: 'existing',
+				focus: true,
+			});
+		} catch (error) {
+			logger.error('[EpubReaderApp] Failed to open AI reading note:', error);
+			new Notice(`AI阅读笔记打开失败：${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	function handleAiReadingRequestEvent(event: Event) {
+		const detail =
+			(event as CustomEvent<{ filePath?: unknown; scopeIds?: unknown }>).detail || {};
+		const requestedPath = normalizePath(String(detail.filePath || '').trim());
+		const requestedScopeIds = Array.isArray(detail.scopeIds)
+			? detail.scopeIds.map((value) => String(value || '').trim()).filter(Boolean)
+			: [];
+		const currentPath = normalizePath(String(filePath || '').trim());
+		if (
+			!requestedPath ||
+			!currentPath ||
+			(requestedPath !== currentPath && !epubVaultPathsReferToSameBook(requestedPath, currentPath))
+		) {
+			return;
+		}
+		void openAiReading({ initialScopeIds: requestedScopeIds });
 	}
 
 	async function exportChapterMarkedDraftToMarkdown(
@@ -7851,6 +8016,7 @@
 			}
 		};
 		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, handleDualWindowAnnotation);
+		window.addEventListener(EPUB_AI_READING_REQUEST_EVENT, handleAiReadingRequestEvent);
 		const canvasDirectionRef = app.workspace.on(
 			WEAVE_EPUB_CANVAS_LAYOUT_DIRECTION_EVENT,
 			(payload: WeaveEpubCanvasLayoutDirectionPayload) => {
@@ -7968,9 +8134,11 @@
 			updateReaderSettings,
 			setScreenshotSaveMode: (saveAsImage: boolean) => { screenshotSaveAsImage = saveAsImage; },
 			navigateToCfi,
+			navigateToBookLocate: requestBookLocate,
 			toggleTutorial,
 			addBookmark,
 			openAiReading,
+			openAiReadingNote,
 			canUseReadingProgress: hasReadingProgressCapability,
 			canUseReadingReference: hasReadingReferenceCapability,
 			canUseParagraphMode: hasParagraphModeCapability,
@@ -8031,6 +8199,7 @@
 			window.removeEventListener(EPUB_ANNOTATION_VERSION_CHANGED_EVENT, handleAnnotationVersionChanged);
 			window.removeEventListener(EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT, handleAnnotationCompareContextChanged);
 			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, handleDualWindowAnnotation);
+			window.removeEventListener(EPUB_AI_READING_REQUEST_EVENT, handleAiReadingRequestEvent);
 			componentDisposed = true;
 			closeAnnotationDisambiguation();
 			getBookSessionManager(app).releaseIfNoOpenLeaves(app, filePath);

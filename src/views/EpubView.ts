@@ -48,6 +48,7 @@ import type { CanvasLayoutDirection } from "../services/epub/canvas-types";
 import { resolveRecentEpubPath } from "../utils/epub-leaf-utils";
 import {
 	pendingLocateFromLegacyState,
+	type BookLocateIntent,
 	type PendingLocateState,
 } from "../services/navigation/navigation-intent";
 import type { CanvasViewLike, WorkspaceLeafWithGroup } from "../types/obsidian-extensions";
@@ -151,9 +152,11 @@ export class EpubView extends ItemView {
 		updateReaderSettings?: (patch: Partial<EpubReaderSettings>) => Promise<void>;
 		setScreenshotSaveMode?: (saveAsImage: boolean) => void;
 		navigateToCfi?: (cfi: string, linkTextHint?: string) => void;
+		navigateToBookLocate?: (nav: BookLocateIntent) => void;
 		toggleTutorial?: () => void;
 		openAnnotationVersions?: () => Promise<void>;
 		openAiReading?: () => Promise<void>;
+		openAiReadingNote?: () => Promise<void>;
 		addBookmark?: () => Promise<void>;
 		canUseReadingProgress?: () => boolean;
 		canUseReadingReference?: () => boolean;
@@ -412,8 +415,8 @@ export class EpubView extends ItemView {
 		}
 
 		const registerExcerptHeaderActions = () => {
-			this.annotationNoteBtn = this.addAction("notebook-pen", this.t("views.epubView.label.annotationNote"), () => {
-				void this.actionHandlers.openAnnotationNote?.();
+			this.annotationNoteBtn = this.addAction("notebook-tabs", "笔记", (evt) => {
+				this.openNotesMenu(evt);
 			});
 			this.annotationVersionsBtn = this.addAction("layers-3", "标注版本", () => {
 				void this.actionHandlers.openAnnotationVersions?.();
@@ -518,7 +521,7 @@ export class EpubView extends ItemView {
 		const excerptSettings = this.actionHandlers.getExcerptSettings?.();
 		const readerSettings = this.actionHandlers.getReaderSettings?.();
 
-		this.appendAiReadingPaneMenu(menu);
+		this.appendNotesPaneMenu(menu);
 
 		this.appendDualWindowPaneMenu(menu);
 
@@ -570,18 +573,50 @@ export class EpubView extends ItemView {
 		}
 	}
 
-	private appendAiReadingPaneMenu(menu: Menu): void {
-		if (!this.actionHandlers.openAiReading) {
+	private appendNotesMenuItems(menu: Menu): boolean {
+		let hasItems = false;
+		if (this.actionHandlers.openAnnotationNote) {
+			menu.addItem((item) => {
+				item.setTitle("打开标注笔记");
+				item.setIcon("notebook-pen");
+				item.onClick(() => {
+					void this.actionHandlers.openAnnotationNote?.();
+				});
+			});
+			hasItems = true;
+		}
+		if (this.actionHandlers.openAiReadingNote) {
+			menu.addItem((item) => {
+				item.setTitle("打开 AI 阅读笔记");
+				item.setIcon("sparkles");
+				item.onClick(() => {
+					void this.actionHandlers.openAiReadingNote?.();
+				});
+			});
+			hasItems = true;
+		}
+		return hasItems;
+	}
+
+	private appendNotesPaneMenu(menu: Menu): void {
+		if (!this.actionHandlers.openAnnotationNote && !this.actionHandlers.openAiReadingNote) {
 			return;
 		}
 		menu.addItem((item) => {
-			item.setTitle("AI阅读");
-			item.setIcon("sparkles");
-			item.onClick(() => {
-				void this.actionHandlers.openAiReading?.();
-			});
+			item.setTitle("笔记");
+			item.setIcon("notebook-tabs");
+			const notesMenu = this.resolveMenuSubmenu(item, menu);
+			this.appendNotesMenuItems(notesMenu);
 		});
 		menu.addSeparator();
+	}
+
+	private openNotesMenu(evt: MouseEvent | Event): void {
+		const menu = new Menu();
+		if (!this.appendNotesMenuItems(menu)) {
+			return;
+		}
+		menu.showAtMouseEvent(evt as MouseEvent);
 	}
 
 	private appendDualWindowPaneMenu(menu: Menu): void {
@@ -1348,10 +1383,10 @@ export class EpubView extends ItemView {
 			}
 		);
 		this.inlineAnnotationNoteBtn = this.appendInlineActionButton(
-			"notebook-pen",
-			this.t("views.epubView.label.annotationNote"),
-			() => {
-				void this.actionHandlers.openAnnotationNote?.();
+			"notebook-tabs",
+			"笔记",
+			(evt) => {
+				this.openNotesMenu(evt);
 			}
 		);
 		this.inlineAnnotationVersionsBtn = this.appendInlineActionButton(
@@ -1806,6 +1841,10 @@ export class EpubView extends ItemView {
 		this.pendingCfi = "";
 		this.pendingText = "";
 		if (!pending) {
+			return;
+		}
+		if (this.actionHandlers.navigateToBookLocate) {
+			this.actionHandlers.navigateToBookLocate(pending);
 			return;
 		}
 		const cfi = pending.cfi || pending.href || "";
@@ -2468,8 +2507,11 @@ export class EpubView extends ItemView {
 	}
 
 	private updateAnnotationNoteBtn(): void {
-		const label = this.t("views.epubView.label.annotationNote");
-		const visible = Boolean(this.filePath && this.actionHandlers.openAnnotationNote);
+		const label = "笔记";
+		const visible = Boolean(
+			this.filePath &&
+				(this.actionHandlers.openAnnotationNote || this.actionHandlers.openAiReadingNote)
+		);
 		this.applyActionButtonState(this.annotationNoteBtn, {
 			label,
 			active: false,

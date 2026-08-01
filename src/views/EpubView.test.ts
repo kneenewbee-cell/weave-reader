@@ -174,6 +174,35 @@ describe('EpubView', () => {
 		expect(navigateToCfi).not.toHaveBeenCalled();
 	});
 
+	it('forwards pending locate metadata to an already mounted reader', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		(view as any).pendingLocate = {
+			cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:9)',
+			text: 'demo excerpt',
+			flashStyle: 'highlight',
+			flashColor: 'yellow',
+			showLocateOverlay: true,
+		};
+		const navigateToBookLocate = vi.fn();
+		const navigateToCfi = vi.fn();
+		(view as any).actionHandlers = {
+			navigateToBookLocate,
+			navigateToCfi,
+		};
+
+		(view as any).flushPendingLocateToReader();
+
+		expect(navigateToBookLocate).toHaveBeenCalledWith({
+			cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:9)',
+			text: 'demo excerpt',
+			flashStyle: 'highlight',
+			flashColor: 'yellow',
+			showLocateOverlay: true,
+		});
+		expect(navigateToCfi).not.toHaveBeenCalled();
+		expect((view as any).pendingLocate).toBeNull();
+	});
+
 	it('shows canvas direction button via class toggle instead of inline display:none', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		(view as any).actionHandlers = {
@@ -293,19 +322,22 @@ describe('EpubView', () => {
 		expect((view as any).paragraphModeEnabled).toBe(false);
 	});
 
-	it('adds AI reading to the top level pane menu', () => {
+	it('adds annotation and AI reading notes to the notes pane menu', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
-		const openAiReading = vi.fn();
+		const openAnnotationNote = vi.fn();
+		const openAiReadingNote = vi.fn();
 		const items: Array<{
 			title?: string;
 			icon?: string;
 			click?: () => void;
+			subItems?: unknown[];
 			setTitle: (title: string) => unknown;
 			setIcon: (icon: string) => unknown;
 			setChecked: (checked: boolean) => unknown;
 			onClick: (callback: () => void) => unknown;
+			setSubmenu?: () => unknown;
 		}> = [];
-		const menu = {
+		const createMenu = () => ({
 			addSeparator: vi.fn(),
 			addItem: vi.fn((callback: (item: any) => void) => {
 				const item = {
@@ -324,21 +356,65 @@ describe('EpubView', () => {
 						this.click = click;
 						return this;
 					},
+					setSubmenu() {
+						const subItems: unknown[] = [];
+						this.subItems = subItems;
+						return {
+							addItem: (subCallback: (subItem: any) => void) => {
+								const subItem = {
+									setTitle(title: string) {
+										this.title = title;
+										return this;
+									},
+									setIcon(icon: string) {
+										this.icon = icon;
+										return this;
+									},
+									setChecked() {
+										return this;
+									},
+									onClick(click: () => void) {
+										this.click = click;
+										return this;
+									},
+								};
+								subItems.push(subItem);
+								subCallback(subItem);
+							},
+						};
+					},
 				};
 				items.push(item);
 				callback(item);
 			}),
-		};
+		});
+		const menu = createMenu();
 		(view as any).actionHandlers = {
-			openAiReading,
+			openAnnotationNote,
+			openAiReadingNote,
 		};
 
-		(view as any).appendAiReadingPaneMenu(menu);
+		(view as any).appendNotesPaneMenu(menu);
 
-		const aiMenuItem = items.find((item) => item.title === 'AI阅读');
-		expect(aiMenuItem?.icon).toBe('sparkles');
+		const notesMenuItem = items.find((item) => item.title === '笔记');
+		expect(notesMenuItem?.icon).toBe('notebook-tabs');
 		expect(menu.addSeparator).toHaveBeenCalled();
-		aiMenuItem?.click?.();
-		expect(openAiReading).toHaveBeenCalledOnce();
+		const subItems = (notesMenuItem?.subItems || []) as Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+		}>;
+		expect(subItems.map((item) => item.title)).toEqual([
+			'打开标注笔记',
+			'打开 AI 阅读笔记',
+		]);
+		expect(subItems.map((item) => item.icon)).toEqual([
+			'notebook-pen',
+			'sparkles',
+		]);
+		subItems[0]?.click?.();
+		subItems[1]?.click?.();
+		expect(openAnnotationNote).toHaveBeenCalledOnce();
+		expect(openAiReadingNote).toHaveBeenCalledOnce();
 	});
 });

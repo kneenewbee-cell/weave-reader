@@ -4,8 +4,10 @@ import type { App } from "obsidian";
 import type { TocItem } from "../types";
 import {
 	buildEpubAiReadingMessages,
+	buildEpubAiReadingEmptyNoteMarkdown,
 	buildEpubAiReadingNoteMarkdown,
 	buildEpubAiReadingNoteSection,
+	ensureEpubAiReadingNote,
 	extractKimiChatCompletionText,
 	parseEpubAiReadingEnv,
 	requestEpubAiReading,
@@ -195,6 +197,75 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).not.toContain("[P001]");
 		expect(messages.user).toContain("\u4e0d\u8981\u8f93\u51fa H1");
 		expect(messages.user).not.toContain("## \u672c\u7ae0\u6458\u8981");
+	});
+
+	it("requires AI to close-read every closeReadingUnit without merging units", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex-cookbook.epub",
+			chapterTitle: "第五章：图像处理",
+			chapterHref: "OEBPS/B21326_05.xhtml",
+			chapterText: "操作指南正文。\n\n运行原理正文。",
+			tocItems,
+			scope: {
+				label: "第五章：图像处理 > 全部",
+				pathLabels: ["第五章：图像处理", "全部"],
+				includeDescendants: true,
+				flatIndex: 0,
+				endFlatIndex: 2,
+			},
+			closeReadingUnits: [
+				{
+					id: "U016",
+					label: "操作指南",
+					href: "OEBPS/B21326_05.xhtml#how",
+					pathLabels: ["第五章：图像处理", "图像对齐", "操作指南"],
+					flatIndex: 16,
+					depth: 2,
+					sourceBlockIds: ["U016.P001", "U016.P002"],
+				},
+				{
+					id: "U017",
+					label: "运行原理",
+					href: "OEBPS/B21326_05.xhtml#why",
+					pathLabels: ["第五章：图像处理", "图像对齐", "运行原理"],
+					flatIndex: 17,
+					depth: 2,
+					sourceBlockIds: ["U017.P001"],
+				},
+			],
+			sourceBlocks: [
+				{
+					id: "U016.P001",
+					chapterHref: "OEBPS/B21326_05.xhtml",
+					headingPath: ["第五章：图像处理", "图像对齐", "操作指南"],
+					text: "操作指南正文。",
+					kind: "paragraph",
+				},
+			],
+		});
+
+		expect(messages.user).toContain("# 必须精析单元");
+		expect(messages.user).toContain("U016 第五章：图像处理 > 图像对齐 > 操作指南");
+		expect(messages.user).toContain("U017 第五章：图像处理 > 图像对齐 > 运行原理");
+		expect(messages.user).toContain("不得合并 U 单元");
+		expect(messages.user).toContain("不得跳过 U 单元");
+		expect(messages.user).toContain("单个 U 单元标准精析模板");
+		expect(messages.user).toContain(
+			"无论用户选择最低级小节、二级范围、一级章节还是更大范围",
+		);
+		expect(messages.user).toContain(
+			"必须执行与单独选择该 U 单元时相同的标准精析模板",
+		);
+		expect(messages.user).toContain("大范围不是压缩摘要版");
+		expect(messages.user).toContain("小节摘要：2-4 句");
+		expect(messages.user).toContain("核心结论：3-6 条");
+		expect(messages.user).toContain("关键知识点：4-8 条");
+		expect(messages.user).toContain("重要原文与解读：3-6 处");
+		expect(messages.user).toContain("容易误解的点：2-4 条");
+		expect(messages.user).toContain("与上下文关系：1-3 条");
+		expect(messages.user).toContain("引用 Uxxx.Pyyy");
+		expect(messages.user).toContain("[U016.P001]");
 	});
 
 	it("plans chapter-scale AI reading output without the legacy 4096 cap", () => {
@@ -783,12 +854,78 @@ describe("epub-ai-reading", () => {
 		);
 
 		expect(result.content).toContain(
-			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
+			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|原文]]",
 		);
 		expect(result.sourceBlocks).toEqual(sourceBlocks);
 		expect(buildEpubAiReadingNoteSection(result)).toContain(
-			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|段001]]",
+			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|原文]]",
 		);
+	});
+
+	it("passes close-reading units through request results and generated notes", async () => {
+		const requester = vi.fn(async () => ({
+			json: {
+				choices: [
+					{
+						message: {
+							content: "## 按小节精读\n### U016 操作指南\n重点 [U016.P001]",
+						},
+					},
+				],
+			},
+		}));
+		const closeReadingUnits = [
+			{
+				id: "U016",
+				label: "操作指南",
+				href: "OEBPS/B21326_05.xhtml#how",
+				pathLabels: ["第五章：图像处理", "图像对齐", "操作指南"],
+				flatIndex: 16,
+				depth: 2,
+				sourceBlockIds: ["U016.P001"],
+			},
+		];
+
+		const result = await requestEpubAiReading(
+			{
+				bookTitle: "LaTeX Cookbook",
+				filePath: "Books/latex.epub",
+				chapterTitle: "第五章：图像处理",
+				chapterHref: "OEBPS/B21326_05.xhtml",
+				chapterText: "操作指南正文。",
+				tocItems,
+				closeReadingUnits,
+				sourceBlocks: [
+					{
+						id: "U016.P001",
+						chapterHref: "OEBPS/B21326_05.xhtml",
+						text: "操作指南正文。",
+						headingPath: ["第五章：图像处理", "图像对齐", "操作指南"],
+						kind: "paragraph",
+						sourceLink: "[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|U016.P001]]",
+					},
+				],
+			},
+			{
+				config: {
+					apiKey: "test-key",
+					baseUrl: "https://api.kimi.com/coding/v1",
+					model: "k3",
+				},
+				requester,
+				enableStreaming: false,
+				now: () => 1710000000000,
+			},
+		);
+		const noteSection = buildEpubAiReadingNoteSection(result);
+
+		expect(result.closeReadingUnits).toEqual(closeReadingUnits);
+		expect(result.content).toContain(
+			"[[Books/latex.epub#weave-cfi=epubcfi(/6/2)|原文]]",
+		);
+		expect(result.content).not.toContain("|U016.P001]]");
+		expect(noteSection).toContain("> 来源：原文，共 1 段 · 共 1 个精读单元");
+		expect(noteSection).toContain("U016 操作指南");
 	});
 
 	it("loads Kimi configuration from the plugin .env file at request time", async () => {
@@ -881,11 +1018,11 @@ describe("epub-ai-reading", () => {
 		expect(note).toContain("## 第一章 注意力");
 		expect(note).toContain("## 本章摘要");
 		expect(note).toContain("信息环境会消耗注意力");
-		expect(note).toContain("obsidian://weave-reader?book=demo");
+		expect(note).toContain("[打开原文](obsidian://weave-reader?book=demo)");
 		expect(requester).toHaveBeenCalledOnce();
 	});
 
-	it("builds a note section with a stable chapter marker and source link", () => {
+	it("builds a compact note section with a stable chapter marker and source link", () => {
 		const markdown = buildEpubAiReadingNoteSection({
 			bookTitle: "认知之书",
 			filePath: "Books/demo.epub",
@@ -899,7 +1036,10 @@ describe("epub-ai-reading", () => {
 
 		expect(markdown).toContain("weave-epub-ai-reading:start");
 		expect(markdown).toContain("## 第一章 注意力");
-		expect(markdown).toContain("EPUB 跳转");
+		expect(markdown).toContain("> [!info] AI 阅读");
+		expect(markdown).toContain("> 原文：[打开原文](obsidian://weave-reader?book=demo)");
+		expect(markdown).not.toContain("EPUB 文件");
+		expect(markdown).not.toContain("章节 href");
 		expect(markdown).toContain("# 本章摘要");
 	});
 
@@ -917,6 +1057,95 @@ describe("epub-ai-reading", () => {
 		expect(markdown).toContain("weave-epub-ai-reading-note-root");
 		expect(markdown).toContain('data-source-file="Books/demo.epub"');
 		expect(markdown).toContain('data-scope-label="Chapter 1"');
+	});
+
+	it("indexes generated close-reading units so broad notes can be filtered by leaf scope", () => {
+		const markdown = buildEpubAiReadingNoteSection({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex.epub",
+			chapterTitle: "第六章：图形创作",
+			chapterHref: "Text/ch6.xhtml",
+			scope: {
+				label: "第六章：图形创作",
+				pathLabels: ["第六章：图形创作", "全部"],
+				href: "Text/ch6.xhtml",
+				includeDescendants: true,
+				flatIndex: 199,
+				endFlatIndex: 210,
+			},
+			closeReadingUnits: [
+				{
+					id: "U200",
+					label: "准备工作",
+					href: "Text/ch6.xhtml#prepare",
+					pathLabels: ["第六章：图形创作", "准备工作"],
+					flatIndex: 199,
+					depth: 2,
+					sourceBlockIds: ["U200.P001", "U200.P002"],
+				},
+				{
+					id: "U206",
+					label: "工作原理",
+					href: "Text/ch6.xhtml#principle",
+					pathLabels: ["第六章：图形创作", "绘制流程图", "工作原理"],
+					flatIndex: 205,
+					depth: 3,
+					sourceBlockIds: ["U206.P001"],
+				},
+			],
+			content: [
+				"## 范围摘要",
+				"整章总览。",
+				"## 按小节精读",
+				"## U200 第六章：图形创作 > 准备工作",
+				"准备工作细节。",
+				"## U206 第六章：图形创作 > 绘制流程图 > 工作原理",
+				"工作原理细节。",
+			].join("\n"),
+			model: "kimi-k3",
+			generatedAt: 1710000000000,
+		});
+
+		expect(markdown).toContain('data-scope-label="第六章：图形创作 &gt; 全部"');
+		expect(markdown).toContain('data-scope-label="第六章：图形创作 &gt; 准备工作"');
+		expect(markdown).toContain(
+			'data-scope-label="第六章：图形创作 &gt; 绘制流程图 &gt; 工作原理"',
+		);
+		expect(markdown).toContain('data-ai-unit-id="U200"');
+		expect(markdown).toContain('data-ai-unit-id="U206"');
+		expect(markdown.indexOf('data-ai-unit-id="U200"')).toBeGreaterThan(
+			markdown.indexOf("## U200"),
+		);
+		expect(markdown.indexOf('data-ai-unit-id="U206"')).toBeGreaterThan(
+			markdown.indexOf("## U206"),
+		);
+	});
+
+	it("builds an empty AI reading note with a start action", () => {
+		const markdown = buildEpubAiReadingEmptyNoteMarkdown({
+			bookTitle: "认知之书",
+			filePath: "Books/demo.epub",
+		});
+
+		expect(markdown).toContain("# 认知之书 - AI阅读");
+		expect(markdown).toContain("暂无 AI 阅读内容");
+		expect(markdown).toContain('data-weave-ai-reading-action="start"');
+		expect(markdown).toContain('data-source-file="Books/demo.epub"');
+		expect(markdown).toContain("weave-epub-ai-reading-empty:start");
+	});
+
+	it("creates an empty AI reading note before the first generated section exists", async () => {
+		const { app, files } = createMemoryApp();
+
+		const noteFile = await ensureEpubAiReadingNote(app, {
+			bookTitle: "认知之书",
+			filePath: "Books/demo.epub",
+		});
+
+		const note = files.get(noteFile.path) || "";
+		expect(noteFile.path).toBe("AI阅读笔记/认知之书 - AI阅读.md");
+		expect(note).toContain("暂无 AI 阅读内容");
+		expect(note).toContain('data-weave-ai-reading-action="start"');
 	});
 
 	it("writes scoped range and source-block diagnostics into note sections", () => {
@@ -963,10 +1192,13 @@ describe("epub-ai-reading", () => {
 		});
 
 		expect(markdown).toContain(
-			"> 阅读范围：Chapter 1 > Installing and using LaTeX > 全部",
+			"> 范围：Chapter 1 > Installing and using LaTeX > 全部",
 		);
-		expect(markdown).toContain("> 范围策略：包含该目录项及其下级目录正文");
-		expect(markdown).toContain("> 来源块：段001-段003，共 3 段");
+		expect(markdown).toContain(
+			"> 来源：共 3 段 · 包含该目录项及其下级目录正文",
+		);
+		expect(markdown).not.toContain("范围 href");
+		expect(markdown).not.toContain("来源块：段001");
 		expect(markdown).toContain("## 范围摘要");
 	});
 
@@ -1002,6 +1234,32 @@ describe("epub-ai-reading", () => {
 		const updated = files.get("AI阅读笔记/认知之书 - AI阅读.md") || "";
 		expect(updated).toContain("新结果");
 		expect(updated).not.toContain("旧结果");
+		expect(updated.match(/weave-epub-ai-reading:start/g)).toHaveLength(1);
+	});
+
+	it("removes the empty state when the first AI reading section is generated", async () => {
+		const emptyNote = buildEpubAiReadingEmptyNoteMarkdown({
+			bookTitle: "认知之书",
+			filePath: "Books/demo.epub",
+		});
+		const { app, files } = createMemoryApp({
+			"AI阅读笔记/认知之书 - AI阅读.md": emptyNote,
+		});
+
+		await upsertEpubAiReadingNote(app, {
+			bookTitle: "认知之书",
+			filePath: "Books/demo.epub",
+			chapterTitle: "第一章 注意力",
+			chapterHref: "text/chapter1.xhtml",
+			content: "第一段 AI 阅读结果",
+			model: "kimi-k3",
+			generatedAt: 1710000001000,
+		});
+
+		const updated = files.get("AI阅读笔记/认知之书 - AI阅读.md") || "";
+		expect(updated).not.toContain("暂无 AI 阅读内容");
+		expect(updated).not.toContain("weave-epub-ai-reading-empty:start");
+		expect(updated).toContain("第一段 AI 阅读结果");
 		expect(updated.match(/weave-epub-ai-reading:start/g)).toHaveLength(1);
 	});
 

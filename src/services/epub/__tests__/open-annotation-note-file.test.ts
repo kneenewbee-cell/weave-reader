@@ -59,7 +59,10 @@ describe("openAnnotationNoteFileWithExistingLeaf", () => {
 		const result = await openAnnotationNoteFileWithExistingLeaf(app, noteFile);
 
 		expect(result).toBe(existingLeaf);
-		expect(existingLeaf.openFile).not.toHaveBeenCalled();
+		expect(existingLeaf.openFile).toHaveBeenCalledWith(noteFile, {
+			active: true,
+			state: { mode: "preview" },
+		});
 		expect(app.workspace.getLeaf).not.toHaveBeenCalled();
 		expect(app.workspace.setActiveLeaf).toHaveBeenCalledWith(existingLeaf, { focus: true });
 		expect(app.workspace.revealLeaf).toHaveBeenCalledWith(existingLeaf);
@@ -86,7 +89,10 @@ describe("openAnnotationNoteFileWithExistingLeaf", () => {
 		const result = await openAnnotationNoteFileWithExistingLeaf(app, noteFile);
 
 		expect(result).toBe(existingLeaf);
-		expect(existingLeaf.openFile).not.toHaveBeenCalled();
+		expect(existingLeaf.openFile).toHaveBeenCalledWith(noteFile, {
+			active: true,
+			state: { mode: "preview" },
+		});
 		expect(app.workspace.getLeaf).not.toHaveBeenCalled();
 	});
 

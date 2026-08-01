@@ -83,6 +83,37 @@ describe("NavigationHub", () => {
 		expect(openBookForSourceNavigationMock).not.toHaveBeenCalled();
 	});
 
+	it("keeps source flash color in pending book locate state", async () => {
+		const hub = new NavigationHub(app);
+		const result = await hub.navigate({
+			kind: "book",
+			resourcePath: "Books/demo.epub",
+			locate: {
+				cfi: "epubcfi(/6/2)",
+				text: "Hello",
+				flashStyle: "highlight",
+				flashColor: "yellow",
+			},
+			policy: { reuseLeaf: true, focus: true },
+		});
+
+		expect(result.success).toBe(true);
+		expect(openEpubInPreferredLeafMock).toHaveBeenCalledWith(
+			app,
+			"Books/demo.epub",
+			expect.objectContaining({
+				pendingLocate: {
+					cfi: "epubcfi(/6/2)",
+					href: undefined,
+					text: "Hello",
+					flashStyle: "highlight",
+					flashColor: "yellow",
+					showLocateOverlay: undefined,
+				},
+			}),
+		);
+	});
+
 	it("uses preferred leaf policy for bookshelf-style opens", async () => {
 		const hub = new NavigationHub(app);
 		await hub.navigate({

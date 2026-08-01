@@ -188,6 +188,10 @@ export interface EpubWeaveOfficialAPI {
 }
 
 const EPUB_HOST_CAPABILITY_KEYS: Array<keyof EpubHostCapabilities> = [
+	"getEpubStorageService",
+	"loadPublicationTocItems",
+	"navigateToPublicationChapter",
+	"buildPublicationChapterMarkdownLink",
 	"openEpubReader",
 	"hasEpubPremiumAccess",
 	"openEpubPremiumSettings",
@@ -259,8 +263,20 @@ function getLegacyHost(app: App): EpubHostCapabilities | null {
 function listEpubHostCandidates(app: App): EpubHostCapabilities[] {
 	const candidates = [
 		registeredEpubHosts.get(app) ?? null,
-		getRuntimePluginHost(app),
-		getLegacyHost(app),
+		(() => {
+			try {
+				return getRuntimePluginHost(app);
+			} catch {
+				return null;
+			}
+		})(),
+		(() => {
+			try {
+				return getLegacyHost(app);
+			} catch {
+				return null;
+			}
+		})(),
 	].filter((host): host is EpubHostCapabilities => Boolean(host));
 
 	const uniqueHosts: EpubHostCapabilities[] = [];

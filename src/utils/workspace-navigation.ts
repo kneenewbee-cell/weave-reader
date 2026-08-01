@@ -32,7 +32,11 @@ function collectAllLeaves(app: App): WorkspaceLeaf[] {
 export function findLeafByFile(app: App, file: TFile): WorkspaceLeaf | null {
 	for (const leaf of collectAllLeaves(app)) {
 		const leafFile = getLeafViewFile(leaf);
-		if (leafFile?.path === file.path) {
+		const leafFilePath =
+			leafFile?.path ||
+			((leaf.view as { file?: { path?: unknown } } | undefined)?.file?.path as string | undefined) ||
+			"";
+		if (leafFilePath === file.path) {
 			return leaf;
 		}
 	}
@@ -116,6 +120,9 @@ export async function openFileWithExistingLeaf(
 
 	const existingLeaf = findLeafByFile(app, file);
 	if (existingLeaf) {
+		if (openState && typeof existingLeaf.openFile === "function") {
+			await existingLeaf.openFile(file, { active: focus, state: openState });
+		}
 		revealLeaf(app, existingLeaf, focus);
 		return existingLeaf;
 	}

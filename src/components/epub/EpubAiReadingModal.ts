@@ -16,6 +16,10 @@ import {
 	type EpubAiReadingResult,
 } from "../../services/epub/epub-ai-reading";
 import {
+	formatEpubAiReadingSourceReferenceTitle,
+	type EpubAiReadingSourceBlock,
+} from "../../services/epub/epub-ai-reading-source-blocks";
+import {
 	buildEpubAiReadingScopeLevels,
 	getEpubAiReadingScopeSessionKeyPart,
 	resolveDefaultEpubAiReadingScopeIds,
@@ -215,6 +219,51 @@ function findLatestUnsavedDraftKey(
 	return latestKey;
 }
 
+function extractWikilinkTarget(markup: string): string {
+	const normalized = String(markup || "").trim();
+	if (!normalized.startsWith("[[") || !normalized.endsWith("]]")) {
+		return normalized;
+	}
+	const inner = normalized.slice(2, -2);
+	return inner.split("|")[0]?.trim() || "";
+}
+
+function normalizeRenderedSourceHref(value: string): string {
+	return String(value || "")
+		.trim()
+		.replace(/&amp;/g, "&")
+		.replace(/^\.\//, "");
+}
+
+function decodeSourceHrefValue(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+}
+
+function extractSourceHrefParam(value: string, paramName: string): string {
+	const normalized = normalizeRenderedSourceHref(extractWikilinkTarget(value));
+	const escapedName = paramName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = normalized.match(new RegExp(`(?:[?&])${escapedName}=([^&|\\]]*)`));
+	return match?.[1] ? decodeSourceHrefValue(match[1]) : "";
+}
+
+function sourceHrefTargetsMatch(renderedHref: string, sourceLink: string): boolean {
+	const rendered = normalizeRenderedSourceHref(renderedHref);
+	const target = normalizeRenderedSourceHref(extractWikilinkTarget(sourceLink));
+	if (!rendered || !target) {
+		return false;
+	}
+	if (rendered === target) {
+		return true;
+	}
+	const renderedEid = extractSourceHrefParam(rendered, "eid");
+	const targetEid = extractSourceHrefParam(target, "eid");
+	return Boolean(renderedEid && targetEid && renderedEid === targetEid);
+}
+
 function getLatestUnsavedDraftExcept(
 	state: EpubAiReadingSessionState,
 	currentKey: string,
@@ -267,6 +316,9 @@ export class EpubAiReadingModal extends Modal {
 	private readonly handleDocumentDragEnd = (): void => {
 		this.stopModalDrag();
 	};
+	private readonly handleContentSourceLinkClick = (event: MouseEvent): void => {
+		this.handleRenderedSourceLinkClick(event);
+	};
 
 	constructor(app: App, options: EpubAiReadingModalOptions) {
 		super(app);
@@ -291,6 +343,16 @@ export class EpubAiReadingModal extends Modal {
 		this.contentEl.empty();
 		this.getModalHostEl()?.addClass("weave-epub-ai-reading-modal-host");
 		this.contentEl.addClass("weave-epub-ai-reading-modal");
+		this.contentEl.removeEventListener(
+			"click",
+			this.handleContentSourceLinkClick,
+			true,
+		);
+		this.contentEl.addEventListener(
+			"click",
+			this.handleContentSourceLinkClick,
+			true,
+		);
 		this.renderShell();
 		if (this.shouldShowScopeSelection()) {
 			const restorableSession = this.getLatestRestorableSessionForBook();
@@ -310,6 +372,11 @@ export class EpubAiReadingModal extends Modal {
 
 	onClose(): void {
 		this.getModalHostEl()?.removeClass("weave-epub-ai-reading-modal-host");
+		this.contentEl.removeEventListener(
+			"click",
+			this.handleContentSourceLinkClick,
+			true,
+		);
 		this.stopModalDrag();
 		this.detachGenerationSession();
 		this.releaseMarkdownRenderComponent();
@@ -417,10 +484,37 @@ export class EpubAiReadingModal extends Modal {
 			return;
 		}
 		if (session.result) {
-			this.setStatus(session.status || "已生成当前范围 AI 阅读结果。");
+			this.setStatus(
+				session.status ||
+					this.formatGeneratedStatus(
+						session.result,
+						"已生成当前范围 AI 阅读结果。",
+					),
+			);
 			await this.renderMarkdown(session.result.content);
 			this.renderActions();
 		}
+	}
+
+	private formatResultDiagnostics(result: EpubAiReadingResult): string {
+		const closeReadingUnitCount = result.closeReadingUnits?.length || 0;
+		const sourceBlockCount = result.sourceBlocks?.length || 0;
+		const parts: string[] = [];
+		if (closeReadingUnitCount > 0) {
+			parts.push(`精读单元 ${closeReadingUnitCount} 个`);
+		}
+		if (sourceBlockCount > 0) {
+			parts.push(`来源块 ${sourceBlockCount} 段`);
+		}
+		return parts.join("，");
+	}
+
+	private formatGeneratedStatus(
+		result: EpubAiReadingResult,
+		fallbackStatus: string,
+	): string {
+		const diagnostics = this.formatResultDiagnostics(result);
+		return diagnostics ? `${fallbackStatus}（${diagnostics}）` : fallbackStatus;
 	}
 
 	private renderShell(): void {
@@ -784,11 +878,11 @@ export class EpubAiReadingModal extends Modal {
 		bookKey: string,
 	): EpubAiReadingGenerationSession {
 		this.sessionState.generations.delete(sessionKey);
-		const session = {
+		const session: EpubAiReadingGenerationSession = {
 			key: sessionKey,
 			bookKey,
 			input,
-			state: "generating" as const,
+			state: "generating",
 			status: "正在提取所选范围并请求 Kimi 生成 AI 阅读结果...",
 			partialContent: "",
 			result: null,
@@ -819,7 +913,10 @@ export class EpubAiReadingModal extends Modal {
 			.then((result) => {
 				session.state = "result";
 				session.result = result;
-				session.status = "已生成当前范围 AI 阅读结果。";
+				session.status = this.formatGeneratedStatus(
+					result,
+					"已生成当前范围 AI 阅读结果。",
+				);
 				session.updatedAt = Date.now();
 				this.sessionState.generations.delete(sessionKey);
 				this.result = result;
@@ -920,15 +1017,46 @@ export class EpubAiReadingModal extends Modal {
 	private decorateRenderedSourceLinks(targetEl: HTMLElement): void {
 		for (const link of targetEl.querySelectorAll<HTMLAnchorElement>("a")) {
 			if (this.isEpubSourceLink(link)) {
-				this.decorateEpubSourceLink(link);
+				this.decorateEpubSourceLink(
+					link,
+					this.resolveRenderedSourceLinkTitle(link),
+				);
 			}
 		}
 	}
 
-	private decorateEpubSourceLink(link: HTMLAnchorElement): void {
-		link.setAttribute("title", EPUB_AI_READING_SOURCE_LINK_TITLE);
-		link.setAttribute("aria-label", EPUB_AI_READING_SOURCE_LINK_TITLE);
+	private decorateEpubSourceLink(
+		link: HTMLAnchorElement,
+		title = EPUB_AI_READING_SOURCE_LINK_TITLE,
+	): void {
+		link.classList.add("weave-epub-ai-reading-inline-source");
+		link.setAttribute("title", title || EPUB_AI_READING_SOURCE_LINK_TITLE);
+		link.setAttribute("aria-label", title || EPUB_AI_READING_SOURCE_LINK_TITLE);
 		link.setAttribute("data-tooltip-position", "top");
+	}
+
+	private resolveRenderedSourceLinkTitle(link: HTMLAnchorElement): string {
+		const href =
+			link.getAttribute("href") || link.getAttribute("data-href") || "";
+		const embeddedTitle = extractSourceHrefParam(href, "sourceTitle");
+		if (embeddedTitle) {
+			return embeddedTitle;
+		}
+		const block = this.findSourceBlockForRenderedLink(href);
+		return block
+			? formatEpubAiReadingSourceReferenceTitle(block)
+			: EPUB_AI_READING_SOURCE_LINK_TITLE;
+	}
+
+	private findSourceBlockForRenderedLink(
+		renderedHref: string,
+	): EpubAiReadingSourceBlock | null {
+		for (const block of this.result?.sourceBlocks || []) {
+			if (block.sourceLink && sourceHrefTargetsMatch(renderedHref, block.sourceLink)) {
+				return block;
+			}
+		}
+		return null;
 	}
 
 	private splitAiReadingSections(markdown: string): EpubAiReadingSection[] {
@@ -1112,7 +1240,7 @@ export class EpubAiReadingModal extends Modal {
 		const href = link.getAttribute("href") || "";
 		const label = (link.textContent || "").trim();
 		return (
-			/^(?:段|P)\d{3}$/.test(label) ||
+			/^(?:U\d{3}\.P\d{3}|(?:段|P)\d{3})$/.test(label) ||
 			href.includes("weave-loc=") ||
 			href.includes("weave-cfi=") ||
 			href.includes("weave-epub") ||
@@ -1159,8 +1287,10 @@ export class EpubAiReadingModal extends Modal {
 			await openFileWithExistingLeaf(this.app, this.noteFile, {
 				openInNewTab: true,
 				focus: true,
+				openState: { mode: "preview" },
 			});
 			this.setStatus(`已打开 AI 阅读笔记：${this.noteFile.path}`);
+			this.close();
 		} catch (error) {
 			logger.error(
 				"[EpubAiReadingModal] Failed to open AI reading note:",
@@ -1184,12 +1314,14 @@ export class EpubAiReadingModal extends Modal {
 			await openFileWithExistingLeaf(this.app, noteFile, {
 				openInNewTab: true,
 				focus: true,
+				openState: { mode: "preview" },
 			});
 			this.setStatus(`已生成/更新 AI 阅读笔记：${noteFile.path}`);
 			new Notice("AI 阅读笔记已生成");
 			this.rememberCurrentResult(true);
 			this.clearWarning();
 			this.renderActions();
+			this.close();
 		} catch (error) {
 			logger.error(
 				"[EpubAiReadingModal] Failed to write AI reading note:",

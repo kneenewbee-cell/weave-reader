@@ -126,6 +126,32 @@
 	text-decoration: underline;
 }
 
+.weave-epub-ai-reading-inline-source {
+	display: inline-flex;
+	align-items: center;
+	width: fit-content;
+	max-width: 100%;
+	min-height: 1.45em;
+	margin-inline: 2px;
+	padding: 1px 6px;
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 28%, transparent);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+	color: var(--text-accent);
+	font-size: 0.86em;
+	font-weight: 500;
+	line-height: 1.35;
+	text-decoration: none;
+	vertical-align: baseline;
+	white-space: nowrap;
+}
+
+.weave-epub-ai-reading-inline-source:hover {
+	border-color: color-mix(in srgb, var(--interactive-accent) 48%, transparent);
+	background: color-mix(in srgb, var(--interactive-accent) 15%, var(--background-primary));
+	text-decoration: none;
+}
+
 .weave-epub-ai-reading-result {
 	min-height: 220px;
 	max-height: min(56vh, 620px);
@@ -176,6 +202,12 @@
 .weave-epub-ai-reading-section-body {
 	min-width: 0;
 	max-width: 100%;
+}
+
+.weave-epub-ai-reading-section-body > .markdown-rendered,
+.weave-epub-ai-reading-result > .markdown-rendered {
+	max-width: 860px;
+	margin-inline: auto;
 }
 
 .weave-epub-ai-reading-scope-picker {
@@ -240,6 +272,21 @@
 .weave-epub-ai-reading-result h2,
 .weave-epub-ai-reading-result h3 {
 	line-height: 1.35;
+}
+
+.weave-epub-ai-reading-result h2 {
+	margin-top: 0.45em;
+	padding-bottom: 0.25em;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.weave-epub-ai-reading-result h3 {
+	margin-top: 1em;
+}
+
+.weave-epub-ai-reading-result p,
+.weave-epub-ai-reading-result li {
+	line-height: 1.72;
 }
 
 .weave-epub-ai-reading-result :where(p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, a) {

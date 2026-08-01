@@ -1,5 +1,11 @@
 import type { App } from "obsidian";
-import { MarkdownPostProcessorContext, TFile, setIcon } from "obsidian";
+import {
+	Component,
+	MarkdownPostProcessorContext,
+	MarkdownRenderer,
+	TFile,
+	setIcon,
+} from "obsidian";
 import {
 	isSupportedBookLocatorHref,
 	stripSupportedBookExtension,
@@ -10,6 +16,13 @@ import { resolveEpubSourceNavigationTextHint } from "./epub-source-navigation-te
 import { isSupportedEpubProtocolName } from "./epub-runtime";
 import { dispatchEpubDualWindowAnnotationEvent } from "./epub-dual-window";
 import { resolveEpubHost } from "./epub-host";
+import { EPUB_AI_READING_REQUEST_EVENT } from "./epub-ai-reading";
+import {
+	buildEpubAiReadingScopeLevels,
+	EPUB_AI_READING_ALL_SCOPE_ID,
+	resolveEpubAiReadingScopeSelection,
+} from "./epub-ai-reading-scope";
+import type { TocItem } from "./types";
 
 type BoundEpubLinkElement = HTMLAnchorElement & {
 	__weaveEpubClickHandler?: (event: MouseEvent) => void;
@@ -27,25 +40,56 @@ type AiReadingNoteFilterMarker = HTMLElement & {
 	__weaveAiReadingFilterRefreshPending?: boolean;
 };
 
+type AiReadingStartButtonElement = HTMLButtonElement & {
+	__weaveAiReadingStartBound?: boolean;
+};
+
 interface AiReadingNoteFilterSegment {
 	typeKey: string;
 	typeLabel: string;
 	sectionKey: string;
 	sectionLabel: string;
+	rangeKey: string;
+	rangeHref: string;
 	elements: HTMLElement[];
 	groupElement: HTMLElement | null;
 	text: string;
 }
 
-const AI_READING_NOTE_TYPE_DEFINITIONS: AnnotationNoteFilterOption[] = [
-	{ value: "summary", label: "总览/摘要" },
-	{ value: "core", label: "结论/重点" },
+interface AiReadingNoteGeneratedRange {
+	key: string;
+	label: string;
+	href: string;
+	elements: HTMLElement[];
+}
+
+interface AiReadingNoteRangeAnchor {
+	label: string;
+	href: string;
+	start: HTMLElement;
+}
+
+interface AiReadingNoteSourceRange {
+	key: string;
+	label: string;
+	href: string;
+	markdown: string;
+}
+
+interface AiReadingSourceMarkdownSection {
+	index: number;
+	level: number;
+	title: string;
+	lines: string[];
+	typeKey: string;
+}
+
+const AI_READING_NOTE_TYPE_FILTER_OPTIONS: AnnotationNoteFilterOption[] = [
+	{ value: "summary", label: "总览" },
+	{ value: "core", label: "重点" },
 	{ value: "knowledge", label: "知识点" },
-	{ value: "sections", label: "小节精读" },
-	{ value: "quotes", label: "重要原文" },
-	{ value: "relations", label: "章节关系" },
-	{ value: "path", label: "精读路径" },
-	{ value: "other", label: "其他" },
+	{ value: "quotes", label: "原文" },
+	{ value: "relations", label: "关系" },
 ];
 
 function extractEpubProtocolName(href: string): string {
@@ -254,6 +298,22 @@ function resolveAnnotationNoteScope(
 	);
 }
 
+function resolveAiReadingNoteScope(
+	marker: HTMLElement,
+	fallback: HTMLElement,
+): HTMLElement | null {
+	return (
+		marker.closest<HTMLElement>(".markdown-preview-view") ||
+		fallback.closest<HTMLElement>(".markdown-preview-view") ||
+		marker.closest<HTMLElement>(".markdown-source-view") ||
+		fallback.closest<HTMLElement>(".markdown-source-view") ||
+		marker.closest<HTMLElement>(".view-content") ||
+		fallback.closest<HTMLElement>(".view-content") ||
+		marker.closest<HTMLElement>(".markdown-rendered") ||
+		fallback.closest<HTMLElement>(".markdown-rendered")
+	);
+}
+
 function resolveAnnotationNoteContainer(fallback: HTMLElement): HTMLElement {
 	return (
 		fallback.closest<HTMLElement>(
@@ -335,6 +395,19 @@ function readAnnotationNoteIdentity(
 	};
 }
 
+function parseOptionalDatasetNumber(value: string | undefined): number | undefined {
+	const numberValue = Number(value);
+	return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function safeResolveEpubHost(app: App): ReturnType<typeof resolveEpubHost> {
+	try {
+		return resolveEpubHost(app);
+	} catch {
+		return null;
+	}
+}
+
 function bindAnnotationNoteDualWindowControls(
 	app: App,
 	root: HTMLElement,
@@ -361,7 +434,7 @@ function bindAnnotationNoteDualWindowControls(
 				bookId,
 				filePath,
 				cfiRange: line.dataset.cfiRange,
-				chapterIndex: line.dataset.chapterIndex,
+				chapterIndex: parseOptionalDatasetNumber(line.dataset.chapterIndex),
 				annotationId: line.dataset.annotationId,
 				semanticId: line.dataset.semanticId,
 				text: line.dataset.annotationText,
@@ -386,7 +459,7 @@ function bindAnnotationNoteDualWindowControls(
 			if (!bookId || !filePath) {
 				return;
 			}
-			void resolveEpubHost(app)?.openEpubAnnotationNote?.({
+			void safeResolveEpubHost(app)?.openEpubAnnotationNote?.({
 				bookId,
 				filePath,
 				dualWindowMode: true,
@@ -621,6 +694,9 @@ function findMountedAiReadingNoteMarker(
 }
 
 function requestAiReadingNoteFilterRefresh(root: HTMLElement): void {
+	if (root.closest(".weave-epub-ai-reading-note-source-preview")) {
+		return;
+	}
 	const marker = findMountedAiReadingNoteMarker(root);
 	if (
 		!marker?.__weaveApplyAiReadingNoteFilters ||
@@ -638,9 +714,11 @@ function requestAiReadingNoteFilterRefresh(root: HTMLElement): void {
 }
 
 function scheduleAiReadingNoteFilterMount(
+	app: App,
 	marker: HTMLElement,
 	fallback: HTMLElement,
 	attempt: number,
+	sourcePath = "",
 ): void {
 	if (
 		attempt >= ANNOTATION_NOTE_FILTER_MAX_RETRY ||
@@ -653,8 +731,7 @@ function scheduleAiReadingNoteFilterMount(
 	activeWindow.setTimeout(
 		() => {
 			marker.dataset.aiFilterPending = "";
-			const scope = resolveAnnotationNoteScope(marker, fallback);
-			mountAiReadingNoteFilter(scope, attempt + 1);
+			mountAiReadingNoteFilter(app, fallback, attempt + 1, sourcePath);
 		},
 		attempt === 0 ? 0 : ANNOTATION_NOTE_FILTER_RETRY_DELAY_MS,
 	);
@@ -694,9 +771,24 @@ function getAiReadingNoteBlockElement(
 	if (
 		parent &&
 		parent !== scope &&
-		/\bel-(?:h[1-6]|p|ul|ol|blockquote|pre|table)\b/.test(parent.className)
+		/\bel-(?:div|h[1-6]|p|ul|ol|blockquote|pre|table)\b/.test(
+			parent.className,
+		)
 	) {
 		return parent;
+	}
+	return element;
+}
+
+function getAiReadingNoteHostBlockElement(
+	element: HTMLElement,
+	scope: HTMLElement,
+): HTMLElement {
+	const host = element.closest<HTMLElement>(
+		".el-div,.el-h1,.el-h2,.el-h3,.el-h4,.el-h5,.el-h6,.el-p,.el-ul,.el-ol,.el-blockquote,.el-pre,.el-table",
+	);
+	if (host && host !== scope && scope.contains(host)) {
+		return host;
 	}
 	return element;
 }
@@ -720,37 +812,636 @@ function createAiReadingSectionKey(label: string, index: number): string {
 	return `${normalized || "section"}-${index}`;
 }
 
-function collectAiReadingSegmentOptions(
-	segments: AiReadingNoteFilterSegment[],
-	getValue: (segment: AiReadingNoteFilterSegment) => string,
-	getLabel: (segment: AiReadingNoteFilterSegment) => string,
-): AnnotationNoteFilterOption[] {
-	const options = new Map<string, string>();
-	for (const segment of segments) {
-		const value = getValue(segment);
-		const label = getLabel(segment);
-		if (value && !options.has(value)) {
-			options.set(value, label || value);
-		}
-	}
-	return Array.from(options.entries()).map(([value, label]) => ({
-		value,
-		label,
-	}));
+function normalizeAiReadingRangeKey(value: unknown): string {
+	return String(value || "")
+		.split(">")
+		.map((part) =>
+			part
+				.replace(/\s+/g, " ")
+				.trim()
+				.replace(/\s*(?:\.{3}|…)+$/u, "")
+				.trim(),
+		)
+		.filter(Boolean)
+		.join(" > ");
 }
 
-function orderAiReadingTypeOptions(
-	options: AnnotationNoteFilterOption[],
-): AnnotationNoteFilterOption[] {
-	const present = new Map(options.map((option) => [option.value, option]));
-	return AI_READING_NOTE_TYPE_DEFINITIONS.filter((option) =>
-		present.has(option.value),
-	).map((option) => present.get(option.value) || option);
+function getAiReadingScopePathKey(pathLabels: string[]): string {
+	return normalizeAiReadingRangeKey(pathLabels.join(" > "));
+}
+
+function normalizeAiReadingRangeHref(value: unknown): string {
+	return String(value || "").replace(/\\/g, "/").trim();
+}
+
+function getAiReadingRangeHrefFragment(href: string): string {
+	const normalized = normalizeAiReadingRangeHref(href);
+	const hashIndex = normalized.indexOf("#");
+	return hashIndex >= 0 ? normalized.slice(hashIndex + 1).trim() : "";
+}
+
+function aiReadingRangeHrefsMatch(candidate: string, selected: string): boolean {
+	const candidateHref = normalizeAiReadingRangeHref(candidate);
+	const selectedHref = normalizeAiReadingRangeHref(selected);
+	if (!candidateHref || !selectedHref) {
+		return false;
+	}
+	if (candidateHref === selectedHref) {
+		return true;
+	}
+	const candidateFragment = getAiReadingRangeHrefFragment(candidateHref);
+	const selectedFragment = getAiReadingRangeHrefFragment(selectedHref);
+	return Boolean(
+		candidateFragment &&
+			selectedFragment &&
+			candidateFragment === selectedFragment,
+		);
+}
+
+function decodeHtmlAttributeValue(value: string): string {
+	return String(value || "")
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&gt;/g, ">")
+		.replace(/&lt;/g, "<")
+		.replace(/&amp;/g, "&");
+}
+
+function parseAiReadingHtmlAttributes(html: string): Record<string, string> {
+	const attributes: Record<string, string> = {};
+	const attributePattern = /([A-Za-z0-9_:-]+)="([^"]*)"/g;
+	let match: RegExpExecArray | null;
+	while ((match = attributePattern.exec(html))) {
+		attributes[match[1]] = decodeHtmlAttributeValue(match[2] || "");
+	}
+	return attributes;
+}
+
+function findMarkdownHeadingStartBefore(markdown: string, index: number): number {
+	const before = markdown.slice(0, Math.max(0, index));
+	const headingPattern = /^#{2,6}\s+.+(?:\r?\n|$)/gm;
+	let match: RegExpExecArray | null;
+	let start = -1;
+	while ((match = headingPattern.exec(before))) {
+		start = match.index;
+	}
+	return start >= 0 ? start : index;
+}
+
+function stripAiReadingSourceRangeMarkers(markdown: string): string {
+	return String(markdown || "")
+		.replace(/<!--\s*weave-epub-ai-reading:(?:start|end)[\s\S]*?-->\s*/g, "")
+		.replace(
+			/<div\s+class="weave-epub-ai-reading-note-root"[^>]*><\/div>\s*/g,
+			"",
+		)
+		.replace(/^(\s*#{2,6}\s+)U\d{3,}\s+/gim, "$1")
+		.trim();
+}
+
+function collectAiReadingSourceRanges(markdown: string): AiReadingNoteSourceRange[] {
+	const source = String(markdown || "");
+	const markerPattern =
+		/<div\s+class="weave-epub-ai-reading-note-root"[^>]*><\/div>/g;
+	const anchors: Array<{
+		key: string;
+		label: string;
+		href: string;
+		markerIndex: number;
+		start: number;
+	}> = [];
+	let match: RegExpExecArray | null;
+	while ((match = markerPattern.exec(source))) {
+		const attributes = parseAiReadingHtmlAttributes(match[0]);
+		if (attributes["data-empty"] === "true") {
+			continue;
+		}
+		const label =
+			normalizeAiReadingRangeKey(attributes["data-scope-label"]) ||
+			normalizeAiReadingRangeKey(attributes["data-chapter-href"]);
+		if (!label) {
+			continue;
+		}
+		anchors.push({
+			key: label,
+			label,
+			href: normalizeAiReadingRangeHref(attributes["data-scope-href"]),
+			markerIndex: match.index,
+			start: findMarkdownHeadingStartBefore(source, match.index),
+		});
+	}
+	const unitHeadingPattern = /^#{2,6}\s+(U\d{3,})\s+(.+?)\s*$/gim;
+	let headingMatch: RegExpExecArray | null;
+	while ((headingMatch = unitHeadingPattern.exec(source))) {
+		const label = normalizeAiReadingRangeKey(headingMatch[2]);
+		if (!label) {
+			continue;
+		}
+		const start = headingMatch.index;
+		if (
+			anchors.some(
+				(anchor) => anchor.start === start && anchor.key === label,
+			)
+		) {
+			continue;
+		}
+		anchors.push({
+			key: label,
+			label,
+			href: "",
+			markerIndex: headingMatch.index,
+			start,
+		});
+	}
+	anchors.sort((a, b) => a.start - b.start || a.markerIndex - b.markerIndex);
+	return anchors
+		.map((anchor, index) => {
+			const next = anchors[index + 1];
+			const sectionEnd = source.indexOf(
+				"<!-- weave-epub-ai-reading:end",
+				anchor.markerIndex,
+			);
+			const end =
+				next?.start ??
+				(sectionEnd >= 0 ? sectionEnd : source.length);
+			return {
+				key: anchor.key,
+				label: anchor.label,
+				href: anchor.href,
+				markdown: stripAiReadingSourceRangeMarkers(
+					source.slice(anchor.start, end),
+				),
+			};
+		})
+		.filter((range) => range.markdown.length > 0);
+}
+
+function parseAiReadingSourceMarkdownSections(
+	markdown: string,
+): AiReadingSourceMarkdownSection[] {
+	const lines = String(markdown || "").split(/\r?\n/);
+	const sections: AiReadingSourceMarkdownSection[] = [];
+	let current: AiReadingSourceMarkdownSection | null = null;
+	const finishCurrent = () => {
+		if (current) {
+			sections.push(current);
+		}
+		current = null;
+	};
+	for (const line of lines) {
+		const match = line.match(/^(#{2,6})\s+(.+?)\s*#*\s*$/);
+		if (match) {
+			finishCurrent();
+			const title = String(match[2] || "").trim();
+			current = {
+				index: sections.length,
+				level: match[1].length,
+				title,
+				lines: [line],
+				typeKey: resolveAiReadingNoteType(title).value,
+			};
+			continue;
+		}
+		if (current) {
+			current.lines.push(line);
+		}
+	}
+	finishCurrent();
+	return sections;
+}
+
+function getAiReadingSourceMarkdownAncestors(
+	sections: AiReadingSourceMarkdownSection[],
+	section: AiReadingSourceMarkdownSection,
+): AiReadingSourceMarkdownSection[] {
+	const ancestors: AiReadingSourceMarkdownSection[] = [];
+	let level = section.level;
+	for (let index = section.index - 1; index >= 0; index -= 1) {
+		const candidate = sections[index];
+		if (!candidate || candidate.level >= level) {
+			continue;
+		}
+		ancestors.unshift(candidate);
+		level = candidate.level;
+	}
+	return ancestors;
+}
+
+function filterAiReadingSourceMarkdownByType(
+	markdown: string,
+	typeKey: string,
+): string {
+	const source = String(markdown || "").trim();
+	if (!source || !typeKey) {
+		return source;
+	}
+	const sections = parseAiReadingSourceMarkdownSections(source);
+	if (sections.length === 0) {
+		return "";
+	}
+	const selectedSections = sections.filter(
+		(section) => section.typeKey === typeKey,
+	);
+	if (selectedSections.length === 0) {
+		return "";
+	}
+	const emittedContext = new Set<number>();
+	const blocks: string[] = [];
+	for (const section of selectedSections) {
+		for (const ancestor of getAiReadingSourceMarkdownAncestors(sections, section)) {
+			if (emittedContext.has(ancestor.index)) {
+				continue;
+			}
+			emittedContext.add(ancestor.index);
+			blocks.push(ancestor.lines[0]);
+		}
+		blocks.push(section.lines.join("\n").trim());
+	}
+	return blocks.filter(Boolean).join("\n\n").trim();
+}
+
+function isMarkdownTFile(file: unknown): file is TFile {
+	const candidate = file as { path?: unknown; extension?: unknown } | null;
+	return Boolean(
+		file instanceof TFile ||
+			(typeof candidate?.path === "string" && candidate.extension === "md"),
+	);
+}
+
+function normalizeAiReadingLookupText(value: unknown): string {
+	return String(value || "")
+		.replace(/\\/g, "/")
+		.replace(/\s+/g, " ")
+		.trim()
+		.toLowerCase();
+}
+
+function getAiReadingSourceFileName(sourceFilePath: string): string {
+	const normalized = normalizeAiReadingLookupText(sourceFilePath);
+	return normalized.split("/").pop() || normalized;
+}
+
+function getAiReadingSourceTitle(sourceFilePath: string): string {
+	return stripSupportedBookExtension(getAiReadingSourceFileName(sourceFilePath));
+}
+
+function getAiReadingMarkdownFileStatKey(
+	app: App,
+	sourcePath: string,
+): string {
+	if (!sourcePath) {
+		return "";
+	}
+	const sourceFile = app.vault.getAbstractFileByPath(sourcePath);
+	if (!isMarkdownTFile(sourceFile)) {
+		return "";
+	}
+	const stat = (sourceFile as TFile & { stat?: { mtime?: number; size?: number } })
+		.stat;
+	return `${Number(stat?.mtime || 0)}:${Number(stat?.size || 0)}`;
+}
+
+function scoreAiReadingNoteFileCandidate(
+	file: TFile,
+	sourceFilePath: string,
+): number {
+	const path = normalizeAiReadingLookupText(file.path);
+	const sourceTitle = getAiReadingSourceTitle(sourceFilePath);
+	const sourceFileName = getAiReadingSourceFileName(sourceFilePath);
+	let score = 0;
+	if (sourceTitle && path.includes(sourceTitle)) {
+		score += 100;
+	}
+	if (sourceFileName && path.includes(sourceFileName)) {
+		score += 80;
+	}
+	if (path.endsWith(".md")) {
+		score += 1;
+	}
+	return score;
+}
+
+function aiReadingNoteMarkdownReferencesSource(
+	markdown: string,
+	sourceFilePath: string,
+): boolean {
+	const content = normalizeAiReadingLookupText(markdown);
+	const source = normalizeAiReadingLookupText(sourceFilePath);
+	const sourceFileName = getAiReadingSourceFileName(sourceFilePath);
+	return Boolean(
+		content.includes("weave-epub-ai-reading-note-root") &&
+			((source && content.includes(source)) ||
+				(sourceFileName && content.includes(sourceFileName))),
+	);
+}
+
+async function readAiReadingNoteSourceMarkdown(
+	app: App,
+	sourcePath: string,
+	sourceFilePath: string,
+): Promise<string> {
+	const seenPaths = new Set<string>();
+	const readFile = async (file: TFile): Promise<string> => {
+		seenPaths.add(file.path);
+		return app.vault.cachedRead(file);
+	};
+	if (sourcePath) {
+		const sourceFile = app.vault.getAbstractFileByPath(sourcePath);
+		if (isMarkdownTFile(sourceFile)) {
+			return readFile(sourceFile);
+		}
+	}
+	const source = normalizeAiReadingLookupText(sourceFilePath);
+	if (!source) {
+		return "";
+	}
+	const markdownFiles = app.vault.getMarkdownFiles?.() || [];
+	const candidates = markdownFiles
+		.filter(isMarkdownTFile)
+		.map((file) => ({
+			file,
+			score: scoreAiReadingNoteFileCandidate(file, sourceFilePath),
+		}))
+		.filter((candidate) => candidate.score > 0)
+		.sort((a, b) => b.score - a.score);
+	for (const { file } of candidates) {
+		if (seenPaths.has(file.path)) {
+			continue;
+		}
+		const markdown = await readFile(file);
+		if (aiReadingNoteMarkdownReferencesSource(markdown, sourceFilePath)) {
+			return markdown;
+		}
+	}
+	return "";
+}
+
+function compareNodeOrder(a: HTMLElement, b: HTMLElement): number {
+	if (a === b) {
+		return 0;
+	}
+	return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING
+		? -1
+		: 1;
+}
+
+function isBeforeNode(element: HTMLElement, boundary: HTMLElement): boolean {
+	return Boolean(
+		element === boundary ||
+			(element.compareDocumentPosition(boundary) &
+				Node.DOCUMENT_POSITION_FOLLOWING),
+	);
+}
+
+function isAfterNode(element: HTMLElement, boundary: HTMLElement): boolean {
+	return Boolean(
+		element === boundary ||
+			(boundary.compareDocumentPosition(element) &
+				Node.DOCUMENT_POSITION_FOLLOWING),
+	);
+}
+
+function findAiReadingRangeStart(
+	marker: HTMLElement,
+	scope: HTMLElement,
+): HTMLElement {
+	let start: HTMLElement = marker;
+	for (const heading of Array.from(
+		scope.querySelectorAll<HTMLElement>("h2,h3,h4"),
+	)) {
+		if (heading.closest(".weave-epub-ai-reading-note-filter")) {
+			continue;
+		}
+		if (heading.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING) {
+			start = heading;
+		}
+	}
+	return start;
+}
+
+function isElementWithinAiReadingRange(
+	element: HTMLElement,
+	start: HTMLElement,
+	end: HTMLElement | null,
+): boolean {
+	return (
+		isAfterNode(element, start) &&
+		(!end || (element !== end && isBeforeNode(element, end)))
+	);
+}
+
+function getAiReadingParentRangeBase(label: string): string {
+	const parts = normalizeAiReadingRangeKey(label).split(" > ").filter(Boolean);
+	const last = parts[parts.length - 1];
+	if (last === "全部" || last === "全书") {
+		parts.pop();
+	}
+	return parts.join(" > ");
+}
+
+function findPreviousAiReadingRangeMarker(
+	element: HTMLElement,
+	markers: HTMLElement[],
+): HTMLElement | null {
+	let previous: HTMLElement | null = null;
+	for (const marker of markers) {
+		if (marker.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) {
+			previous = marker;
+			continue;
+		}
+		break;
+	}
+	return previous;
+}
+
+function parseAiReadingUnitHeadingRangeLabel(
+	heading: HTMLElement,
+	parentMarker: HTMLElement | null,
+): string {
+	const text = normalizeFilterText(heading.textContent || "");
+	const match = text.match(/^U\d{3,}\s+(.+)$/iu);
+	if (!match) {
+		return "";
+	}
+	const parentBase = getAiReadingParentRangeBase(
+		parentMarker?.dataset.scopeLabel || "",
+	);
+	const unitPath = normalizeAiReadingRangeKey(match[1]);
+	if (!unitPath) {
+		return "";
+	}
+	if (
+		parentBase &&
+		unitPath !== parentBase &&
+		!unitPath.startsWith(`${parentBase} > `)
+	) {
+		return `${parentBase} > ${unitPath}`;
+	}
+	return unitPath;
+}
+
+function collectAiReadingRangeAnchors(
+	marker: HTMLElement,
+	scope: HTMLElement,
+): AiReadingNoteRangeAnchor[] {
+	const markers = Array.from(
+		scope.querySelectorAll<HTMLElement>(".weave-epub-ai-reading-note-root"),
+	)
+		.filter(
+			(item) =>
+				item.dataset.empty !== "true" && !isInsideAiReadingNoteChrome(item),
+		)
+		.sort(compareNodeOrder);
+	if (markers.length === 0 && marker.dataset.empty !== "true") {
+		markers.push(marker);
+	}
+	const markerStarts = new Set(
+		markers.map((item) => findAiReadingRangeStart(item, scope)),
+	);
+	const anchors: AiReadingNoteRangeAnchor[] = markers.map((item) => {
+		const start = findAiReadingRangeStart(item, scope);
+		return {
+			label:
+				normalizeAiReadingRangeKey(item.dataset.scopeLabel) ||
+				normalizeAiReadingRangeKey(
+					start.textContent || item.dataset.chapterHref || "当前范围",
+				),
+			href: normalizeAiReadingRangeHref(item.dataset.scopeHref),
+			start,
+		};
+	});
+	for (const heading of Array.from(
+		scope.querySelectorAll<HTMLElement>("h2,h3,h4"),
+	)) {
+		if (
+			markerStarts.has(heading) ||
+			isInsideAiReadingNoteChrome(heading)
+		) {
+			continue;
+		}
+		const parentMarker = findPreviousAiReadingRangeMarker(heading, markers);
+		const label = parseAiReadingUnitHeadingRangeLabel(heading, parentMarker);
+		if (!label) {
+			continue;
+		}
+		anchors.push({ label, href: "", start: heading });
+	}
+	return anchors.sort((a, b) => compareNodeOrder(a.start, b.start));
+}
+
+function collectAiReadingGeneratedRanges(
+	marker: HTMLElement,
+	scope: HTMLElement,
+): AiReadingNoteGeneratedRange[] {
+	const anchors = collectAiReadingRangeAnchors(marker, scope);
+	const sourceBlocks = Array.from(
+		scope.querySelectorAll<HTMLElement>(
+			"h2,h3,h4,p,ul,ol,blockquote,pre,table,.weave-epub-ai-reading-note-root",
+		),
+	).filter(
+		(element) =>
+			!isInsideAiReadingNoteChrome(element),
+	);
+	return anchors.map((anchor, index) => {
+		const end = anchors[index + 1]?.start || null;
+		const elements = new Set<HTMLElement>();
+		for (const sourceBlock of sourceBlocks) {
+			if (isElementWithinAiReadingRange(sourceBlock, anchor.start, end)) {
+				elements.add(getAiReadingNoteBlockElement(sourceBlock, scope));
+			}
+		}
+		return {
+			key: anchor.label,
+			label: anchor.label,
+			href: anchor.href,
+			elements: Array.from(elements),
+		};
+	});
+}
+
+function isInsideAiReadingNoteChrome(element: HTMLElement): boolean {
+	return Boolean(
+		element.closest(
+			".weave-epub-ai-reading-note-chrome, .weave-epub-ai-reading-note-filter, .weave-epub-ai-reading-note-missing, .weave-epub-ai-reading-note-source-preview, .weave-epub-ai-reading-empty",
+		),
+	);
+}
+
+function getAiReadingMutationElement(node: Node): HTMLElement | null {
+	if (node instanceof HTMLElement) {
+		return node;
+	}
+	return node.parentElement;
+}
+
+function mutationTouchesAiReadingNoteContent(
+	mutations: MutationRecord[],
+): boolean {
+	return mutations.some((mutation) => {
+		const target = getAiReadingMutationElement(mutation.target);
+		if (target && isInsideAiReadingNoteChrome(target)) {
+			return false;
+		}
+		const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+		return changedNodes.some((node) => {
+			const element = getAiReadingMutationElement(node);
+			return Boolean(element && !isInsideAiReadingNoteChrome(element));
+		});
+	});
+}
+
+function collectAiReadingOriginalContentBlocks(
+	marker: HTMLElement,
+	scope: HTMLElement,
+): HTMLElement[] {
+	const blocks = new Set<HTMLElement>();
+	for (const element of Array.from(
+		scope.querySelectorAll<HTMLElement>(
+			[
+				"h1,h2,h3,h4,h5,h6",
+				"p,ul,ol,blockquote,pre,table",
+				".el-div",
+				".el-h1,.el-h2,.el-h3,.el-h4,.el-h5,.el-h6",
+				".el-p,.el-ul,.el-ol,.el-blockquote,.el-pre,.el-table",
+				".weave-epub-ai-reading-note-root",
+			].join(","),
+		),
+	)) {
+		if (
+			!isAfterAiReadingNoteMarker(element, marker) ||
+			isInsideAiReadingNoteChrome(element)
+		) {
+			continue;
+		}
+		blocks.add(getAiReadingNoteBlockElement(element, scope));
+	}
+	return Array.from(blocks);
+}
+
+function findAiReadingGeneratedRangeForElement(
+	element: HTMLElement,
+	ranges: AiReadingNoteGeneratedRange[],
+): AiReadingNoteGeneratedRange | null {
+	return (
+		ranges.find((range) => range.elements.includes(element)) ||
+		null
+	);
+}
+
+function resolveAiReadingPendingGroupElement(
+	group: { element: HTMLElement; typeKey: string } | null,
+	typeKey: string,
+): HTMLElement | null {
+	return group?.typeKey === typeKey ? group.element : null;
 }
 
 function collectAiReadingNoteFilterSegments(
 	marker: HTMLElement,
 	scope: HTMLElement,
+	ranges: AiReadingNoteGeneratedRange[] = collectAiReadingGeneratedRanges(
+		marker,
+		scope,
+	),
 ): AiReadingNoteFilterSegment[] {
 	const headingAndBody = Array.from(
 		scope.querySelectorAll<HTMLElement>(
@@ -759,7 +1450,7 @@ function collectAiReadingNoteFilterSegments(
 	).filter(
 		(element) =>
 			isAfterAiReadingNoteMarker(element, marker) &&
-			!element.closest(".weave-epub-ai-reading-note-filter"),
+			!isInsideAiReadingNoteChrome(element),
 	);
 	const seenBlocks = new Set<HTMLElement>();
 	const segments: AiReadingNoteFilterSegment[] = [];
@@ -774,6 +1465,12 @@ function collectAiReadingNoteFilterSegments(
 		if (!draft) {
 			return;
 		}
+		const range = findAiReadingGeneratedRangeForElement(
+			draft.elements[0],
+			ranges,
+		);
+		const rangeKey = range?.key || "";
+		const rangeHref = range?.href || "";
 		if (draft.elements.length === 1 && draft.typeKey === "sections") {
 			pendingGroup = {
 				element: draft.elements[0],
@@ -790,6 +1487,8 @@ function collectAiReadingNoteFilterSegments(
 		}
 		segments.push({
 			...draft,
+			rangeKey,
+			rangeHref,
 			text: normalizeFilterText(
 				draft.elements.map((element) => element.textContent || "").join(" "),
 			),
@@ -822,16 +1521,19 @@ function collectAiReadingNoteFilterSegments(
 		if (headingLevel === 3 || headingLevel === 4) {
 			finishDraft();
 			const title = String(element.textContent || "").trim();
+			const headingType = resolveAiReadingNoteType(title);
+			const effectiveType =
+				headingType.value === "other" ? currentType : headingType;
 			draft = {
-				typeKey: currentType.value,
-				typeLabel: currentType.label,
+				typeKey: effectiveType.value,
+				typeLabel: effectiveType.label,
 				sectionKey: createAiReadingSectionKey(title, segments.length),
-				sectionLabel: title || currentType.label,
+				sectionLabel: title || effectiveType.label,
 				elements: [block],
-				groupElement:
-					pendingGroup?.typeKey === currentType.value
-						? pendingGroup.element
-						: null,
+				groupElement: resolveAiReadingPendingGroupElement(
+					pendingGroup,
+					effectiveType.value,
+				),
 			};
 			continue;
 		}
@@ -843,19 +1545,44 @@ function collectAiReadingNoteFilterSegments(
 	return segments;
 }
 
-function mountAiReadingNoteFilter(root: HTMLElement, attempt = 0): void {
+function mountAiReadingNoteFilter(
+	app: App,
+	root: HTMLElement,
+	attempt = 0,
+	sourcePath = "",
+): void {
 	const marker = findAiReadingNoteMarker(root);
 	if (!marker || marker.dataset.aiReadingFilterMounted === "true") {
 		return;
 	}
-	const scope = resolveAnnotationNoteScope(marker, root);
+	const scope = resolveAiReadingNoteScope(marker, root);
+	if (!scope) {
+		scheduleAiReadingNoteFilterMount(app, marker, root, attempt, sourcePath);
+		return;
+	}
 	if (scope.querySelector(".weave-epub-ai-reading-note-filter")) {
 		marker.dataset.aiReadingFilterMounted = "true";
 		return;
 	}
-	const initialSegments = collectAiReadingNoteFilterSegments(marker, scope);
-	if (initialSegments.length === 0) {
-		scheduleAiReadingNoteFilterMount(marker, root, attempt);
+	const initialRanges = collectAiReadingGeneratedRanges(marker, scope);
+	const initialSegments = collectAiReadingNoteFilterSegments(
+		marker,
+		scope,
+		initialRanges,
+	);
+	const initialSourceFile = String(
+		marker.dataset.sourceFile ||
+			marker.getAttribute("data-source-file") ||
+			"",
+	).trim();
+	if (
+		initialSegments.length === 0 &&
+		marker.dataset.empty !== "true" &&
+		!scope.querySelector(".weave-epub-ai-reading-empty") &&
+		!sourcePath &&
+		!initialSourceFile
+	) {
+		scheduleAiReadingNoteFilterMount(app, marker, root, attempt, sourcePath);
 		return;
 	}
 
@@ -864,86 +1591,555 @@ function mountAiReadingNoteFilter(root: HTMLElement, attempt = 0): void {
 	toolbar.className = "weave-epub-ai-reading-note-filter";
 	toolbar.setAttribute("role", "search");
 
+	const rangeControls = doc.createElement("div");
+	rangeControls.className = "weave-epub-ai-reading-note-range-controls";
+	rangeControls.setAttribute("aria-label", "AI 阅读目录范围筛选");
+
 	const typeSelect = createAnnotationFilterSelect(
 		doc,
 		"weave-epub-ai-reading-note-filter-type",
-		"AI 阅读类型筛选",
+		"AI 阅读内容类型筛选",
 		"全部类型",
-		orderAiReadingTypeOptions(
-			collectAiReadingSegmentOptions(
-				initialSegments,
-				(segment) => segment.typeKey,
-				(segment) => segment.typeLabel,
-			),
-		),
+		AI_READING_NOTE_TYPE_FILTER_OPTIONS,
 	);
-	const sectionSelect = createAnnotationFilterSelect(
-		doc,
-		"weave-epub-ai-reading-note-filter-section",
-		"AI 阅读小节筛选",
-		"全部小节",
-		collectAiReadingSegmentOptions(
-			initialSegments,
-			(segment) => segment.sectionKey,
-			(segment) => segment.sectionLabel,
-		),
-	);
-	const searchInput = doc.createElement("input");
-	searchInput.className = "weave-epub-ai-reading-note-filter-search";
-	searchInput.type = "search";
-	searchInput.placeholder = "搜索 AI 阅读内容";
-	searchInput.setAttribute("aria-label", "搜索 AI 阅读内容");
+
 	const countEl = doc.createElement("span");
 	countEl.className = "weave-epub-ai-reading-note-filter-count";
+	const renderModeEl = doc.createElement("span");
+	renderModeEl.className = "weave-epub-ai-reading-note-render-mode";
+	renderModeEl.dataset.mode = "mounting";
+	renderModeEl.textContent = "mode: mounting";
 
-	toolbar.append(typeSelect, sectionSelect, searchInput, countEl);
-	marker.insertAdjacentElement("afterend", toolbar);
+	const missingState = doc.createElement("div");
+	missingState.className = "weave-epub-ai-reading-note-missing is-hidden";
+	const missingText = doc.createElement("span");
+	missingText.className = "weave-epub-ai-reading-note-missing__text";
+	const missingButton = doc.createElement("button");
+	missingButton.type = "button";
+	missingButton.className = "weave-epub-ai-reading-start";
+	missingButton.textContent = "按这个范围开始 AI 阅读";
+	missingState.append(missingText, missingButton);
+	const sourcePreviewState = doc.createElement("div");
+	sourcePreviewState.className =
+		"weave-epub-ai-reading-note-source-preview is-hidden";
+	sourcePreviewState.tabIndex = 0;
+	const sourcePreviewHostBlock = getAiReadingNoteHostBlockElement(
+		marker,
+		scope,
+	);
+	const chrome = doc.createElement("div");
+	chrome.className = "weave-epub-ai-reading-note-chrome";
+
+	toolbar.append(rangeControls, typeSelect, countEl, renderModeEl);
+	chrome.append(toolbar, missingState, sourcePreviewState);
+	marker.insertAdjacentElement("afterend", chrome);
 	marker.dataset.aiReadingFilterMounted = "true";
 
-	const refreshFilterOptions = (): AiReadingNoteFilterSegment[] => {
-		const segments = collectAiReadingNoteFilterSegments(marker, scope);
-		syncAnnotationFilterSelectOptions(
-			typeSelect,
-			"全部类型",
-			orderAiReadingTypeOptions(
-				collectAiReadingSegmentOptions(
-					segments,
-					(segment) => segment.typeKey,
-					(segment) => segment.typeLabel,
+	let sourceRanges: AiReadingNoteSourceRange[] = [];
+	let sourceRangesLoaded = false;
+	let sourceRangesLoading = false;
+	let sourceRangesLoadKey = "";
+	let sourceRangesMissReloadKey = "";
+	let sourcePreviewRenderId = 0;
+	let sourcePreviewRenderKey = "";
+	let sourcePreviewRenderedKey = "";
+	let sourcePreviewComponent: Component | null = null;
+	let sourcePreviewActive = false;
+	let sourcePreviewShouldHideAddedOriginalContent = false;
+	let sourcePreviewHidePending = false;
+	let sourcePreviewHideSweepId = 0;
+	let sourcePreviewObserver: MutationObserver | null = null;
+	let sourcePreviewDetachedBlocks: Array<{
+		element: HTMLElement;
+		placeholder: Comment;
+	}> = [];
+	let contentFilterObserver: MutationObserver | null = null;
+	let tocItems: TocItem[] = [];
+	let selectedScopeIds: string[] = [EPUB_AI_READING_ALL_SCOPE_ID];
+	let selectedRangeKey = "";
+	let selectedRangeBaseKey = "";
+	let selectedRangeHref = "";
+	let selectedRangeIncludesDescendants = false;
+	let selectedScopeCanGenerate = false;
+
+	const unloadSourcePreviewComponent = (component: Component | null) => {
+		(component as unknown as { unload?: () => void } | null)?.unload?.();
+	};
+
+	const collectSourcePreviewOriginalContentBranches = (): HTMLElement[] => {
+		const branches = new Set<HTMLElement>();
+		let current: HTMLElement | null = sourcePreviewHostBlock;
+		while (current && current !== scope) {
+			const parent = current.parentElement;
+			if (!parent || !scope.contains(parent)) {
+				break;
+			}
+			for (const child of Array.from(parent.children)) {
+				if (child === current) {
+					continue;
+				}
+				if (!(child instanceof HTMLElement)) {
+					continue;
+				}
+				if (isInsideAiReadingNoteChrome(child)) {
+					continue;
+				}
+				branches.add(child);
+			}
+			current = parent;
+		}
+		return Array.from(branches);
+	};
+
+	const setSourcePreviewOriginalContentHidden = (
+		block: HTMLElement,
+		hidden: boolean,
+	) => {
+		if (block === sourcePreviewHostBlock || isInsideAiReadingNoteChrome(block)) {
+			return;
+		}
+		if (hidden) {
+			if (sourcePreviewDetachedBlocks.some((entry) => entry.element === block)) {
+				return;
+			}
+			const parent = block.parentNode;
+			if (!parent) {
+				return;
+			}
+			const placeholder = doc.createComment(
+				"weave-epub-ai-reading-note-original",
+			);
+			block.classList.add("weave-epub-ai-reading-note-source-detached");
+			parent.replaceChild(placeholder, block);
+			sourcePreviewDetachedBlocks.push({ element: block, placeholder });
+			return;
+		}
+		const remaining: typeof sourcePreviewDetachedBlocks = [];
+		for (const entry of sourcePreviewDetachedBlocks) {
+			if (entry.element !== block) {
+				remaining.push(entry);
+				continue;
+			}
+			entry.element.classList.remove("weave-epub-ai-reading-note-source-detached");
+			if (entry.placeholder.parentNode) {
+				entry.placeholder.parentNode.replaceChild(
+					entry.element,
+					entry.placeholder,
+				);
+			}
+		}
+		sourcePreviewDetachedBlocks = remaining;
+	};
+
+	const setOriginalContentHiddenForSourcePreview = (hidden: boolean) => {
+		if (!hidden) {
+			for (const entry of [...sourcePreviewDetachedBlocks].reverse()) {
+				entry.element.classList.remove(
+					"weave-epub-ai-reading-note-source-detached",
+				);
+				if (entry.placeholder.parentNode) {
+					entry.placeholder.parentNode.replaceChild(
+						entry.element,
+						entry.placeholder,
+					);
+				}
+			}
+			sourcePreviewDetachedBlocks = [];
+			return;
+		}
+		for (const block of [
+			...collectAiReadingOriginalContentBlocks(marker, scope),
+			...collectSourcePreviewOriginalContentBranches(),
+		]) {
+			setSourcePreviewOriginalContentHidden(block, true);
+		}
+	};
+	const hideAddedOriginalContentNodeForSourcePreview = (node: Node) => {
+		if (!(node instanceof HTMLElement) || isInsideAiReadingNoteChrome(node)) {
+			return;
+		}
+		const block = getAiReadingNoteBlockElement(node, scope);
+		if (block === sourcePreviewHostBlock || isInsideAiReadingNoteChrome(block)) {
+			return;
+		}
+		setSourcePreviewOriginalContentHidden(block, true);
+	};
+
+	const queueSourcePreviewOriginalContentHide = () => {
+		if (sourcePreviewHidePending) {
+			return;
+		}
+		sourcePreviewHidePending = true;
+		queueMicrotask(() => {
+			sourcePreviewHidePending = false;
+			if (!scope.contains(marker)) {
+				sourcePreviewObserver?.disconnect();
+				sourcePreviewObserver = null;
+				return;
+			}
+			if (sourcePreviewActive) {
+				setOriginalContentHiddenForSourcePreview(true);
+			}
+		});
+	};
+
+	const scheduleSourcePreviewOriginalContentHideSweep = () => {
+		const sweepId = ++sourcePreviewHideSweepId;
+		const activeWindow = marker.ownerDocument.defaultView || window;
+		for (const delay of [0, 20, 50, 100, 240, 520, 1000, 2000]) {
+			activeWindow.setTimeout(() => {
+				if (
+					sweepId !== sourcePreviewHideSweepId ||
+					!scope.contains(marker) ||
+					!sourcePreviewActive
+				) {
+					return;
+				}
+				setOriginalContentHiddenForSourcePreview(true);
+			}, delay);
+		}
+	};
+
+	const mutationObserverConstructor =
+		marker.ownerDocument.defaultView?.MutationObserver ||
+		(typeof MutationObserver !== "undefined" ? MutationObserver : null);
+	if (mutationObserverConstructor) {
+		sourcePreviewObserver = new mutationObserverConstructor((mutations) => {
+			if (!sourcePreviewActive && !sourcePreviewShouldHideAddedOriginalContent) {
+				return;
+			}
+			const hasOriginalContentMutation = mutations.some((mutation) => {
+				const target =
+					mutation.target instanceof HTMLElement ? mutation.target : null;
+				if (target && isInsideAiReadingNoteChrome(target)) {
+					return false;
+				}
+				return Array.from(mutation.addedNodes).some((node) => {
+					if (!(node instanceof HTMLElement)) {
+						return false;
+					}
+					return !isInsideAiReadingNoteChrome(node);
+				});
+			});
+			if (hasOriginalContentMutation) {
+				for (const mutation of mutations) {
+					for (const node of Array.from(mutation.addedNodes)) {
+						hideAddedOriginalContentNodeForSourcePreview(node);
+					}
+				}
+				if (sourcePreviewActive) {
+					queueSourcePreviewOriginalContentHide();
+				}
+			}
+		});
+		sourcePreviewObserver.observe(scope, {
+			childList: true,
+			subtree: true,
+		});
+	}
+
+	const getSourceFile = () =>
+		String(
+			marker.dataset.sourceFile ||
+				marker.getAttribute("data-source-file") ||
+				"",
+		).trim() ||
+		String(
+			scope
+				.querySelector<HTMLElement>(".weave-epub-ai-reading-note-root")
+				?.getAttribute("data-source-file") ||
+				"",
+		).trim();
+
+	const getSourceRangesLoadKey = () =>
+		[
+			String(sourcePath || "").trim(),
+			getSourceFile(),
+			getAiReadingMarkdownFileStatKey(app, sourcePath),
+		].join("\n");
+
+	const dispatchCurrentRangeRequest = () => {
+		const filePath = getSourceFile();
+		if (!filePath) {
+			return;
+		}
+		const activeWindow = marker.ownerDocument.defaultView || window;
+		dispatchAiReadingRequest(activeWindow, filePath, selectedScopeIds);
+		void (async () => {
+			try {
+				await safeResolveEpubHost(app)?.openEpubReader?.(filePath);
+				for (const delay of [120, 360]) {
+					activeWindow.setTimeout(() => {
+						dispatchAiReadingRequest(activeWindow, filePath, selectedScopeIds);
+					}, delay);
+				}
+			} catch {
+				// The already-open reader path above is enough for normal use.
+			}
+		})();
+	};
+
+	missingButton.addEventListener("click", (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		dispatchCurrentRangeRequest();
+	});
+
+	const buildSourcePreviewMarkdown = (
+		ranges: AiReadingNoteSourceRange[],
+		typeKey = "",
+	) =>
+		ranges
+			.map((range) =>
+				filterAiReadingSourceMarkdownByType(range.markdown.trim(), typeKey),
+			)
+			.filter(Boolean)
+			.join("\n\n---\n\n");
+	const buildSourcePreviewItems = (
+		ranges: AiReadingNoteSourceRange[],
+		typeKey = "",
+	) =>
+		ranges
+			.map((range) => ({
+				range,
+				markdown: filterAiReadingSourceMarkdownByType(
+					range.markdown.trim(),
+					typeKey,
 				),
-			),
-		);
-		syncAnnotationFilterSelectOptions(
-			sectionSelect,
-			"全部小节",
-			collectAiReadingSegmentOptions(
-				segments,
-				(segment) => segment.sectionKey,
-				(segment) => segment.sectionLabel,
-			),
-		);
-		return segments;
+			}))
+			.filter((item) => item.markdown.trim().length > 0);
+
+	const renderSourceRanges = async (
+		ranges: AiReadingNoteSourceRange[],
+		typeKey = "",
+	) => {
+		const previewItems = buildSourcePreviewItems(ranges, typeKey);
+		const markdown = previewItems
+			.map((item) => item.markdown)
+			.join("\n\n---\n\n");
+		const renderKey = markdown;
+		const shouldHidePreview = !markdown;
+		if (
+			renderKey === sourcePreviewRenderKey &&
+			sourcePreviewState.classList.contains("is-hidden") === shouldHidePreview
+		) {
+			return;
+		}
+		sourcePreviewRenderKey = renderKey;
+		sourcePreviewRenderedKey = "";
+		const renderId = ++sourcePreviewRenderId;
+		unloadSourcePreviewComponent(sourcePreviewComponent);
+		sourcePreviewComponent = null;
+		sourcePreviewState.replaceChildren();
+		if (!markdown) {
+			sourcePreviewState.classList.add("is-hidden");
+			sourcePreviewRenderedKey = "";
+			return;
+		}
+		sourcePreviewState.classList.remove("is-hidden");
+		try {
+			const component = new Component();
+			sourcePreviewComponent = component;
+			for (const item of previewItems) {
+				if (renderId !== sourcePreviewRenderId) {
+					unloadSourcePreviewComponent(component);
+					return;
+				}
+				const rangeEl = sourcePreviewState.ownerDocument.createElement("div");
+				rangeEl.className = "weave-epub-ai-reading-note-source-range";
+				rangeEl.dataset.rangeKey = item.range.key;
+				rangeEl.dataset.rangeLabel = item.range.label;
+				rangeEl.dataset.rangeHref = item.range.href;
+				sourcePreviewState.append(rangeEl);
+				await MarkdownRenderer.render(
+					app,
+					item.markdown,
+					rangeEl,
+					sourcePath,
+					component,
+				);
+			}
+			sourcePreviewRenderedKey = renderKey;
+			applyFilters();
+		} catch {
+			if (renderId === sourcePreviewRenderId) {
+				sourcePreviewState.textContent = markdown;
+				sourcePreviewRenderedKey = renderKey;
+				applyFilters();
+			}
+		}
+	};
+
+	const loadSourceRanges = async (options: { force?: boolean } = {}) => {
+		const loadKey = getSourceRangesLoadKey();
+		if (!loadKey.trim() || sourceRangesLoading) {
+			return;
+		}
+		if (
+			!options.force &&
+			sourceRangesLoaded &&
+			sourceRangesLoadKey === loadKey
+		) {
+			return;
+		}
+		sourceRangesLoading = true;
+		try {
+			const markdown = await readAiReadingNoteSourceMarkdown(
+				app,
+				sourcePath,
+				getSourceFile(),
+			);
+			sourceRanges = collectAiReadingSourceRanges(markdown);
+			sourceRangesLoadKey = loadKey;
+			sourceRangesLoaded = true;
+		} catch {
+			sourceRanges = [];
+			sourceRangesLoadKey = loadKey;
+			sourceRangesLoaded = true;
+		} finally {
+			sourceRangesLoading = false;
+			applyFilters();
+		}
+	};
+
+	const refreshFilterOptions = (): {
+		ranges: AiReadingNoteGeneratedRange[];
+		segments: AiReadingNoteFilterSegment[];
+	} => {
+		const ranges = collectAiReadingGeneratedRanges(marker, scope);
+		const segments = collectAiReadingNoteFilterSegments(marker, scope, ranges);
+		return { ranges, segments };
 	};
 
 	const applyFilters = () => {
-		const segments = refreshFilterOptions();
+		const { ranges, segments } = refreshFilterOptions();
 		const typeValue = typeSelect.value;
-		const sectionValue = sectionSelect.value;
-		const searchValue = normalizeFilterText(searchInput.value);
 		const visibleGroups = new Set<HTMLElement>();
 		const allGroups = new Set<HTMLElement>();
+		const hasRangeSelection = Boolean(selectedRangeKey);
+		const canLoadSourceIndex = Boolean(sourcePath || getSourceFile());
+		const domHasGeneratedRange =
+			!hasRangeSelection ||
+			ranges.some((range) => rangeMatchesSelection(range));
+		const matchingSourceRanges =
+			hasRangeSelection && sourceRangesLoaded
+				? sourceRanges.filter((range) => sourceRangeMatchesSelection(range))
+				: [];
+		const visibleSourceRanges = typeValue
+			? matchingSourceRanges.filter((range) =>
+					filterAiReadingSourceMarkdownByType(range.markdown, typeValue),
+				)
+			: matchingSourceRanges;
+		const sourcePreviewMarkdown = buildSourcePreviewMarkdown(
+			visibleSourceRanges,
+			typeValue,
+		);
+		const shouldUseSourcePreview =
+			hasRangeSelection && sourceRangesLoaded && Boolean(sourcePreviewMarkdown);
+		const sourcePreviewReady =
+			shouldUseSourcePreview &&
+			sourcePreviewRenderedKey === sourcePreviewMarkdown &&
+			sourcePreviewRenderKey === sourcePreviewMarkdown &&
+			!sourcePreviewState.classList.contains("is-hidden") &&
+			sourcePreviewState.childNodes.length > 0;
+		const hasSourcePreview = shouldUseSourcePreview;
+		const needsInitialSourceLoad =
+			hasRangeSelection &&
+			canLoadSourceIndex &&
+			(!sourceRangesLoaded ||
+				(sourceRangesLoaded &&
+					Boolean(sourceRangesLoadKey) &&
+					sourceRangesLoadKey !== getSourceRangesLoadKey())) &&
+			!sourceRangesLoading;
+		if (needsInitialSourceLoad) {
+			void loadSourceRanges({ force: sourceRangesLoaded });
+		}
+		const missReloadKey = [
+			selectedRangeKey,
+			selectedRangeHref,
+			getSourceRangesLoadKey(),
+			String(sourceRanges.length),
+		].join("\n");
+		const needsSourceMissReload =
+			hasRangeSelection &&
+			canLoadSourceIndex &&
+			sourceRangesLoaded &&
+			!sourceRangesLoading &&
+			!hasSourcePreview &&
+			!domHasGeneratedRange &&
+			selectedScopeCanGenerate &&
+			sourceRangesMissReloadKey !== missReloadKey;
+		if (needsSourceMissReload) {
+			sourceRangesMissReloadKey = missReloadKey;
+			void loadSourceRanges({ force: true });
+		}
+		const waitingForSourceIndex =
+			hasRangeSelection &&
+			canLoadSourceIndex &&
+			(!sourceRangesLoaded || sourceRangesLoading || needsInitialSourceLoad || needsSourceMissReload);
+		const hasGeneratedRange =
+			!hasRangeSelection ||
+			shouldUseSourcePreview ||
+			(!waitingForSourceIndex && domHasGeneratedRange);
+		const hideDomRanges =
+			hasRangeSelection &&
+			(waitingForSourceIndex || sourcePreviewReady || !domHasGeneratedRange);
+		sourcePreviewActive = sourcePreviewReady;
+		sourcePreviewShouldHideAddedOriginalContent = shouldUseSourcePreview;
+		const renderMode = sourcePreviewActive
+			? "source-detach"
+			: shouldUseSourcePreview || waitingForSourceIndex
+				? "source-preview-pending"
+				: hasRangeSelection
+					? "dom-filter"
+					: "no-selection";
+		renderModeEl.dataset.mode = renderMode;
+		renderModeEl.textContent = sourcePreviewActive
+			? `mode: ${renderMode} · scroll: isolated`
+			: `mode: ${renderMode}`;
+		scope.classList.toggle(
+			"weave-epub-ai-reading-note-source-active",
+			sourcePreviewActive,
+		);
+		scope.classList.toggle(
+			"weave-epub-ai-reading-note-scroll-isolated",
+			sourcePreviewActive,
+		);
+		sourcePreviewHostBlock.classList.toggle(
+			"weave-epub-ai-reading-note-source-host-active",
+			sourcePreviewActive,
+		);
+		if (!sourcePreviewActive) {
+			sourcePreviewHideSweepId += 1;
+			setOriginalContentHiddenForSourcePreview(false);
+		}
 		let visibleCount = 0;
+
+		for (const range of ranges) {
+			const matchesRange = !hideDomRanges && rangeMatchesSelection(range);
+			for (const element of range.elements) {
+				if (element === sourcePreviewHostBlock) {
+					element.classList.remove("is-hidden");
+					continue;
+				}
+				element.classList.add("weave-epub-ai-reading-note-range-block");
+				element.classList.toggle("is-hidden", !matchesRange);
+			}
+		}
 
 		for (const segment of segments) {
 			if (segment.groupElement) {
 				allGroups.add(segment.groupElement);
 			}
+			const matchesRange = segmentMatchesSelection(segment);
 			const matchesType = !typeValue || segment.typeKey === typeValue;
-			const matchesSection =
-				!sectionValue || segment.sectionKey === sectionValue;
-			const matchesSearch = !searchValue || segment.text.includes(searchValue);
-			const visible = matchesType && matchesSection && matchesSearch;
+			const visible =
+				!hideDomRanges && matchesRange && matchesType && hasGeneratedRange;
 			for (const element of segment.elements) {
+				if (element === sourcePreviewHostBlock) {
+					element.classList.remove("is-hidden");
+					continue;
+				}
 				element.classList.toggle("is-hidden", !visible);
 			}
 			if (visible) {
@@ -957,15 +2153,187 @@ function mountAiReadingNoteFilter(root: HTMLElement, attempt = 0): void {
 		for (const group of allGroups) {
 			group.classList.toggle("is-hidden", !visibleGroups.has(group));
 		}
-		countEl.textContent = `${visibleCount} / ${segments.length}`;
+		countEl.textContent = shouldUseSourcePreview
+			? `${visibleSourceRanges.length} / ${matchingSourceRanges.length}`
+			: `${visibleCount} / ${segments.length}`;
+		const shouldShowMissing = Boolean(
+			selectedRangeKey &&
+				!waitingForSourceIndex &&
+				!hasGeneratedRange &&
+				selectedScopeCanGenerate,
+		);
+		missingState.classList.toggle("is-hidden", !shouldShowMissing);
+		missingText.textContent = shouldShowMissing
+			? `当前目录范围还没有 AI 阅读内容：${selectedRangeKey}`
+			: "";
+		missingButton.disabled = !selectedScopeCanGenerate;
+		void renderSourceRanges(
+			shouldUseSourcePreview ? visibleSourceRanges : [],
+			typeValue,
+		);
+		if (sourcePreviewActive) {
+			setOriginalContentHiddenForSourcePreview(true);
+			scheduleSourcePreviewOriginalContentHideSweep();
+		}
+	};
+
+	const queueContentFilterRefresh = () => {
+		const activeWindow = marker.ownerDocument.defaultView || window;
+		activeWindow.setTimeout(() => {
+			if (!scope.contains(marker)) {
+				contentFilterObserver?.disconnect();
+				contentFilterObserver = null;
+				sourcePreviewObserver?.disconnect();
+				sourcePreviewObserver = null;
+				return;
+			}
+			applyFilters();
+		}, 0);
+	};
+
+	if (mutationObserverConstructor) {
+		contentFilterObserver = new mutationObserverConstructor((mutations) => {
+			if (mutationTouchesAiReadingNoteContent(mutations)) {
+				queueContentFilterRefresh();
+			}
+		});
+		contentFilterObserver.observe(scope, {
+			childList: true,
+			subtree: true,
+		});
+	}
+
+	const rangeMatchesSelection = (range: AiReadingNoteGeneratedRange) =>
+		segmentRangeMatchesSelection(range.key) ||
+		rangeHrefMatchesSelection(range.href);
+
+	const segmentMatchesSelection = (segment: AiReadingNoteFilterSegment) =>
+		segmentRangeMatchesSelection(segment.rangeKey) ||
+		rangeHrefMatchesSelection(segment.rangeHref);
+
+	const sourceRangeMatchesSelection = (range: AiReadingNoteSourceRange) =>
+		segmentRangeMatchesSelection(range.key) ||
+		rangeHrefMatchesSelection(range.href);
+
+	const segmentRangeMatchesSelection = (rangeKey: string) => {
+		const normalizedRangeKey = normalizeAiReadingRangeKey(rangeKey);
+		if (!selectedRangeKey) {
+			return true;
+		}
+		if (
+			normalizedRangeKey === selectedRangeKey ||
+			(Boolean(selectedRangeBaseKey) && normalizedRangeKey === selectedRangeBaseKey)
+		) {
+			return true;
+		}
+		return Boolean(
+			selectedRangeIncludesDescendants &&
+				selectedRangeBaseKey &&
+				normalizedRangeKey.startsWith(`${selectedRangeBaseKey} > `),
+		);
+	};
+
+	const rangeHrefMatchesSelection = (rangeHref: string) =>
+		Boolean(
+			selectedRangeHref &&
+				aiReadingRangeHrefsMatch(rangeHref, selectedRangeHref),
+		);
+
+	const renderRangeControls = () => {
+		rangeControls.replaceChildren();
+		if (tocItems.length === 0) {
+			const status = doc.createElement("span");
+			status.className = "weave-epub-ai-reading-note-range-status";
+			status.textContent = "目录范围：暂未读取到 EPUB 目录";
+			rangeControls.append(status);
+			selectedRangeKey = "";
+			selectedRangeBaseKey = "";
+			selectedRangeHref = "";
+			selectedRangeIncludesDescendants = false;
+			selectedScopeCanGenerate = false;
+			return;
+		}
+		const levels = buildEpubAiReadingScopeLevels(tocItems, selectedScopeIds);
+		selectedScopeIds = levels.map((level) => level.selectedId);
+		const selection = resolveEpubAiReadingScopeSelection(
+			tocItems,
+			selectedScopeIds,
+		);
+		selectedRangeKey =
+			selection.kind === "book-placeholder"
+				? ""
+				: getAiReadingScopePathKey(selection.pathLabels);
+		selectedRangeIncludesDescendants = Boolean(selection.includeDescendants);
+		selectedRangeBaseKey =
+			selection.kind === "book-placeholder"
+				? ""
+				: getAiReadingScopePathKey(
+						selection.includeDescendants
+							? selection.pathLabels.slice(0, -1)
+							: selection.pathLabels,
+					);
+		selectedRangeHref =
+			selection.kind === "book-placeholder"
+				? ""
+				: normalizeAiReadingRangeHref(selection.href);
+		selectedScopeCanGenerate = selection.canGenerate;
+		for (const level of levels) {
+			const row = doc.createElement("label");
+			row.className = "weave-epub-ai-reading-note-range-row";
+			const label = doc.createElement("span");
+			label.className = "weave-epub-ai-reading-note-range-label";
+			label.textContent = `第 ${level.depth + 1} 级`;
+			const select = doc.createElement("select");
+			select.className = "weave-epub-ai-reading-note-range-select";
+			select.disabled = level.disabled;
+			select.setAttribute("aria-label", `AI 阅读目录第 ${level.depth + 1} 级`);
+			for (const option of level.options) {
+				const optionEl = doc.createElement("option");
+				optionEl.value = option.id;
+				optionEl.textContent = option.label;
+				select.append(optionEl);
+			}
+			select.value = level.selectedId;
+			select.addEventListener("change", () => {
+				selectedScopeIds = selectedScopeIds.slice(0, level.depth);
+				selectedScopeIds[level.depth] = select.value;
+				if (select.value !== EPUB_AI_READING_ALL_SCOPE_ID) {
+					selectedScopeIds[level.depth + 1] = EPUB_AI_READING_ALL_SCOPE_ID;
+				}
+				renderRangeControls();
+				applyFilters();
+			});
+			row.append(label, select);
+			rangeControls.append(row);
+		}
+	};
+
+	const loadRangeControls = async () => {
+		const filePath = getSourceFile();
+		try {
+			const host = safeResolveEpubHost(app);
+			const directHost = app as unknown as {
+				loadPublicationTocItems?: (path: string) => Promise<TocItem[]>;
+			};
+			const loader = host?.loadPublicationTocItems || directHost.loadPublicationTocItems;
+			const loadedToc = loader
+				? await loader.call(host?.loadPublicationTocItems ? host : directHost, filePath)
+				: [];
+			tocItems = Array.isArray(loadedToc) ? loadedToc : [];
+		} catch {
+			tocItems = [];
+		}
+		renderRangeControls();
+		applyFilters();
 	};
 
 	typeSelect.addEventListener("change", applyFilters);
-	sectionSelect.addEventListener("change", applyFilters);
-	searchInput.addEventListener("input", applyFilters);
 	(marker as AiReadingNoteFilterMarker).__weaveApplyAiReadingNoteFilters =
 		applyFilters;
+	renderRangeControls();
 	applyFilters();
+	void loadRangeControls();
+	void loadSourceRanges();
 
 	const activeWindow = marker.ownerDocument.defaultView || window;
 	for (const delay of ANNOTATION_NOTE_FILTER_REFRESH_DELAYS_MS) {
@@ -974,6 +2342,74 @@ function mountAiReadingNoteFilter(root: HTMLElement, attempt = 0): void {
 				applyFilters();
 			}
 		}, delay);
+	}
+}
+
+function resolveAiReadingStartSourceFile(button: HTMLElement): string {
+	const fromButton = String(button.dataset.sourceFile || "").trim();
+	if (fromButton) {
+		return fromButton;
+	}
+	const container = button.closest<HTMLElement>(".weave-epub-ai-reading-empty");
+	const fromContainer = String(container?.dataset.sourceFile || "").trim();
+	if (fromContainer) {
+		return fromContainer;
+	}
+	const marker = button
+		.closest(".markdown-rendered, .markdown-preview-view, .el-div")
+		?.querySelector<HTMLElement>(".weave-epub-ai-reading-note-root");
+	return String(marker?.dataset.sourceFile || "").trim();
+}
+
+function dispatchAiReadingRequest(
+	targetWindow: Window,
+	filePath: string,
+	scopeIds: string[] = [],
+): void {
+	const detail = { filePath, scopeIds };
+	targetWindow.dispatchEvent(
+		new CustomEvent(EPUB_AI_READING_REQUEST_EVENT, { detail }),
+	);
+	if (targetWindow !== window) {
+		window.dispatchEvent(
+			new CustomEvent(EPUB_AI_READING_REQUEST_EVENT, { detail }),
+		);
+	}
+}
+
+function bindAiReadingNoteStartControls(app: App, root: HTMLElement): void {
+	const buttons = Array.from(
+		root.querySelectorAll<AiReadingStartButtonElement>(
+			'button[data-weave-ai-reading-action="start"]',
+		),
+	);
+	for (const button of buttons) {
+		if (button.__weaveAiReadingStartBound) {
+			continue;
+		}
+		button.__weaveAiReadingStartBound = true;
+		button.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			const filePath = resolveAiReadingStartSourceFile(button);
+			if (!filePath) {
+				return;
+			}
+			const activeWindow = button.ownerDocument.defaultView || window;
+			dispatchAiReadingRequest(activeWindow, filePath);
+			void (async () => {
+				try {
+					await safeResolveEpubHost(app)?.openEpubReader?.(filePath);
+					for (const delay of [120, 360]) {
+						activeWindow.setTimeout(() => {
+							dispatchAiReadingRequest(activeWindow, filePath);
+						}, delay);
+					}
+				} catch {
+					// The already-open reader path above is enough for normal use.
+				}
+			})();
+		});
 	}
 }
 
@@ -1008,6 +2444,9 @@ function resolveProtocolLocatorHref(href: string): string | null {
 				includeText: Boolean(String(parsed.text || "").trim()),
 				includeChapter: parsed.chapter !== undefined,
 				preferCompactLocator: true,
+				flashStyle: parsed.flashStyle,
+				flashColor: parsed.flashColor,
+				sourceTitle: parsed.sourceTitle,
 			},
 		);
 		return locatorHref && isSupportedBookLocatorHref(locatorHref)
@@ -1061,6 +2500,11 @@ function bindEpubLocatorLink(
 			stripSupportedBookExtension(filePath.split("/").pop() || "") ||
 			"Book",
 	);
+	if (parsed.sourceTitle) {
+		linkEl.setAttribute("title", parsed.sourceTitle);
+		linkEl.setAttribute("aria-label", parsed.sourceTitle);
+		linkEl.setAttribute("data-tooltip-position", "top");
+	}
 
 	boundLinkEl.__weaveEpubBoundHref = locatorHref;
 	const navigateFromLink = () => {
@@ -1075,6 +2519,20 @@ function bindEpubLocatorLink(
 				parsed,
 				calloutQuoteText,
 			);
+			if (parsed.flashStyle || parsed.flashColor) {
+				await linkService.navigateToEpubLocation(
+					filePath,
+					parsed.cfi,
+					quoteText,
+					parsed.sourceId,
+					sourceMarkdownPath,
+					{
+						flashStyle: parsed.flashStyle,
+						flashColor: parsed.flashColor,
+					},
+				);
+				return;
+			}
 			await linkService.navigateToEpubLocation(
 				filePath,
 				parsed.cfi,
@@ -1098,15 +2556,25 @@ function bindEpubLocatorLink(
 export function createEpubLinkPostProcessor(app: App) {
 	const scheduledMigrationPaths = new Set<string>();
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
-		applyEpubCalloutAppearanceAttributes(el);
-		mountAnnotationNoteFilter(el);
-		requestAnnotationNoteFilterRefresh(el);
-		mountAiReadingNoteFilter(el);
-		requestAiReadingNoteFilterRefresh(el);
-		bindAnnotationNoteDualWindowControls(app, el);
-
 		const sourcePath = String(ctx?.sourcePath || "").trim();
-		if (sourcePath && !scheduledMigrationPaths.has(sourcePath)) {
+		const isInsideAiReadingSourcePreview = Boolean(
+			el.closest(".weave-epub-ai-reading-note-source-preview"),
+		);
+		applyEpubCalloutAppearanceAttributes(el);
+		if (!isInsideAiReadingSourcePreview) {
+			mountAnnotationNoteFilter(el);
+			requestAnnotationNoteFilterRefresh(el);
+			mountAiReadingNoteFilter(app, el, 0, sourcePath);
+			requestAiReadingNoteFilterRefresh(el);
+			bindAnnotationNoteDualWindowControls(app, el);
+			bindAiReadingNoteStartControls(app, el);
+		}
+
+		if (
+			!isInsideAiReadingSourcePreview &&
+			sourcePath &&
+			!scheduledMigrationPaths.has(sourcePath)
+		) {
 			scheduledMigrationPaths.add(sourcePath);
 			queueMicrotask(() => {
 				void (async () => {

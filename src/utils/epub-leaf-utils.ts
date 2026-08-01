@@ -222,7 +222,7 @@ export async function openEpubInPreferredLeaf(
 
 /**
  * Open or focus a book for excerpt source navigation from notes.
- * Never reuses the active markdown/note leaf; reuses an existing reader leaf for the same book or opens a new tab.
+ * Never reuses the active markdown/note leaf; reuses an existing reader leaf for the same book or opens a right split.
  */
 export async function openBookForSourceNavigation(
 	app: App,
@@ -238,7 +238,7 @@ export async function openBookForSourceNavigation(
 
 	const canonicalPath = resolveSupportedBookFilePath(app, filePath) || normalizePath(filePath);
 	const existingLeaf = findOpenEpubLeaf(app, canonicalPath);
-	const leaf = existingLeaf ?? app.workspace.getLeaf("tab");
+	const leaf = existingLeaf ?? app.workspace.getLeaf("split", "vertical");
 
 	await leaf.setViewState({
 		type: viewType,

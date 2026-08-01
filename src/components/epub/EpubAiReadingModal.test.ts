@@ -272,6 +272,33 @@ describe("EpubAiReadingModal", () => {
 			filePath: "Books/scoped.epub",
 			chapterTitle: "准备工作",
 			chapterHref: "text/ch1.xhtml#setup",
+			sourceBlocks: [
+				{
+					id: "U003.P001",
+					chapterHref: "text/ch1.xhtml#setup",
+					headingPath: ["第一章", "准备你的 LaTeX 工具", "准备工作"],
+					text: "Scoped source paragraph one",
+					kind: "paragraph",
+				},
+				{
+					id: "U003.P002",
+					chapterHref: "text/ch1.xhtml#setup",
+					headingPath: ["第一章", "准备你的 LaTeX 工具", "准备工作"],
+					text: "Scoped source paragraph two",
+					kind: "paragraph",
+				},
+			],
+			closeReadingUnits: [
+				{
+					id: "U003",
+					label: "准备工作",
+					href: "text/ch1.xhtml#setup",
+					pathLabels: ["第一章", "准备你的 LaTeX 工具", "准备工作"],
+					flatIndex: 2,
+					depth: 2,
+					sourceBlockIds: ["U003.P001", "U003.P002"],
+				},
+			],
 			content: "scoped AI reading result",
 			model: "k3",
 			generatedAt: 1710000000000,
@@ -315,6 +342,8 @@ describe("EpubAiReadingModal", () => {
 			expect(modal.contentEl.textContent || "").toContain(
 				"scoped AI reading result",
 			);
+			expect(modal.contentEl.textContent || "").toContain("精读单元 1 个");
+			expect(modal.contentEl.textContent || "").toContain("来源块 2 段");
 		});
 	});
 
@@ -767,8 +796,130 @@ describe("EpubAiReadingModal", () => {
 		for (const link of sourceLinks) {
 			expect(link.getAttribute("title")).toBe("点击回到 EPUB 原文");
 			expect(link.getAttribute("aria-label")).toBe("点击回到 EPUB 原文");
+			expect(link.classList.contains("weave-epub-ai-reading-inline-source")).toBe(
+				true,
+			);
 			expect(link.getAttribute("title") || "").not.toContain("weave-cfi");
 		}
+	});
+
+	it("uses source block position as hover text for AI source links", async () => {
+		const sourceHref =
+			"Books/demo.epub#weave-cfi=epubcfi(/6/2)&sid=epubsrc-demo&eid=ai-source-U016-P003&flashStyle=highlight&flashColor=yellow";
+		mockedMarkdownRender.mockImplementationOnce(
+			async (_app, _markdown, containerEl) => {
+				const link = document.createElement("a");
+				link.setAttribute("href", sourceHref);
+				link.textContent = "原文";
+				containerEl.appendChild(link);
+			},
+		);
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 6",
+			chapterHref: "text/ch6.xhtml",
+			content: "原文",
+			model: "k3",
+			generatedAt: 1710000000000,
+			sourceBlocks: [
+				{
+					id: "U016.P003",
+					chapterHref: "text/ch6.xhtml",
+					headingPath: ["第六章", "图像处理", "原理"],
+					text: "Source paragraph",
+					kind: "paragraph",
+					sourceLink: `[[${sourceHref}|原文]]`,
+				},
+			],
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 6",
+				chapterHref: "text/ch6.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			const link = modal.contentEl.querySelector<HTMLAnchorElement>(
+				".weave-epub-ai-reading-inline-source",
+			);
+			expect(link?.textContent).toBe("原文");
+			expect(link?.getAttribute("title")).toBe(
+				"第六章，图像处理，原理，第 3 段",
+			);
+			expect(link?.getAttribute("aria-label")).toBe(
+				"第六章，图像处理，原理，第 3 段",
+			);
+		});
+	});
+
+	it("closes before rendered source links can stop click propagation", async () => {
+		const sourceHref =
+			"Books/demo.epub#weave-cfi=epubcfi(/6/2)&sid=epubsrc-demo&eid=ai-source-U016-P003&flashStyle=highlight&flashColor=yellow";
+		mockedMarkdownRender.mockImplementationOnce(
+			async (_app, _markdown, containerEl) => {
+				const link = document.createElement("a");
+				link.setAttribute("href", sourceHref);
+				link.textContent = "\u539f\u6587";
+				link.addEventListener(
+					"click",
+					(event) => {
+						event.preventDefault();
+						event.stopImmediatePropagation();
+					},
+					true,
+				);
+				containerEl.appendChild(link);
+			},
+		);
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 6",
+			chapterHref: "text/ch6.xhtml",
+			content: "\u539f\u6587",
+			model: "k3",
+			generatedAt: 1710000000000,
+			sourceBlocks: [
+				{
+					id: "U016.P003",
+					chapterHref: "text/ch6.xhtml",
+					headingPath: ["Chapter 6", "Images", "Principle"],
+					text: "Source paragraph",
+					kind: "paragraph",
+					sourceLink: `[[${sourceHref}|\u539f\u6587]]`,
+				},
+			],
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 6",
+				chapterHref: "text/ch6.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+		});
+		const closeSpy = vi.spyOn(modal, "close");
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			expect(modal.contentEl.querySelector("a")?.textContent).toBe("\u539f\u6587");
+		});
+		modal.contentEl.querySelector<HTMLAnchorElement>("a")?.click();
+
+		await waitFor(() => {
+			expect(closeSpy).toHaveBeenCalled();
+		});
 	});
 
 	it("closes after opening the chapter source link", async () => {
@@ -848,6 +999,49 @@ describe("EpubAiReadingModal", () => {
 		});
 	});
 
+	it("closes after a rendered unit-scoped source link is clicked", async () => {
+		mockedMarkdownRender.mockImplementationOnce(
+			async (_app, _markdown, containerEl) => {
+				const link = document.createElement("a");
+				link.textContent = "U016.P001";
+				containerEl.appendChild(link);
+			},
+		);
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "U016.P001",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+		});
+		const closeSpy = vi.spyOn(modal, "close");
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			expect(modal.contentEl.querySelector("a")?.textContent).toBe(
+				"U016.P001",
+			);
+		});
+		modal.contentEl.querySelector<HTMLAnchorElement>("a")?.click();
+
+		await waitFor(() => {
+			expect(closeSpy).toHaveBeenCalled();
+		});
+	});
+
 	it("lets the user drag the modal from the header", () => {
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
@@ -906,7 +1100,7 @@ describe("EpubAiReadingModal", () => {
 		expect(modalEl.style.top).toBe("160px");
 	});
 
-	it("shows an explicit open-note action after generating a note", async () => {
+	it("closes after generating and opening a note", async () => {
 		const noteFile = createMockFile("AI阅读笔记/Demo Book - AI阅读.md");
 		mockedUpsertEpubAiReadingNote.mockResolvedValue(noteFile);
 		mockedRequestEpubAiReading.mockResolvedValue({
@@ -929,6 +1123,7 @@ describe("EpubAiReadingModal", () => {
 				tocItems: [],
 			},
 		});
+		const closeSpy = vi.spyOn(modal, "close");
 
 		EpubAiReadingModal.prototype.onOpen.call(modal);
 
@@ -949,13 +1144,10 @@ describe("EpubAiReadingModal", () => {
 				{
 					openInNewTab: true,
 					focus: true,
+					openState: { mode: "preview" },
 				},
 			);
-			expect(
-				Array.from(modal.contentEl.querySelectorAll("button")).some(
-					(button) => button.textContent === "打开笔记",
-				),
-			).toBe(true);
+			expect(closeSpy).toHaveBeenCalled();
 		});
 	});
 

@@ -26,6 +26,8 @@ export interface BuildEpubAiReadingSourceBlockOptions {
 		paragraph: ReaderParagraph,
 		blockId: string,
 	) => string;
+	idForIndex?: (index: number) => string;
+	headingPath?: string[];
 	maxBlocks?: number;
 }
 
@@ -82,8 +84,10 @@ function inferBlockKind(
 	return "paragraph";
 }
 
-const SOURCE_REFERENCE_PATTERN = /\[((?:段|P)\d{3})\]/g;
+const SOURCE_REFERENCE_PATTERN = /\[((?:U\d{3}\.P\d{3})|(?:段|P)\d{3})\]/g;
 const LEGACY_SOURCE_REFERENCE_PATTERN = /^P\d{3}$/;
+const UNIT_SOURCE_REFERENCE_ID_PATTERN = /^U\d{3}\.P(\d{3})$/;
+const SEGMENT_SOURCE_REFERENCE_ID_PATTERN = /^(?:段|P)(\d{3})$/;
 
 function formatSourceBlockId(index: number): string {
 	return `段${String(index + 1).padStart(3, "0")}`;
@@ -91,6 +95,46 @@ function formatSourceBlockId(index: number): string {
 
 function normalizeSourceReferenceId(id: string): string {
 	return LEGACY_SOURCE_REFERENCE_PATTERN.test(id) ? `段${id.slice(1)}` : id;
+}
+
+export function formatEpubAiReadingSourceReferenceLabel(id: string): string {
+	return "原文";
+}
+
+function getSourceReferenceParagraphNumber(id: string): number | null {
+	const normalizedId = normalizeSourceReferenceId(String(id || "").trim());
+	const unitMatch = normalizedId.match(UNIT_SOURCE_REFERENCE_ID_PATTERN);
+	const segmentMatch = normalizedId.match(SEGMENT_SOURCE_REFERENCE_ID_PATTERN);
+	const value = Number(unitMatch?.[1] || segmentMatch?.[1] || 0);
+	return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+export function formatEpubAiReadingSourceReferenceTitle(
+	block: Pick<EpubAiReadingSourceBlock, "id" | "headingPath" | "chapterTitle">,
+): string {
+	const path = (block.headingPath || [])
+		.map((part) => String(part || "").trim())
+		.filter(Boolean);
+	if (path.length === 0 && block.chapterTitle) {
+		path.push(String(block.chapterTitle).trim());
+	}
+	const paragraphNumber = getSourceReferenceParagraphNumber(block.id);
+	const parts = [...path];
+	if (paragraphNumber) {
+		parts.push(`第 ${paragraphNumber} 段`);
+	}
+	return parts.length > 0 ? parts.join("，") : "点击回到 EPUB 原文";
+}
+
+function replaceWikilinkAlias(link: string, alias: string): string {
+	const normalizedAlias = String(alias || "").trim();
+	if (!normalizedAlias) {
+		return link;
+	}
+	if (/\|[^\]]*\]\]$/.test(link)) {
+		return link.replace(/\|[^\]]*\]\]$/, `|${normalizedAlias}]]`);
+	}
+	return link.endsWith("]]") ? `${link.slice(0, -2)}|${normalizedAlias}]]` : link;
 }
 
 export function buildEpubAiReadingSourceBlocksFromParagraphs(
@@ -106,7 +150,7 @@ export function buildEpubAiReadingSourceBlocksFromParagraphs(
 		if (!text) {
 			continue;
 		}
-		const id = formatSourceBlockId(blocks.length);
+		const id = options.idForIndex?.(blocks.length) || formatSourceBlockId(blocks.length);
 		blocks.push({
 			id,
 			readerParagraphId: paragraph.id,
@@ -115,7 +159,12 @@ export function buildEpubAiReadingSourceBlocksFromParagraphs(
 			chapterHref: paragraph.chapterHref,
 			cfi: paragraph.cfiRange,
 			sourceLink: options.sourceLinkForParagraph?.(paragraph, id) || undefined,
-			headingPath: paragraph.chapterTitle ? [paragraph.chapterTitle] : [],
+			headingPath:
+				options.headingPath && options.headingPath.length > 0
+					? options.headingPath
+					: paragraph.chapterTitle
+						? [paragraph.chapterTitle]
+						: [],
 			text,
 			kind: inferBlockKind(paragraph),
 		});
@@ -190,7 +239,13 @@ export function decorateEpubAiReadingSourceReferences(
 	return String(markdown || "")
 		.replace(SOURCE_REFERENCE_PATTERN, (match, id: string) => {
 			const block = byId.get(id) || byId.get(normalizeSourceReferenceId(id));
-			return block?.sourceLink || match;
+			if (!block?.sourceLink) {
+				return match;
+			}
+			return replaceWikilinkAlias(
+				block.sourceLink,
+				formatEpubAiReadingSourceReferenceLabel(block.id),
+			);
 		})
 		.replace(/\]\]\s*(?=\[\[)/g, "]] ");
 }

@@ -37,6 +37,16 @@ const nestedToc: TocItem[] = [
 	tocItem("chapter-2", "第二章", "text/ch2.xhtml", 1),
 ];
 
+const fourLevelToc: TocItem[] = [
+	tocItem("chapter-6", "第六章：图形创作", "text/ch6.xhtml", 1, [
+		tocItem("drawing", "绘制图形", "text/ch6.xhtml#drawing", 2, [
+			tocItem("shapes", "基本形状", "text/ch6.xhtml#shapes", 3, [
+				tocItem("rectangles", "矩形", "text/ch6.xhtml#rectangles", 4),
+			]),
+		]),
+	]),
+];
+
 describe("EPUB AI reading scope helper", () => {
 	it("builds cascaded selector levels from nested TOC items", () => {
 		const levels = buildEpubAiReadingScopeLevels(nestedToc, [
@@ -85,6 +95,23 @@ describe("EPUB AI reading scope helper", () => {
 				isAll: true,
 			}),
 		]);
+	});
+
+	it("keeps all four TOC levels visible when a parent level selects All", () => {
+		const levels = buildEpubAiReadingScopeLevels(fourLevelToc, [
+			"chapter-6",
+			EPUB_AI_READING_ALL_SCOPE_ID,
+		]);
+
+		expect(levels).toHaveLength(4);
+		expect(levels.map((level) => level.depth)).toEqual([0, 1, 2, 3]);
+		expect(levels[0].selectedId).toBe("chapter-6");
+		expect(levels[1].selectedId).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(levels[1].disabled).toBe(false);
+		expect(levels[2].selectedId).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(levels[2].disabled).toBe(true);
+		expect(levels[3].selectedId).toBe(EPUB_AI_READING_ALL_SCOPE_ID);
+		expect(levels[3].disabled).toBe(true);
 	});
 
 	it("keeps the book max depth visible when the selected top-level item is a leaf", () => {

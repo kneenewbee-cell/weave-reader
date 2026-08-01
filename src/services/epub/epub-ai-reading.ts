@@ -7,9 +7,16 @@ import type { TocItem } from "./types";
 import {
 	decorateEpubAiReadingSourceReferences,
 	formatEpubAiReadingSourceBlocksForPrompt,
+	formatEpubAiReadingSourceReferenceLabel,
 	limitEpubAiReadingSourceReferencesPerLine,
 	type EpubAiReadingSourceBlock,
 } from "./epub-ai-reading-source-blocks";
+import {
+	formatEpubAiReadingCloseReadingUnitsForPrompt,
+	type EpubAiReadingCloseReadingUnit,
+} from "./epub-ai-reading-close-reading-units";
+
+export const EPUB_AI_READING_REQUEST_EVENT = "weave-epub-ai-reading-request";
 
 export interface EpubAiReadingScopeInfo {
 	label?: string;
@@ -31,8 +38,11 @@ export interface EpubAiReadingInput {
 	tocItems: TocItem[];
 	sourceLink?: string;
 	sourceBlocks?: EpubAiReadingSourceBlock[];
+	closeReadingUnits?: EpubAiReadingCloseReadingUnit[];
 	scope?: EpubAiReadingScopeInfo;
 	scopeContext?: string;
+	requestPurpose?: EpubAiReadingRequestPurpose;
+	unitDetailMarkdown?: string;
 }
 
 export interface EpubAiReadingConfig {
@@ -67,6 +77,7 @@ export interface EpubAiReadingResult {
 	chapterHref: string;
 	sourceLink?: string;
 	sourceBlocks?: EpubAiReadingSourceBlock[];
+	closeReadingUnits?: EpubAiReadingCloseReadingUnit[];
 	scope?: EpubAiReadingScopeInfo;
 	content: string;
 	model: string;
@@ -83,13 +94,57 @@ export interface EpubAiReadingRequestOptions {
 	fetcher?: EpubAiReadingFetch;
 	streamRequester?: EpubAiReadingStreamRequester;
 	enableStreaming?: boolean;
+	batch?: false | Partial<EpubAiReadingBatchOptions>;
 	onStage?: (message: string) => void;
 	onPartialContent?: (content: string) => void;
 	now?: () => number;
 }
 
+export type EpubAiReadingRequestPurpose =
+	| "full"
+	| "unit-detail"
+	| "range-summary";
+
+export interface EpubAiReadingBatchOptions {
+	batchSize: number;
+	concurrency: number;
+	retryAttempts: number;
+	maxSourceBlocksPerBatch: number;
+	maxSourceCharsPerBatch: number;
+}
+
+export interface EpubAiReadingUnitBatch {
+	index: number;
+	units: EpubAiReadingCloseReadingUnit[];
+	sourceBlocks: EpubAiReadingSourceBlock[];
+	sourceCharCount: number;
+}
+
+export interface EpubAiReadingUnitBatchPlan {
+	batchSize: number;
+	concurrency: number;
+	retryAttempts: number;
+	batches: EpubAiReadingUnitBatch[];
+}
+
+export type EpubAiReadingUnitBatchValidationIssueType =
+	| "missing-unit"
+	| "missing-field"
+	| "missing-source-reference";
+
+export interface EpubAiReadingUnitBatchValidationIssue {
+	type: EpubAiReadingUnitBatchValidationIssueType;
+	unitId: string;
+	field?: string;
+}
+
 export interface EpubAiReadingNoteOptions {
 	folderPath?: string;
+}
+
+export interface EpubAiReadingNoteBookInfo {
+	bookTitle?: string;
+	filePath: string;
 }
 
 type EpubAiReadingRequester = (request: {
@@ -159,6 +214,12 @@ const EPUB_AI_READING_LEAF_MAX_COMPLETION_TOKENS = 16000;
 const EPUB_AI_READING_SECTION_MAX_COMPLETION_TOKENS = 48000;
 const EPUB_AI_READING_CHAPTER_MAX_COMPLETION_TOKENS = 131072;
 const EPUB_AI_READING_BOOK_MAX_COMPLETION_TOKENS = 131072;
+const EPUB_AI_READING_UNIT_BATCH_SIZE = 2;
+const EPUB_AI_READING_UNIT_BATCH_CONCURRENCY = 10;
+const EPUB_AI_READING_UNIT_BATCH_FALLBACK_CONCURRENCY = 4;
+const EPUB_AI_READING_UNIT_BATCH_RETRY_ATTEMPTS = 1;
+const EPUB_AI_READING_UNIT_BATCH_MAX_SOURCE_BLOCKS = 45;
+const EPUB_AI_READING_UNIT_BATCH_MAX_SOURCE_CHARS = 12000;
 const DEFAULT_NOTE_FOLDER = "AI阅读笔记";
 
 function normalizeConfigValue(value: unknown): string {
@@ -241,11 +302,40 @@ function formatEpubAiReadingSourceBlockSummary(
 	const lastId = normalizeConfigValue(
 		sourceBlocks[sourceBlocks.length - 1]?.id,
 	);
+	const firstLabel = firstId
+		? formatEpubAiReadingSourceReferenceLabel(firstId)
+		: "";
+	const lastLabel = lastId ? formatEpubAiReadingSourceReferenceLabel(lastId) : "";
+	if (sourceBlocks.length > 1) {
+		return `共 ${sourceBlocks.length} 段`;
+	}
+	if (firstLabel || lastLabel) {
+		return `${firstLabel || lastLabel}，共 ${sourceBlocks.length} 段`;
+	}
 	const range =
 		firstId && lastId && firstId !== lastId
 			? `${firstId}-${lastId}`
 			: firstId || lastId;
 	return `${range}，共 ${sourceBlocks.length} 段`;
+}
+
+function formatEpubAiReadingCloseReadingUnitSummary(
+	units: EpubAiReadingCloseReadingUnit[],
+): string {
+	const closeReadingUnits = (units || []).filter((unit) =>
+		normalizeConfigValue(unit.id),
+	);
+	if (closeReadingUnits.length === 0) {
+		return "";
+	}
+	const firstId = normalizeConfigValue(closeReadingUnits[0]?.id);
+	const lastId = normalizeConfigValue(
+		closeReadingUnits[closeReadingUnits.length - 1]?.id,
+	);
+	if (!firstId && !lastId) {
+		return "";
+	}
+	return `共 ${closeReadingUnits.length} 个精读单元`;
 }
 
 function isEpubAiReadingAllLabel(label: string): boolean {
@@ -350,6 +440,169 @@ export function resolveEpubAiReadingOutputPlan(
 		maxCompletionTokens,
 		promptLines: getEpubAiReadingOutputPromptLines(level, maxCompletionTokens),
 	};
+}
+
+function normalizeEpubAiReadingBatchOptions(
+	options?: false | Partial<EpubAiReadingBatchOptions>,
+): EpubAiReadingBatchOptions {
+	const batchOptions = options && typeof options === "object" ? options : {};
+	const normalizePositiveInteger = (
+		value: unknown,
+		fallback: number,
+		minimum = 1,
+	): number => {
+		const parsed = Number(value);
+		return Number.isFinite(parsed)
+			? Math.max(minimum, Math.floor(parsed))
+			: fallback;
+	};
+	return {
+		batchSize: normalizePositiveInteger(
+			batchOptions.batchSize,
+			EPUB_AI_READING_UNIT_BATCH_SIZE,
+		),
+		concurrency: normalizePositiveInteger(
+			batchOptions.concurrency,
+			EPUB_AI_READING_UNIT_BATCH_CONCURRENCY,
+		),
+		retryAttempts: normalizePositiveInteger(
+			batchOptions.retryAttempts,
+			EPUB_AI_READING_UNIT_BATCH_RETRY_ATTEMPTS,
+			0,
+		),
+		maxSourceBlocksPerBatch: normalizePositiveInteger(
+			batchOptions.maxSourceBlocksPerBatch,
+			EPUB_AI_READING_UNIT_BATCH_MAX_SOURCE_BLOCKS,
+		),
+		maxSourceCharsPerBatch: normalizePositiveInteger(
+			batchOptions.maxSourceCharsPerBatch,
+			EPUB_AI_READING_UNIT_BATCH_MAX_SOURCE_CHARS,
+		),
+	};
+}
+
+function getUnitSourceBlocks(
+	unit: EpubAiReadingCloseReadingUnit,
+	blocks: EpubAiReadingSourceBlock[],
+): EpubAiReadingSourceBlock[] {
+	const sourceBlockIds = new Set(
+		(unit.sourceBlockIds || []).map(normalizeConfigValue).filter(Boolean),
+	);
+	return (blocks || []).filter((block) => {
+		const id = normalizeConfigValue(block.id);
+		return sourceBlockIds.size > 0
+			? sourceBlockIds.has(id)
+			: id.startsWith(`${unit.id}.`);
+	});
+}
+
+function countSourceBlockChars(blocks: EpubAiReadingSourceBlock[]): number {
+	return (blocks || []).reduce((total, block) => total + block.text.length, 0);
+}
+
+export function planEpubAiReadingUnitBatches(
+	input: EpubAiReadingInput,
+	options?: false | Partial<EpubAiReadingBatchOptions>,
+): EpubAiReadingUnitBatchPlan {
+	const normalizedOptions = normalizeEpubAiReadingBatchOptions(options);
+	const units = Array.isArray(input.closeReadingUnits)
+		? input.closeReadingUnits.filter((unit) => normalizeConfigValue(unit.id))
+		: [];
+	const allSourceBlocks = Array.isArray(input.sourceBlocks)
+		? input.sourceBlocks
+		: [];
+	const batches: EpubAiReadingUnitBatch[] = [];
+	let currentUnits: EpubAiReadingCloseReadingUnit[] = [];
+	let currentSourceBlocks: EpubAiReadingSourceBlock[] = [];
+	let currentSourceChars = 0;
+	const flush = () => {
+		if (currentUnits.length === 0) {
+			return;
+		}
+		batches.push({
+			index: batches.length,
+			units: currentUnits,
+			sourceBlocks: currentSourceBlocks,
+			sourceCharCount: currentSourceChars,
+		});
+		currentUnits = [];
+		currentSourceBlocks = [];
+		currentSourceChars = 0;
+	};
+	for (const unit of units) {
+		const unitSourceBlocks = getUnitSourceBlocks(unit, allSourceBlocks);
+		const unitSourceChars = countSourceBlockChars(unitSourceBlocks);
+		const wouldExceedSize =
+			currentUnits.length > 0 &&
+			(currentUnits.length >= normalizedOptions.batchSize ||
+				currentSourceBlocks.length + unitSourceBlocks.length >
+					normalizedOptions.maxSourceBlocksPerBatch ||
+				currentSourceChars + unitSourceChars >
+					normalizedOptions.maxSourceCharsPerBatch);
+		if (wouldExceedSize) {
+			flush();
+		}
+		currentUnits.push(unit);
+		currentSourceBlocks.push(...unitSourceBlocks);
+		currentSourceChars += unitSourceChars;
+	}
+	flush();
+	return {
+		batchSize: normalizedOptions.batchSize,
+		concurrency: normalizedOptions.concurrency,
+		retryAttempts: normalizedOptions.retryAttempts,
+		batches,
+	};
+}
+
+const EPUB_AI_READING_UNIT_DETAIL_FIELDS = [
+	"小节摘要",
+	"核心结论",
+	"关键知识点",
+	"重要原文与解读",
+	"容易误解的点",
+	"与上下文关系",
+];
+
+function findEpubAiReadingUnitSection(content: string, unitId: string): string {
+	const escaped = escapeRegExp(unitId);
+	const match = String(content || "").match(
+		new RegExp(
+			`(?:^|\\n)#{2,4}\\s*${escaped}\\b[\\s\\S]*?(?=\\n#{2,4}\\s*U\\d{3}\\b|$)`,
+			"i",
+		),
+	);
+	return match?.[0] || "";
+}
+
+export function validateEpubAiReadingUnitBatchContent(
+	content: string,
+	units: EpubAiReadingCloseReadingUnit[],
+): EpubAiReadingUnitBatchValidationIssue[] {
+	const issues: EpubAiReadingUnitBatchValidationIssue[] = [];
+	for (const unit of units || []) {
+		const unitId = normalizeConfigValue(unit.id);
+		if (!unitId) {
+			continue;
+		}
+		const section = findEpubAiReadingUnitSection(content, unitId);
+		if (!section) {
+			issues.push({ type: "missing-unit", unitId });
+			continue;
+		}
+		for (const field of EPUB_AI_READING_UNIT_DETAIL_FIELDS) {
+			if (!section.includes(field)) {
+				issues.push({ type: "missing-field", unitId, field });
+			}
+		}
+		if (
+			(unit.sourceBlockIds || []).length > 0 &&
+			!new RegExp(`${escapeRegExp(unitId)}\\.P\\d{3}`).test(section)
+		) {
+			issues.push({ type: "missing-source-reference", unitId });
+		}
+	}
+	return issues;
 }
 
 function getProcessEnv(): Record<string, string | undefined> {
@@ -663,11 +916,122 @@ function findTocPath(
 	return null;
 }
 
+function formatUnitDetailFieldContract(): string {
+	return [
+		"对每个 U 单元必须按以下固定标题输出，标题文字不要改：",
+		"## Uxxx 标题路径",
+		"### 小节摘要",
+		"### 核心结论",
+		"### 关键知识点",
+		"### 重要原文与解读",
+		"### 容易误解的点",
+		"### 与上下文关系",
+		"不要输出范围摘要、章节总览或全局总结；本请求只负责这些 U 单元的基础精析。",
+	].join("\n");
+}
+
+function buildEpubAiReadingUnitDetailMessages(input: EpubAiReadingInput): {
+	system: string;
+	user: string;
+} {
+	const sourceBlocks = Array.isArray(input.sourceBlocks)
+		? input.sourceBlocks
+		: [];
+	const closeReadingUnits = Array.isArray(input.closeReadingUnits)
+		? input.closeReadingUnits
+		: [];
+	const sourceBlockText =
+		formatEpubAiReadingSourceBlocksForPrompt(sourceBlocks);
+	const closeReadingUnitText =
+		formatEpubAiReadingCloseReadingUnitsForPrompt(closeReadingUnits);
+	const tocLines = flattenTocItems(input.tocItems).join("\n") || "- 暂无目录";
+	const scope = normalizeEpubAiReadingScopeInfo(input.scope);
+	const scopePath = formatEpubAiReadingScopePath(scope, input.chapterTitle);
+	const system = [
+		"你是 EPUB AI 阅读助手。",
+		"你只基于用户提供的 EPUB 正文块和 U 单元结构做精析，不要编造书中没有的信息。",
+		"输出中文 Markdown，并严格保留 Uxxx.Pyyy 来源编号。",
+	].join("\n");
+	const user = [
+		"# 任务",
+		"请只精析本请求列出的 U 单元。即使一次请求包含多个 U，也必须保持每个 U 与单独选择该 U 时相同的精析密度。",
+		"不得合并 U，不得跳过 U，不得把多个 U 压缩成目录摘要。",
+		"本请求可能只是大范围阅读任务中的一个批次；未出现在本批的 U 单元不代表不存在，也不代表正文缺失。",
+		"不要写“某 U 未提供正文”“后续 U 未提供”这类批次缺失说明；只分析本批 U，并用目录/范围信息描述关系。",
+		"",
+		"# 固定输出模板",
+		formatUnitDetailFieldContract(),
+		"",
+		"# 必须精析单元",
+		closeReadingUnitText,
+		"",
+		"# 阅读范围",
+		scopePath,
+		"",
+		"# 全书目录",
+		tocLines,
+		"",
+		"# 精读范围正文块",
+		sourceBlockText || normalizeConfigValue(input.chapterMarkdown) || input.chapterText,
+	].join("\n");
+	return { system, user };
+}
+
+function buildEpubAiReadingRangeSummaryMessages(input: EpubAiReadingInput): {
+	system: string;
+	user: string;
+} {
+	const tocLines = flattenTocItems(input.tocItems).join("\n") || "- 暂无目录";
+	const scope = normalizeEpubAiReadingScopeInfo(input.scope);
+	const scopePath = formatEpubAiReadingScopePath(scope, input.chapterTitle);
+	const unitDetailMarkdown = normalizeConfigValue(input.unitDetailMarkdown);
+	const system = [
+		"你是 EPUB AI 阅读助手。",
+		"你现在只做范围级总览，不重新生成 U 单元精析。",
+		"输出中文 Markdown，结论必须来自已完成的 U 单元精析结果。",
+	].join("\n");
+	const user = [
+		"# 任务",
+		"下面已经有每个 U 单元的完整精析结果。请只基于这些结果生成范围级总结。",
+		"不要重新输出每个 U 的完整精析；不要删改 Uxxx.Pyyy 来源编号；不要编造未出现的内容。",
+		"",
+		"# 输出格式",
+		"不要输出 H1；请按以下二级标题输出：",
+		"## 范围摘要",
+		"## 核心结论",
+		"## 知识结构",
+		"## 章节关系",
+		"## 建议精读路径",
+		"",
+		"# 阅读范围",
+		scopePath,
+		"",
+		input.scopeContext
+			? "# 阅读范围与外部结构线索\n" + input.scopeContext
+			: "",
+		"",
+		"# 全书目录",
+		tocLines,
+		"",
+		"# 已完成的 U 单元精析结果",
+		unitDetailMarkdown,
+	]
+		.filter(Boolean)
+		.join("\n");
+	return { system, user };
+}
+
 export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 	system: string;
 	user: string;
 } {
 	const tocLines = flattenTocItems(input.tocItems).join("\n") || "- 暂无目录";
+	if (input.requestPurpose === "unit-detail") {
+		return buildEpubAiReadingUnitDetailMessages(input);
+	}
+	if (input.requestPurpose === "range-summary") {
+		return buildEpubAiReadingRangeSummaryMessages(input);
+	}
 	const tocPath =
 		findTocPath(input.tocItems, input.chapterHref)?.join(" > ") ||
 		input.chapterTitle;
@@ -679,6 +1043,11 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		: [];
 	const sourceBlockText =
 		formatEpubAiReadingSourceBlocksForPrompt(sourceBlocks);
+	const closeReadingUnits = Array.isArray(input.closeReadingUnits)
+		? input.closeReadingUnits
+		: [];
+	const closeReadingUnitText =
+		formatEpubAiReadingCloseReadingUnitsForPrompt(closeReadingUnits);
 	const scope = normalizeEpubAiReadingScopeInfo(input.scope);
 	const scopePath = formatEpubAiReadingScopePath(scope, tocPath);
 	const scopeHref =
@@ -692,8 +1061,14 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		scope,
 		sourceBlocks,
 	});
+	const usesUnitSourceBlocks = sourceBlocks.some((block) =>
+		/^U\d{3}\.P\d{3}$/.test(normalizeConfigValue(block.id)),
+	);
+	const sourceReferenceExample = usesUnitSourceBlocks ? "[U001.P001]" : "[段001]";
 	const sourceReferenceRule = sourceBlockText
-		? "请引用 [段001] 这种段落编号；每条最多 2 个段落编号。不要生成 EPUB CFI、内部锚点或 URL。"
+		? usesUnitSourceBlocks
+			? "请引用 Uxxx.Pyyy 这种来源编号，例如 [U001.P001]；每条最多 2 个来源编号。不要生成 EPUB CFI、内部锚点或 URL。"
+			: "请引用 [段001] 这种段落编号；每条最多 2 个段落编号。不要生成 EPUB CFI、内部锚点或 URL。"
 		: "\u63d0\u53d6\u91cd\u8981\u539f\u6587\u65f6\uff0c\u7528\u201c\u4f4d\u7f6e\u8bf4\u660e + \u4e3a\u4ec0\u4e48\u91cd\u8981\u201d\u63cf\u8ff0\uff0c\u4e0d\u8981\u4f2a\u9020\u4e0d\u53ef\u70b9\u51fb\u7684\u951a\u70b9\u3002";
 	const system = [
 		"你是 EPUB AI 阅读助手。",
@@ -710,20 +1085,41 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"# 阅读策略",
 		...outputPlan.promptLines,
 		"",
+		closeReadingUnitText ? "# 必须精析单元" : "",
+		closeReadingUnitText
+			? "必须逐项完成以下 U 单元。不得合并 U 单元，不得跳过 U 单元。中级/一级标题只作为分组，不能替代 U 单元精析。重要原文请引用 Uxxx.Pyyy，例如 [U001.P001]。"
+			: "",
+		closeReadingUnitText ? "单个 U 单元标准精析模板：" : "",
+		closeReadingUnitText
+			? "无论用户选择最低级小节、二级范围、一级章节还是更大范围，每个 U 单元都必须执行与单独选择该 U 单元时相同的标准精析模板。"
+			: "",
+		closeReadingUnitText
+			? "大范围不是压缩摘要版；全局总结是额外层，不得替代、减少或稀释任何 U 单元的基础精析。"
+			: "",
+		closeReadingUnitText ? "- 小节摘要：2-4 句。" : "",
+		closeReadingUnitText ? "- 核心结论：3-6 条。" : "",
+		closeReadingUnitText ? "- 关键知识点：4-8 条。" : "",
+		closeReadingUnitText
+			? "- 重要原文与解读：3-6 处，尽量带 Uxxx.Pyyy 来源编号。"
+			: "",
+		closeReadingUnitText ? "- 容易误解的点：2-4 条。" : "",
+		closeReadingUnitText ? "- 与上下文关系：1-3 条。" : "",
+		closeReadingUnitText,
+		closeReadingUnitText ? "" : "",
 		"# 输出格式",
 		"不要输出 H1；必须按下面这些二级标题输出。",
 		"## 范围摘要",
 		"- 2-4 句说明这个范围解决什么问题、讲了哪些内容、读完应获得什么能力。",
 		"## 核心结论",
-		"- 3-6 条可复习的结论；每条尽量带 1 个来源编号，每条最多 2 个段落编号。",
+		`- 3-6 条可复习的结论；每条尽量带 1 个来源编号，每条最多 2 个来源编号。可用 ${sourceReferenceExample}。`,
 		"## 关键知识点",
 		"- 提取概念、操作、规则、限制和容易遗漏的前提；不要简单复述目录。",
 		outputPlan.level === "leaf" ? "" : "## 按小节精读",
 		outputPlan.level === "leaf"
 			? ""
-			: "- 仅在选择了包含下级的范围时输出。这里是基础精析层，不是简短目录摘要；必须按最低级/下级标题逐项输出，且每个小节建议包含：小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点、与上下文关系。范围摘要、核心结论、章节关系属于全局总结层，不得替代这里的小节精析。",
+			: "- 仅在选择了包含下级的范围时输出。这里是基础精析层，不是简短目录摘要；每个小节建议包含：小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点、与上下文关系。若提供了“必须精析单元”，必须按 U 单元逐项输出，并沿用上方“单个 U 单元标准精析模板”。每个 U 单元都不得省略、合并或压缩成目录摘要。范围摘要、核心结论、章节关系属于全局总结层，不得替代这里的 U 单元精析。",
 		"## 重要原文与解读",
-		"- 格式：`原文/位置：短摘录或位置说明 [段001]`；`为什么重要：...`；`读法：...`。",
+		`- 格式：\`原文/位置：短摘录或位置说明 ${sourceReferenceExample}\`；\`为什么重要：...\`；\`读法：...\`。`,
 		"- 不要整段搬运原文；优先选择对理解本范围最关键的 3-8 处。",
 		"## 概念/术语",
 		"- 解释本范围中的术语，并指出它和具体操作或后续章节的关系。",
@@ -732,7 +1128,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"## 章节关系",
 		"- 区分“从正文可见”和“从目录推断”；范围外内容只能作为关系线索，不要当成本范围正文事实。",
 		"## 建议精读位置",
-		"- 给出建议回到 EPUB 精读的顺序；有来源编号时优先使用 [段001] 这种编号。",
+		`- 给出建议回到 EPUB 精读的顺序；有来源编号时优先使用 ${sourceReferenceExample} 这种编号。`,
 		"",
 		"# 书籍信息",
 		`- 书名：${normalizeConfigValue(input.bookTitle) || "未知书名"}`,
@@ -757,7 +1153,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 			: "",
 		scopeContext,
 		sourceBlockText
-			? "摘要可以综合多个段落，但关键知识点、核心结论和重要原文应尽量带来源编号，例如 [段001]。插件会把段落编号转换成可点击链接。"
+			? `摘要可以综合多个段落，但关键知识点、核心结论和重要原文应尽量带来源编号，例如 ${sourceReferenceExample}。插件会把来源编号转换成可点击链接。`
 			: "",
 		"",
 		"# 全书目录",
@@ -817,10 +1213,11 @@ function buildChatCompletionRequestBody(
 	config: EpubAiReadingConfig,
 	messages: ReturnType<typeof buildEpubAiReadingMessages>,
 	input: EpubAiReadingInput,
-	options: { stream?: boolean } = {},
+	options: { stream?: boolean; maxCompletionTokens?: number } = {},
 ): Record<string, unknown> {
 	const outputPlan = resolveEpubAiReadingOutputPlan(input);
 	const maxCompletionTokens =
+		normalizeNumberValue(options.maxCompletionTokens) ||
 		normalizeNumberValue(config.maxCompletionTokens) ||
 		outputPlan.maxCompletionTokens;
 	return {
@@ -1162,6 +1559,368 @@ async function requestStreamingChatCompletionText(
 	return await readStreamingChatCompletionText(response, options);
 }
 
+async function requestNonStreamingChatCompletionText(
+	config: EpubAiReadingConfig,
+	input: EpubAiReadingInput,
+	options: EpubAiReadingRequestOptions,
+	maxCompletionTokens?: number,
+): Promise<string> {
+	const messages = buildEpubAiReadingMessages(input);
+	const requester =
+		options.requester || (requestUrl as unknown as EpubAiReadingRequester);
+	const response = await requester({
+		url: normalizeBaseUrl(config.baseUrl) + "/chat/completions",
+		method: "POST",
+		contentType: "application/json",
+		headers: {
+			Authorization: "Bearer " + config.apiKey,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(
+			buildChatCompletionRequestBody(config, messages, input, {
+				maxCompletionTokens,
+			}),
+		),
+		throw: false,
+	});
+
+	if (response.status && response.status >= 400) {
+		throw new Error(
+			"Kimi API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP " + response.status,
+		);
+	}
+
+	const parsed = response.json || (response.text ? JSON.parse(response.text) : null);
+	const content = extractKimiChatCompletionText(parsed);
+	if (!content) {
+		throw new Error(
+			"Kimi API \u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u9605\u8bfb\u7ed3\u679c\u3002",
+		);
+	}
+	return content;
+}
+
+function buildUnitBatchInput(
+	input: EpubAiReadingInput,
+	batch: Pick<EpubAiReadingUnitBatch, "units" | "sourceBlocks">,
+): EpubAiReadingInput {
+	const sourceText = batch.sourceBlocks
+		.map((block) => block.text)
+		.join("\n\n")
+		.trim();
+	return {
+		...input,
+		requestPurpose: "unit-detail",
+		closeReadingUnits: batch.units,
+		sourceBlocks: batch.sourceBlocks,
+		chapterText: sourceText || input.chapterText,
+		chapterMarkdown: sourceText || input.chapterMarkdown,
+	};
+}
+
+function buildRangeSummaryInput(
+	input: EpubAiReadingInput,
+	unitDetailMarkdown: string,
+): EpubAiReadingInput {
+	return {
+		...input,
+		requestPurpose: "range-summary",
+		sourceBlocks: [],
+		closeReadingUnits: [],
+		chapterText: unitDetailMarkdown,
+		chapterMarkdown: unitDetailMarkdown,
+		unitDetailMarkdown,
+	};
+}
+
+async function runAiReadingPool<T>(
+	items: T[],
+	concurrency: number,
+	worker: (item: T, index: number) => Promise<string>,
+): Promise<string[]> {
+	const results = new Array<string>(items.length);
+	let nextIndex = 0;
+	async function runWorker(): Promise<void> {
+		for (;;) {
+			const index = nextIndex;
+			nextIndex += 1;
+			if (index >= items.length) {
+				return;
+			}
+			results[index] = await worker(items[index], index);
+		}
+	}
+	await Promise.all(
+		Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, () =>
+			runWorker(),
+		),
+	);
+	return results;
+}
+
+function formatBatchUnitRange(units: EpubAiReadingCloseReadingUnit[]): string {
+	const ids = (units || []).map((unit) => normalizeConfigValue(unit.id)).filter(Boolean);
+	if (ids.length === 0) {
+		return "未知单元";
+	}
+	return ids.length === 1 ? ids[0] : `${ids[0]}-${ids[ids.length - 1]}`;
+}
+
+function createValidationErrorMessage(
+	issues: EpubAiReadingUnitBatchValidationIssue[],
+): string {
+	return issues
+		.slice(0, 4)
+		.map((issue) =>
+			issue.field
+				? `${issue.unitId}:${issue.type}:${issue.field}`
+				: `${issue.unitId}:${issue.type}`,
+		)
+		.join(", ");
+}
+
+async function requestValidatedUnitBatchContent(
+	input: EpubAiReadingInput,
+	config: EpubAiReadingConfig,
+	options: EpubAiReadingRequestOptions,
+	batch: EpubAiReadingUnitBatch,
+	plan: EpubAiReadingUnitBatchPlan,
+): Promise<string> {
+	const maxCompletionTokens =
+		EPUB_AI_READING_LEAF_MAX_COMPLETION_TOKENS *
+		Math.max(1, batch.units.length);
+	for (let attempt = 0; attempt <= plan.retryAttempts; attempt += 1) {
+		const content = await requestNonStreamingChatCompletionText(
+			config,
+			buildUnitBatchInput(input, batch),
+			options,
+			maxCompletionTokens,
+		);
+		const issues = validateEpubAiReadingUnitBatchContent(content, batch.units);
+		if (issues.length === 0) {
+			return content;
+		}
+		if (attempt < plan.retryAttempts) {
+			emitAiReadingStage(
+				options,
+				`第 ${batch.index + 1}/${plan.batches.length} 批内容不完整，正在重试`,
+			);
+		}
+	}
+	if (batch.units.length <= 1) {
+		throw new Error(
+			`AI 阅读单元 ${formatBatchUnitRange(batch.units)} 内容不完整：${createValidationErrorMessage(
+				validateEpubAiReadingUnitBatchContent("", batch.units),
+			)}`,
+		);
+	}
+	emitAiReadingStage(
+		options,
+		`第 ${batch.index + 1}/${plan.batches.length} 批仍不完整，正在拆成单元重试`,
+	);
+	const unitContents: string[] = [];
+	for (const unit of batch.units) {
+		const sourceBlocks = getUnitSourceBlocks(unit, batch.sourceBlocks);
+		const unitBatch: EpubAiReadingUnitBatch = {
+			index: batch.index,
+			units: [unit],
+			sourceBlocks,
+			sourceCharCount: countSourceBlockChars(sourceBlocks),
+		};
+		const content = await requestNonStreamingChatCompletionText(
+			config,
+			buildUnitBatchInput(input, unitBatch),
+			options,
+			EPUB_AI_READING_LEAF_MAX_COMPLETION_TOKENS,
+		);
+		const issues = validateEpubAiReadingUnitBatchContent(content, [unit]);
+		if (issues.length > 0) {
+			throw new Error(
+				`AI 阅读单元 ${unit.id} 内容不完整：${createValidationErrorMessage(
+					issues,
+				)}`,
+			);
+		}
+		unitContents.push(content);
+	}
+	return unitContents.join("\n\n");
+}
+
+function shouldUseBatchedAiReading(
+	input: EpubAiReadingInput,
+	options: EpubAiReadingRequestOptions,
+): boolean {
+	if (options.batch === false) {
+		return false;
+	}
+	const units = Array.isArray(input.closeReadingUnits)
+		? input.closeReadingUnits.filter((unit) => normalizeConfigValue(unit.id))
+		: [];
+	return units.length > 1;
+}
+
+function buildDecoratedEpubAiReadingResult(
+	input: EpubAiReadingInput,
+	config: EpubAiReadingConfig,
+	options: EpubAiReadingRequestOptions,
+	content: string,
+): EpubAiReadingResult {
+	const sourceBlocks = Array.isArray(input.sourceBlocks)
+		? input.sourceBlocks
+		: [];
+	const limitedContent =
+		sourceBlocks.length > 0
+			? limitEpubAiReadingSourceReferencesPerLine(content)
+			: content;
+	const decoratedContent =
+		sourceBlocks.length > 0
+			? decorateEpubAiReadingSourceReferences(limitedContent, sourceBlocks)
+			: limitedContent;
+
+	return {
+		bookTitle: input.bookTitle,
+		author: input.author,
+		filePath: normalizePath(input.filePath),
+		chapterTitle:
+			normalizeConfigValue(input.chapterTitle) || "\u5f53\u524d\u7ae0\u8282",
+		chapterHref: normalizeConfigValue(input.chapterHref),
+		sourceLink: input.sourceLink,
+		sourceBlocks,
+		closeReadingUnits: Array.isArray(input.closeReadingUnits)
+			? input.closeReadingUnits
+			: [],
+		scope: normalizeEpubAiReadingScopeInfo(input.scope),
+		content: decoratedContent,
+		model: config.model,
+		generatedAt: options.now?.() ?? Date.now(),
+	};
+}
+
+async function requestBatchedEpubAiReadingWithPlan(
+	input: EpubAiReadingInput,
+	config: EpubAiReadingConfig,
+	options: EpubAiReadingRequestOptions,
+	plan: EpubAiReadingUnitBatchPlan,
+): Promise<EpubAiReadingResult> {
+	if (plan.batches.length === 0) {
+		return buildDecoratedEpubAiReadingResult(input, config, options, "");
+	}
+	emitAiReadingStage(
+		options,
+		`正在切分 ${input.closeReadingUnits?.length || 0} 个精读单元，每批 ${plan.batchSize} 个，并发 ${plan.concurrency}`,
+	);
+	const batchContents = new Array<string>(plan.batches.length);
+	const publishPartial = () => {
+		const readyDetails = batchContents.filter(Boolean).join("\n\n");
+		if (readyDetails) {
+			options.onPartialContent?.(`## 按小节精读\n\n${readyDetails}`);
+		}
+	};
+	await runAiReadingPool(
+		plan.batches,
+		plan.concurrency,
+		async (batch) => {
+			emitAiReadingStage(
+				options,
+				`正在生成第 ${batch.index + 1}/${plan.batches.length} 批：${formatBatchUnitRange(
+					batch.units,
+				)}`,
+			);
+			const content = await requestValidatedUnitBatchContent(
+				input,
+				config,
+				options,
+				batch,
+				plan,
+			);
+			batchContents[batch.index] = content;
+			publishPartial();
+			return content;
+		},
+	);
+	const unitDetailMarkdown = batchContents.filter(Boolean).join("\n\n");
+	emitAiReadingStage(options, "正在整理范围总览");
+	const summaryContent = await requestNonStreamingChatCompletionText(
+		config,
+		buildRangeSummaryInput(input, unitDetailMarkdown),
+		options,
+		resolveEpubAiReadingOutputPlan(input).maxCompletionTokens,
+	);
+	const combinedContent = [
+		summaryContent,
+		"## 按小节精读",
+		unitDetailMarkdown,
+	]
+		.filter(Boolean)
+		.join("\n\n");
+	return buildDecoratedEpubAiReadingResult(
+		input,
+		config,
+		options,
+		combinedContent,
+	);
+}
+
+function shouldRetryBatchedAiReadingWithLowerConcurrency(error: unknown): boolean {
+	const message = formatAiReadingErrorReason(error).toLowerCase();
+	if (/\bhttp\s+(401|403|400)\b/.test(message)) {
+		return false;
+	}
+	return (
+		/\bhttp\s+(429|5\d\d)\b/.test(message) ||
+		message.includes("rate limit") ||
+		message.includes("timeout") ||
+		message.includes("timed out") ||
+		message.includes("network") ||
+		message.includes("fetch") ||
+		message.includes("socket") ||
+		message.includes("econn") ||
+		message.includes("etimedout")
+	);
+}
+
+async function requestBatchedEpubAiReading(
+	input: EpubAiReadingInput,
+	config: EpubAiReadingConfig,
+	options: EpubAiReadingRequestOptions,
+): Promise<EpubAiReadingResult> {
+	const plan = planEpubAiReadingUnitBatches(input, options.batch);
+	try {
+		return await requestBatchedEpubAiReadingWithPlan(
+			input,
+			config,
+			options,
+			plan,
+		);
+	} catch (error) {
+		const fallbackConcurrency = Math.min(
+			EPUB_AI_READING_UNIT_BATCH_FALLBACK_CONCURRENCY,
+			Math.max(1, plan.concurrency - 1),
+		);
+		if (
+			plan.concurrency <= fallbackConcurrency ||
+			!shouldRetryBatchedAiReadingWithLowerConcurrency(error)
+		) {
+			throw error;
+		}
+		emitAiReadingStage(
+			options,
+			`高并发请求失败（${formatAiReadingErrorReason(
+				error,
+			)}），正在降到并发 ${fallbackConcurrency} 重试`,
+		);
+		return await requestBatchedEpubAiReadingWithPlan(
+			input,
+			config,
+			options,
+			{
+				...plan,
+				concurrency: fallbackConcurrency,
+			},
+		);
+	}
+}
+
 export async function requestEpubAiReading(
 	input: EpubAiReadingInput,
 	options: EpubAiReadingRequestOptions = {},
@@ -1193,6 +1952,9 @@ export async function requestEpubAiReading(
 		throw new Error(
 			"\u5f53\u524d\u7ae0\u8282\u6ca1\u6709\u53ef\u53d1\u9001\u7ed9 AI \u7684\u6b63\u6587\u3002",
 		);
+	}
+	if (shouldUseBatchedAiReading(input, options)) {
+		return await requestBatchedEpubAiReading(input, config, options);
 	}
 
 	emitAiReadingStage(
@@ -1281,6 +2043,9 @@ export async function requestEpubAiReading(
 		chapterHref: normalizeConfigValue(input.chapterHref),
 		sourceLink: input.sourceLink,
 		sourceBlocks,
+		closeReadingUnits: Array.isArray(input.closeReadingUnits)
+			? input.closeReadingUnits
+			: [],
 		scope: normalizeEpubAiReadingScopeInfo(input.scope),
 		content: decoratedContent,
 		model: config.model,
@@ -1342,12 +2107,127 @@ function formatGeneratedAt(timestamp: number): string {
 	return new Date(value).toISOString();
 }
 
+function replaceWikilinkAlias(link: string, alias: string): string {
+	const normalizedAlias = normalizeConfigValue(alias);
+	if (!normalizedAlias) {
+		return link;
+	}
+	if (/\|[^\]]*\]\]$/.test(link)) {
+		return link.replace(/\|[^\]]*\]\]$/, `|${normalizedAlias}]]`);
+	}
+	return link.endsWith("]]")
+		? `${link.slice(0, -2)}|${normalizedAlias}]]`
+		: link;
+}
+
+function formatMarkdownLinkLabel(link: string, label: string): string {
+	const normalizedLink = normalizeConfigValue(link);
+	const normalizedLabel = normalizeConfigValue(label);
+	if (!normalizedLink || !normalizedLabel) {
+		return normalizedLink;
+	}
+	if (/^\[\[[\s\S]+\]\]$/.test(normalizedLink)) {
+		return replaceWikilinkAlias(normalizedLink, normalizedLabel);
+	}
+	if (/^\[[^\]]*\]\([^)]+\)$/.test(normalizedLink)) {
+		return normalizedLink.replace(/^\[[^\]]*\]/, `[${normalizedLabel}]`);
+	}
+	const target = /[\s()]/.test(normalizedLink)
+		? `<${normalizedLink.replace(/>/g, "%3E")}>`
+		: normalizedLink;
+	return `[${normalizedLabel}](${target})`;
+}
+
 function escapeHtmlAttribute(value: unknown): string {
 	return String(value || "")
 		.replace(/&/g, "&amp;")
 		.replace(/"/g, "&quot;")
 		.replace(/</g, "&lt;")
 		.replace(/>/g, "&gt;");
+}
+
+function formatCloseReadingUnitScopePath(
+	unit: EpubAiReadingCloseReadingUnit,
+): string {
+	const pathLabels = normalizeStringList(unit.pathLabels);
+	if (pathLabels.length > 0) {
+		return pathLabels.join(" > ");
+	}
+	return (
+		normalizeConfigValue(unit.label) ||
+		normalizeConfigValue(unit.href) ||
+		normalizeConfigValue(unit.id)
+	);
+}
+
+function formatCloseReadingUnitSourceSummary(
+	unit: EpubAiReadingCloseReadingUnit,
+): string {
+	const sourceBlockIds = normalizeStringList(unit.sourceBlockIds);
+	if (sourceBlockIds.length === 0) {
+		return "";
+	}
+	const firstId = sourceBlockIds[0];
+	const lastId = sourceBlockIds[sourceBlockIds.length - 1];
+	const range = firstId === lastId ? firstId : `${firstId}-${lastId}`;
+	return `${range}，共 ${sourceBlockIds.length} 段`;
+}
+
+function buildCloseReadingUnitNoteMarker(
+	result: EpubAiReadingResult,
+	unit: EpubAiReadingCloseReadingUnit,
+	parentScopeLabel: string,
+): string {
+	return `<div class="weave-epub-ai-reading-note-root" data-source-file="${escapeHtmlAttribute(
+		normalizePath(result.filePath),
+	)}" data-chapter-href="${escapeHtmlAttribute(
+		normalizeConfigValue(result.chapterHref),
+	)}" data-scope-href="${escapeHtmlAttribute(
+		normalizeConfigValue(unit.href),
+	)}" data-scope-strategy="最小精读单元" data-source-summary="${escapeHtmlAttribute(
+		formatCloseReadingUnitSourceSummary(unit),
+	)}" data-unit-summary="${escapeHtmlAttribute(
+		normalizeConfigValue(unit.id),
+	)}" data-scope-level="leaf" data-scope-label="${escapeHtmlAttribute(
+		formatCloseReadingUnitScopePath(unit),
+	)}" data-parent-scope-label="${escapeHtmlAttribute(
+		parentScopeLabel,
+	)}" data-ai-unit-id="${escapeHtmlAttribute(
+		normalizeConfigValue(unit.id),
+	)}"></div>`;
+}
+
+function annotateCloseReadingUnitSections(
+	content: string,
+	result: EpubAiReadingResult,
+	parentScopeLabel: string,
+): string {
+	let markdown = content;
+	for (const unit of result.closeReadingUnits || []) {
+		const unitId = normalizeConfigValue(unit.id);
+		if (!unitId || markdown.includes(`data-ai-unit-id="${unitId}"`)) {
+			continue;
+		}
+		const headingPattern = new RegExp(
+			`(^#{2,6}\\s+${escapeRegExp(unitId)}(?:\\b|\\s)[^\\n\\r]*(?:\\r?\\n|$))`,
+			"m",
+		);
+		if (!headingPattern.test(markdown)) {
+			continue;
+		}
+		const marker = buildCloseReadingUnitNoteMarker(
+			result,
+			unit,
+			parentScopeLabel,
+		);
+		markdown = markdown.replace(headingPattern, (heading) => {
+			const separator = heading.endsWith("\n") || heading.endsWith("\r")
+				? ""
+				: "\n";
+			return `${heading}${separator}${marker}\n`;
+		});
+	}
+	return markdown;
 }
 
 export function buildEpubAiReadingNoteSection(
@@ -1361,40 +2241,64 @@ export function buildEpubAiReadingNoteSection(
 	const sourceBlockSummary = formatEpubAiReadingSourceBlockSummary(
 		result.sourceBlocks || [],
 	);
+	const closeReadingUnitSummary = formatEpubAiReadingCloseReadingUnitSummary(
+		result.closeReadingUnits || [],
+	);
 	const outputPlan = resolveEpubAiReadingOutputPlan({
 		scope,
 		sourceBlocks: result.sourceBlocks || [],
 	});
 	const scopeLabel =
 		scopePath || normalizeConfigValue(result.chapterTitle) || "当前章节";
+	const sourceDetails = [
+		sourceBlockSummary,
+		closeReadingUnitSummary,
+		scope ? formatEpubAiReadingScopeStrategy(scope) : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const sourceLink = normalizeConfigValue(result.sourceLink)
+		? formatMarkdownLinkLabel(result.sourceLink || "", "打开原文")
+		: "";
+	const generatedDetails = [
+		outputPlan.label,
+		normalizeConfigValue(result.model) || DEFAULT_KIMI_MODEL,
+		formatGeneratedAt(result.generatedAt),
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const content = annotateCloseReadingUnitSections(
+		result.content.trim(),
+		result,
+		scopeLabel,
+	);
 	const lines = [
 		`<!-- weave-epub-ai-reading:start key="${key}" -->`,
 		`## ${normalizeConfigValue(result.chapterTitle) || "当前章节"}`,
 		"",
-		`> 书籍：${normalizeConfigValue(result.bookTitle) || "未知书名"}`,
-		result.author ? `> 作者：${normalizeConfigValue(result.author)}` : "",
-		`> EPUB 文件：${normalizePath(result.filePath)}`,
-		result.chapterHref
-			? `> 章节 href：${normalizeConfigValue(result.chapterHref)}`
-			: "",
-		scopePath ? `> 阅读范围：${scopePath}` : "",
-		scope?.href ? `> 范围 href：${normalizeConfigValue(scope.href)}` : "",
-		scope ? `> 范围策略：${formatEpubAiReadingScopeStrategy(scope)}` : "",
-		sourceBlockSummary ? `> 来源块：${sourceBlockSummary}` : "",
-		result.sourceLink
-			? `> EPUB 跳转：${normalizeConfigValue(result.sourceLink)}`
-			: "",
-		`> 阅读层级：${outputPlan.label}`,
-		`> 模型：${normalizeConfigValue(result.model) || DEFAULT_KIMI_MODEL}`,
-		`> 生成时间：${formatGeneratedAt(result.generatedAt)}`,
+		"> [!info] AI 阅读",
+		`> 范围：${scopeLabel}`,
+		sourceDetails ? `> 来源：${sourceDetails}` : "",
+		sourceLink ? `> 原文：${sourceLink}` : "",
+		`> 生成：${generatedDetails}`,
 		"",
 		`<div class="weave-epub-ai-reading-note-root" data-source-file="${escapeHtmlAttribute(
 			normalizePath(result.filePath),
+		)}" data-chapter-href="${escapeHtmlAttribute(
+			normalizeConfigValue(result.chapterHref),
+		)}" data-scope-href="${escapeHtmlAttribute(
+			normalizeConfigValue(scope?.href),
+		)}" data-scope-strategy="${escapeHtmlAttribute(
+			scope ? formatEpubAiReadingScopeStrategy(scope) : "当前章节正文",
+		)}" data-source-summary="${escapeHtmlAttribute(
+			sourceBlockSummary,
+		)}" data-unit-summary="${escapeHtmlAttribute(
+			closeReadingUnitSummary,
 		)}" data-scope-level="${
 			outputPlan.level
 		}" data-scope-label="${escapeHtmlAttribute(scopeLabel)}"></div>`,
 		"",
-		result.content.trim(),
+		content,
 		"",
 		`<!-- weave-epub-ai-reading:end key="${key}" -->`,
 	];
@@ -1414,7 +2318,6 @@ export function buildEpubAiReadingNoteMarkdown(options: {
 	return [
 		`# ${title} - AI阅读`,
 		"",
-		`> EPUB 文件：${normalizePath(options.filePath)}`,
 		"> 本笔记由 Weave EPUB Reader 的 AI 阅读功能生成；重复生成同一阅读范围会更新对应段落。",
 		"",
 		options.sectionsMarkdown.trim(),
@@ -1422,6 +2325,42 @@ export function buildEpubAiReadingNoteMarkdown(options: {
 	]
 		.join("\n")
 		.replace(/\n{3,}/g, "\n\n");
+}
+
+export function buildEpubAiReadingEmptyNoteMarkdown(
+	options: EpubAiReadingNoteBookInfo,
+): string {
+	const fileFallback =
+		normalizePath(options.filePath)
+			.split("/")
+			.pop()
+			?.replace(/\.[^.]+$/g, "") || "EPUB";
+	const title = sanitizeNoteTitle(options.bookTitle, fileFallback);
+	const sourceFile = escapeHtmlAttribute(normalizePath(options.filePath));
+	return [
+		`# ${title} - AI阅读`,
+		"",
+		"> 本笔记由 Weave EPUB Reader 的 AI 阅读功能生成；同一本书的 AI 阅读内容会汇总到这一份笔记里。",
+		"",
+		"<!-- weave-epub-ai-reading-empty:start -->",
+		`<div class="weave-epub-ai-reading-note-root" data-source-file="${sourceFile}" data-empty="true"></div>`,
+		"",
+		`<div class="weave-epub-ai-reading-empty" data-source-file="${sourceFile}">`,
+		"<p class=\"weave-epub-ai-reading-empty__title\">暂无 AI 阅读内容</p>",
+		"<p class=\"weave-epub-ai-reading-empty__body\">你可以按目录选择阅读范围，让 AI 生成摘要、重点、原文索引和知识结构。</p>",
+		`<button class="weave-epub-ai-reading-start" type="button" data-weave-ai-reading-action="start" data-source-file="${sourceFile}">开始 AI 阅读</button>`,
+		"</div>",
+		"<!-- weave-epub-ai-reading-empty:end -->",
+		"",
+	]
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n");
+}
+
+function removeEpubAiReadingEmptyState(content: string): string {
+	const pattern =
+		/<!-- weave-epub-ai-reading-empty:start -->[\s\S]*?<!-- weave-epub-ai-reading-empty:end -->\s*/;
+	return content.replace(pattern, "").replace(/\n{3,}/g, "\n\n");
 }
 
 function upsertSection(
@@ -1471,9 +2410,10 @@ export async function upsertEpubAiReadingNote(
 	const existing = app.vault.getAbstractFileByPath(targetPath);
 	if (existing instanceof TFile) {
 		const current = await app.vault.read(existing);
+		const currentWithoutEmptyState = removeEpubAiReadingEmptyState(current);
 		await app.vault.modify(
 			existing,
-			upsertSection(current, sectionMarkdown, key),
+			upsertSection(currentWithoutEmptyState, sectionMarkdown, key),
 		);
 		return existing;
 	}
@@ -1484,5 +2424,22 @@ export async function upsertEpubAiReadingNote(
 			filePath: result.filePath,
 			sectionsMarkdown: sectionMarkdown,
 		}),
+	);
+}
+
+export async function ensureEpubAiReadingNote(
+	app: App,
+	book: EpubAiReadingNoteBookInfo,
+	options: EpubAiReadingNoteOptions = {},
+): Promise<TFile> {
+	const targetPath = resolveEpubAiReadingNotePath(book, options);
+	await DirectoryUtils.ensureDirForFile(app.vault.adapter, targetPath);
+	const existing = app.vault.getAbstractFileByPath(targetPath);
+	if (existing instanceof TFile) {
+		return existing;
+	}
+	return await app.vault.create(
+		targetPath,
+		buildEpubAiReadingEmptyNoteMarkdown(book),
 	);
 }
