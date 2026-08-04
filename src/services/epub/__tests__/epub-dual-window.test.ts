@@ -64,6 +64,7 @@ function createMockLeaf(input: {
 function createMockApp(input: {
 	epubLeaves?: any[];
 	markdownLeaves?: any[];
+	aiReadingLeaves?: any[];
 	files?: Record<string, unknown>;
 } = {}) {
 	const files = new Map(
@@ -77,6 +78,9 @@ function createMockApp(input: {
 			getLeavesOfType: vi.fn((viewType: string) => {
 				if (viewType === "markdown") {
 					return input.markdownLeaves || [];
+				}
+				if (viewType === "weave-epub-ai-reading-note") {
+					return input.aiReadingLeaves || [];
 				}
 				return viewType.includes("epub") ? input.epubLeaves || [] : [];
 			}),
@@ -587,6 +591,41 @@ describe("epub-dual-window", () => {
 			positionMarker: "epub",
 		});
 		expect(app.workspace.revealLeaf).toHaveBeenCalledWith(noteLeaf);
+	});
+
+	it("resolves AI reading note dual-window panes for the shared floating swap button", () => {
+		const epubLeaf = createMockLeaf({
+			filePath: "demo.epub",
+			state: {
+				filePath: "demo.epub",
+				positionMarker: "epub",
+			},
+		});
+		const noteLeaf = createMockLeaf({
+			type: "weave-epub-ai-reading-note",
+			state: {
+				notePath: "AI阅读笔记/demo - AI阅读.md",
+				sourceFile: "demo.epub",
+				dualWindowMode: true,
+				positionMarker: "note",
+			},
+		});
+		const app = createMockApp({
+			epubLeaves: [epubLeaf],
+			aiReadingLeaves: [noteLeaf],
+		});
+		registerEpubDualWindowSession(app, {
+			mode: "book-ai-reading-note",
+			bookId: "book-1",
+			filePath: "demo.epub",
+			notePath: "AI阅读笔记/demo - AI阅读.md",
+		});
+
+		expect(resolveEpubDualWindowSwapPanes(app, { filePath: "demo.epub" })).toMatchObject({
+			mode: "book-ai-reading-note",
+			mainLeaf: epubLeaf,
+			sideLeaf: noteLeaf,
+		});
 	});
 
 	it("restores note dual-window sessions from Obsidian-restored leaves after restart", async () => {

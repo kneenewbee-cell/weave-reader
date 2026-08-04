@@ -200,6 +200,8 @@
 			toggleTutorial: () => void;
 			addBookmark: () => Promise<void>;
 			openAiReading: () => Promise<void>;
+			openAiReadingNote?: () => Promise<void>;
+			openAiReadingDualWindow?: () => Promise<void>;
 			canUseReadingProgress?: () => boolean;
 			canUseReadingReference?: () => boolean;
 			canUseParagraphMode?: () => boolean;
@@ -3115,6 +3117,9 @@
 		if (mode === 'book-annotation-note') {
 			return '\u539f\u4e66 + \u6807\u6ce8\u7b14\u8bb0';
 		}
+		if (mode === 'book-ai-reading-note') {
+			return '\u539f\u4e66 + AI \u9605\u8bfb\u7b14\u8bb0';
+		}
 		if (mode === 'annotation-compare') {
 			return '\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4';
 		}
@@ -3130,7 +3135,7 @@
 		return true;
 	}
 
-	async function closeBookAnnotationNoteDualWindow(session?: EpubOpenDualWindowSession): Promise<void> {
+	async function closeBookNoteDualWindow(session?: EpubOpenDualWindowSession): Promise<void> {
 		const targetFilePath = session?.filePath || filePath;
 		const panes = resolveEpubDualWindowPanes(app, targetFilePath);
 		const noteLeaf = panes?.noteLeaf || session?.sideLeaf || null;
@@ -3175,8 +3180,8 @@
 	}
 
 	async function closeOpenDualWindowSession(session: EpubOpenDualWindowSession): Promise<void> {
-		if (session.mode === 'book-annotation-note') {
-			await closeBookAnnotationNoteDualWindow(session);
+		if (session.mode === 'book-annotation-note' || session.mode === 'book-ai-reading-note') {
+			await closeBookNoteDualWindow(session);
 			return;
 		}
 		if (session.mode === 'annotation-compare') {
@@ -4298,7 +4303,6 @@
 
 	async function handleAutoReadingPositionSaved(position: ReadingPosition): Promise<void> {
 		await syncReadingReferencePointFromAutoSave(position);
-		await flushEpubPendingProgress(storageService);
 		notifyBookshelfProgressChanged(book?.filePath);
 	}
 
@@ -4901,7 +4905,7 @@
 				includeText: false,
 				includeChapter: false,
 				preferCompactLocator: true,
-				flashStyle: 'highlight',
+				flashStyle: 'pulse',
 				flashColor: 'yellow',
 				sourceTitle,
 			}
@@ -4999,6 +5003,38 @@
 		}
 	}
 
+	async function buildAiReadingSourceBlocksForTocUnit(
+		unit: EpubAiReadingCloseReadingUnit,
+		flatTocItems: FlatTocExportItem[],
+		options: AiReadingSourceBlockBuildOptions = {}
+	) {
+		if (typeof readerService.getTocParagraphsForReadingPoint !== 'function') {
+			return [];
+		}
+		try {
+			const paragraphs = await readerService.getTocParagraphsForReadingPoint(
+				unit.href,
+				unit.label,
+				flatTocItems,
+				unit.flatIndex,
+				{ includeHtml: true }
+			);
+			if (!paragraphs.length) {
+				return [];
+			}
+			return buildEpubAiReadingSourceBlocksFromParagraphs(paragraphs, {
+				maxBlocks: options.maxBlocks ?? EPUB_AI_READING_SOURCE_BLOCK_LIMIT,
+				headingPath: options.headingPath,
+				idForIndex: options.idForIndex,
+				sourceLinkForParagraph: (paragraph, blockId) =>
+					buildAiReadingParagraphSourceLink(paragraph, blockId, options.headingPath),
+			});
+		} catch (error) {
+			logger.warn('[EpubReaderApp] Failed to build AI reading unit range source blocks:', error);
+			return [];
+		}
+	}
+
 	async function buildAiReadingCloseReadingUnitSources(
 		scope: EpubAiReadingScopeSelection,
 		flatTocItems: FlatTocExportItem[]
@@ -5036,10 +5072,18 @@
 					closeReadingUnits.push(attachSourceBlockIdsToCloseReadingUnit(unit, []));
 					continue;
 				}
-				const unitBlocks = await buildAiReadingSourceBlocksForDraft(draft, {
+				const rangeBlocks = await buildAiReadingSourceBlocksForTocUnit(unit, flatTocItems, {
 					headingPath: unit.pathLabels,
 					idForIndex: (index) => formatEpubAiReadingUnitSourceBlockId(unit.id, index),
 				});
+				const unitBlocks =
+					rangeBlocks.length > 0
+						? rangeBlocks
+						: await buildAiReadingSourceBlocksForDraft(draft, {
+								headingPath: unit.pathLabels,
+								idForIndex: (index) =>
+									formatEpubAiReadingUnitSourceBlockId(unit.id, index),
+							});
 				sourceBlocks.push(...unitBlocks);
 				closeReadingUnits.push(
 					attachSourceBlockIdsToCloseReadingUnit(
@@ -5271,7 +5315,7 @@
 			return;
 		}
 		if (!canvasService.isActive()) {
-			new Notice('当前书还没有绑定 Canvas，请先在读书器里创建或绑定 Canvas。');
+			new Notice('当前书还没有绑定 Canvas，请先在阅读器里创建或绑定 Canvas。');
 			return;
 		}
 		highlightToolbarCanvasBusy = true;
@@ -5303,7 +5347,7 @@
 			return;
 		}
 		if (!canvasService.isActive()) {
-			new Notice('当前书还没有绑定 Canvas，请先在读书器里创建或绑定 Canvas。');
+			new Notice('当前书还没有绑定 Canvas，请先在阅读器里创建或绑定 Canvas。');
 			return;
 		}
 		highlightToolbarCanvasBusy = true;
@@ -5690,24 +5734,62 @@
 		}
 	}
 
-	async function openAiReadingNote() {
+	async function openAiReadingNoteWithOptions(options: {
+		dualWindowMode?: boolean;
+		openMode?: 'existing' | 'right-split';
+		focus?: boolean;
+	} = {}) {
 		try {
 			if (!book) {
 				new Notice(t('epub.reader.bookNotReady'));
 				return;
 			}
+			const annotationBookId = await syncPortableBookIdForCurrentBook();
 			const noteFile = await ensureEpubAiReadingNote(app, {
 				bookTitle: book.metadata.title,
 				filePath,
 			});
+			const host = resolveEpubHost(app);
+			const openMode = options.openMode || 'existing';
+			const focus = options.focus !== undefined ? options.focus : true;
+			if (options.dualWindowMode && host?.openEpubAiReadingNote) {
+				await host.openEpubAiReadingNote({
+					bookId: annotationBookId || book.id,
+					notePath: noteFile.path,
+					sourceFile: filePath,
+					dualWindowMode: options.dualWindowMode,
+					openMode,
+					focus,
+				});
+				return;
+			}
 			await openAnnotationNoteFileWithExistingLeaf(app, noteFile, {
-				openMode: 'existing',
-				focus: true,
+				openMode,
+				focus,
 			});
 		} catch (error) {
 			logger.error('[EpubReaderApp] Failed to open AI reading note:', error);
 			new Notice(`AI阅读笔记打开失败：${error instanceof Error ? error.message : String(error)}`);
 		}
+	}
+
+	async function openAiReadingNote() {
+		await openAiReadingNoteWithOptions();
+	}
+
+	async function openAiReadingDualWindow() {
+		if (!book?.id) {
+			new Notice(t('epub.reader.bookNotReady'));
+			return;
+		}
+		if (!(await ensureCanOpenDualWindowMode('book-ai-reading-note'))) {
+			return;
+		}
+		await openAiReadingNoteWithOptions({
+			dualWindowMode: true,
+			openMode: 'right-split',
+			focus: false,
+		});
 	}
 
 	function handleAiReadingRequestEvent(event: Event) {
@@ -8139,6 +8221,7 @@
 			addBookmark,
 			openAiReading,
 			openAiReadingNote,
+			openAiReadingDualWindow,
 			canUseReadingProgress: hasReadingProgressCapability,
 			canUseReadingReference: hasReadingReferenceCapability,
 			canUseParagraphMode: hasParagraphModeCapability,

@@ -7,6 +7,7 @@ export interface EpubRuntimeConfig {
 		reader: string;
 		sidebar: string;
 		bookshelfSidebar: string;
+		aiReadingNote: string;
 	};
 	protocol: {
 		primaryName: string;
@@ -63,6 +64,9 @@ export const EPUB_RUNTIME: EpubRuntimeConfig = {
 		bookshelfSidebar: isStandalone
 			? "weave-epub-bookshelf-sidebar-standalone"
 			: "weave-epub-bookshelf-sidebar",
+		aiReadingNote: isStandalone
+			? "weave-epub-ai-reading-note-standalone"
+			: "weave-epub-ai-reading-note",
 	},
 	protocol: {
 		primaryName: primaryProtocolName,

@@ -1068,6 +1068,165 @@
 	display: none;
 }
 
+.weave-epub-ai-reading-note-view {
+	height: 100%;
+	overflow: auto;
+	background: var(--background-primary);
+}
+
+.weave-epub-ai-reading-note-view__shell {
+	width: min(100%, 1160px);
+	margin: 0 auto;
+	padding: 20px 32px 56px;
+}
+
+.weave-epub-ai-reading-note-view__toolbar {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-items: stretch;
+	gap: 8px;
+	padding: 12px 0 14px;
+	border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+	background: var(--background-primary);
+}
+
+.weave-epub-ai-reading-note-view__range-controls {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+	align-items: end;
+	gap: 10px;
+	min-width: 0;
+}
+
+.weave-epub-ai-reading-note-view__range-select-row {
+	display: grid;
+	grid-template-columns: max-content minmax(120px, 1fr);
+	align-items: end;
+	gap: 6px;
+	min-width: 0;
+}
+
+.weave-epub-ai-reading-note-view__range-select-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	white-space: nowrap;
+}
+
+.weave-epub-ai-reading-note-view__range-select,
+.weave-epub-ai-reading-note-view__type-select,
+.weave-epub-ai-reading-note-view__search {
+	height: 32px;
+	min-width: 0;
+	max-width: none;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+
+.weave-epub-ai-reading-note-view__secondary-controls {
+	display: grid;
+	grid-template-columns: minmax(140px, 190px) minmax(180px, 1fr) max-content max-content;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.weave-epub-ai-reading-note-view__search {
+	width: 100%;
+	padding-inline: 10px;
+}
+
+.weave-epub-ai-reading-note-view__source-button {
+	height: 32px;
+	padding: 0 12px;
+	border: 1px solid var(--interactive-accent);
+	border-radius: 6px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.weave-epub-ai-reading-note-view__source-button:disabled {
+	border-color: var(--background-modifier-border);
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.weave-epub-ai-reading-note-view__count {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.weave-epub-ai-reading-note-view__content {
+	padding-top: 18px;
+}
+
+.weave-epub-ai-reading-note-view__range {
+	padding-bottom: 20px;
+}
+
+.weave-epub-ai-reading-note-view__range + .weave-epub-ai-reading-note-view__range {
+	border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 58%, transparent);
+	padding-top: 20px;
+}
+
+.weave-epub-ai-reading-note-view__empty {
+	padding: 18px 0;
+	color: var(--text-muted);
+}
+
+.weave-epub-ai-reading-note-view__start-button {
+	margin: 4px 0 12px;
+	padding: 7px 14px;
+	border: 1px solid var(--interactive-accent);
+	border-radius: 6px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+}
+
+.weave-epub-ai-reading-note-view__start-button:hover,
+.weave-epub-ai-reading-note-view__start-button:focus-visible {
+	background: var(--interactive-accent-hover);
+	border-color: var(--interactive-accent-hover);
+}
+
+@media (max-width: 900px) {
+	.weave-epub-ai-reading-note-view__shell {
+		padding: 16px 16px 40px;
+	}
+
+	.weave-epub-ai-reading-note-view__toolbar {
+		grid-template-columns: 1fr;
+		align-items: stretch;
+	}
+
+	.weave-epub-ai-reading-note-view__range-controls {
+		grid-template-columns: 1fr;
+	}
+
+	.weave-epub-ai-reading-note-view__secondary-controls {
+		grid-template-columns: 1fr;
+	}
+
+	.weave-epub-ai-reading-note-view__range-select,
+	.weave-epub-ai-reading-note-view__type-select,
+	.weave-epub-ai-reading-note-view__search {
+		max-width: none;
+		width: 100%;
+	}
+}
+
 .markdown-rendered.weave-epub-ai-reading-note-source-active
 	.weave-epub-ai-reading-note-source-host-active
 	~ *,
@@ -1520,13 +1679,22 @@
 }
 
 /* Temp highlight animation */
-.epub-temp-highlight {
-	animation: epub-temp-highlight-pulse 0.5s ease-in-out 3;
+.epub-temp-highlight,
+.weave-source-locate-focus-pulse {
+	animation: epub-temp-highlight-pulse 0.52s ease-in-out 5;
+	transform-box: fill-box;
+	transform-origin: center;
 }
 
 @keyframes epub-temp-highlight-pulse {
-	0%, 100% { opacity: 0.4; }
-	50% { opacity: 0.8; }
+	0%, 100% {
+		opacity: 0.42;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 0.9;
+		transform: scale(1.012);
+	}
 }
 
 /* ========================================

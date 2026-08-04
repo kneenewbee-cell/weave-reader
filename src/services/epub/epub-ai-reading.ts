@@ -15,6 +15,10 @@ import {
 	formatEpubAiReadingCloseReadingUnitsForPrompt,
 	type EpubAiReadingCloseReadingUnit,
 } from "./epub-ai-reading-close-reading-units";
+import {
+	buildEpubAiReadingSourceMap,
+	serializeEpubAiReadingSourceMapComment,
+} from "./epub-ai-reading-source-map";
 
 export const EPUB_AI_READING_REQUEST_EVENT = "weave-epub-ai-reading-request";
 
@@ -944,13 +948,27 @@ function buildEpubAiReadingUnitDetailMessages(input: EpubAiReadingInput): {
 		formatEpubAiReadingSourceBlocksForPrompt(sourceBlocks);
 	const closeReadingUnitText =
 		formatEpubAiReadingCloseReadingUnitsForPrompt(closeReadingUnits);
+	const usesUnitSourceBlocks = sourceBlocks.some((block) =>
+		/^U\d{3}\.P\d{3}$/.test(normalizeConfigValue(block.id)),
+	);
+	const sourceReferenceExample = usesUnitSourceBlocks
+		? "{{source:U001.P001}}"
+		: "{{source:段001}}";
+	const sourceRangeReferenceExample = usesUnitSourceBlocks
+		? "{{source-range:U001.P001-U001.P003}}"
+		: "";
+	const sourceReferenceRule = sourceBlockText
+		? usesUnitSourceBlocks
+			? `原文引用只允许使用占位符：单段写 ${sourceReferenceExample}，连续多段共同支撑同一句总结时必须合并写成一个范围 ${sourceRangeReferenceExample}，不要连续堆多个单段占位符。不要生成 Obsidian wikilink、EPUB URL、CFI、内部锚点或裸露 Uxxx.Pyyy。`
+			: `原文引用只允许使用占位符：单段写 ${sourceReferenceExample}。不要生成 Obsidian wikilink、EPUB URL、CFI 或内部锚点。`
+		: "";
 	const tocLines = flattenTocItems(input.tocItems).join("\n") || "- 暂无目录";
 	const scope = normalizeEpubAiReadingScopeInfo(input.scope);
 	const scopePath = formatEpubAiReadingScopePath(scope, input.chapterTitle);
 	const system = [
 		"你是 EPUB AI 阅读助手。",
 		"你只基于用户提供的 EPUB 正文块和 U 单元结构做精析，不要编造书中没有的信息。",
-		"输出中文 Markdown，并严格保留 Uxxx.Pyyy 来源编号。",
+		"输出中文 Markdown。原文引用只能写来源占位符，插件会把占位符转换成用户看到的“原文”按钮。",
 	].join("\n");
 	const user = [
 		"# 任务",
@@ -958,6 +976,9 @@ function buildEpubAiReadingUnitDetailMessages(input: EpubAiReadingInput): {
 		"不得合并 U，不得跳过 U，不得把多个 U 压缩成目录摘要。",
 		"本请求可能只是大范围阅读任务中的一个批次；未出现在本批的 U 单元不代表不存在，也不代表正文缺失。",
 		"不要写“某 U 未提供正文”“后续 U 未提供”这类批次缺失说明；只分析本批 U，并用目录/范围信息描述关系。",
+		"",
+		"# 定位规则",
+		sourceReferenceRule,
 		"",
 		"# 固定输出模板",
 		formatUnitDetailFieldContract(),
@@ -1064,12 +1085,21 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 	const usesUnitSourceBlocks = sourceBlocks.some((block) =>
 		/^U\d{3}\.P\d{3}$/.test(normalizeConfigValue(block.id)),
 	);
-	const sourceReferenceExample = usesUnitSourceBlocks ? "[U001.P001]" : "[段001]";
+	const sourceReferenceExample = usesUnitSourceBlocks
+		? "{{source:U001.P001}}"
+		: "{{source:段001}}";
+	const sourceRangeReferenceExample = usesUnitSourceBlocks
+		? "{{source-range:U001.P001-U001.P003}}"
+		: "";
 	const sourceReferenceRule = sourceBlockText
 		? usesUnitSourceBlocks
-			? "请引用 Uxxx.Pyyy 这种来源编号，例如 [U001.P001]；每条最多 2 个来源编号。不要生成 EPUB CFI、内部锚点或 URL。"
-			: "请引用 [段001] 这种段落编号；每条最多 2 个段落编号。不要生成 EPUB CFI、内部锚点或 URL。"
+			? `请只使用来源占位符，不要生成 Obsidian wikilink、EPUB CFI、内部锚点或 URL。单段引用写 ${sourceReferenceExample}；连续多段共同支撑同一句总结时，必须合并写成一个范围引用 ${sourceRangeReferenceExample}，不要连续堆多个单段占位符。插件会把占位符转换成用户看到的“原文”按钮。`
+			: `请只使用来源占位符，不要生成 Obsidian wikilink、EPUB CFI、内部锚点或 URL。单段引用写 ${sourceReferenceExample}。插件会把占位符转换成用户看到的“原文”按钮。`
 		: "\u63d0\u53d6\u91cd\u8981\u539f\u6587\u65f6\uff0c\u7528\u201c\u4f4d\u7f6e\u8bf4\u660e + \u4e3a\u4ec0\u4e48\u91cd\u8981\u201d\u63cf\u8ff0\uff0c\u4e0d\u8981\u4f2a\u9020\u4e0d\u53ef\u70b9\u51fb\u7684\u951a\u70b9\u3002";
+	const sourceReferenceFormatRule =
+		sourceBlockText && usesUnitSourceBlocks
+			? "Do not write Obsidian wikilinks, EPUB URLs, or bare source ids such as U001.P001 in the answer text. Use {{source:U001.P001}} for one source paragraph and {{source-range:U001.P001-U001.P003}} for a continuous source range. If consecutive paragraphs support the same claim, merge them into one source-range placeholder instead of writing several source placeholders in a row. Do not show Uxxx.Pyyy to readers; the plugin will render every placeholder as an 原文 button with the range in the tooltip."
+			: "";
 	const system = [
 		"你是 EPUB AI 阅读助手。",
 		"你帮助用户理解当前章节，但不能替代原文阅读。",
@@ -1087,7 +1117,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"",
 		closeReadingUnitText ? "# 必须精析单元" : "",
 		closeReadingUnitText
-			? "必须逐项完成以下 U 单元。不得合并 U 单元，不得跳过 U 单元。中级/一级标题只作为分组，不能替代 U 单元精析。重要原文请引用 Uxxx.Pyyy，例如 [U001.P001]。"
+			? `必须逐项完成以下 U 单元。不得合并 U 单元，不得跳过 U 单元。中级/一级标题只作为分组，不能替代 U 单元精析。重要原文请使用来源占位符，例如 ${sourceReferenceExample}；连续多段范围可使用 ${sourceRangeReferenceExample}。`
 			: "",
 		closeReadingUnitText ? "单个 U 单元标准精析模板：" : "",
 		closeReadingUnitText
@@ -1100,7 +1130,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		closeReadingUnitText ? "- 核心结论：3-6 条。" : "",
 		closeReadingUnitText ? "- 关键知识点：4-8 条。" : "",
 		closeReadingUnitText
-			? "- 重要原文与解读：3-6 处，尽量带 Uxxx.Pyyy 来源编号。"
+			? "- 重要原文与解读：3-6 处，尽量带来源占位符；只有该栏目确实能帮助理解时才输出，不要为凑栏目重复正文。"
 			: "",
 		closeReadingUnitText ? "- 容易误解的点：2-4 条。" : "",
 		closeReadingUnitText ? "- 与上下文关系：1-3 条。" : "",
@@ -1111,7 +1141,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"## 范围摘要",
 		"- 2-4 句说明这个范围解决什么问题、讲了哪些内容、读完应获得什么能力。",
 		"## 核心结论",
-		`- 3-6 条可复习的结论；每条尽量带 1 个来源编号，每条最多 2 个来源编号。可用 ${sourceReferenceExample}。`,
+		`- 3-6 条可复习的结论；每条尽量带 1 个来源占位符，每条最多 2 个来源占位符。可用 ${sourceReferenceExample}。`,
 		"## 关键知识点",
 		"- 提取概念、操作、规则、限制和容易遗漏的前提；不要简单复述目录。",
 		outputPlan.level === "leaf" ? "" : "## 按小节精读",
@@ -1128,7 +1158,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"## 章节关系",
 		"- 区分“从正文可见”和“从目录推断”；范围外内容只能作为关系线索，不要当成本范围正文事实。",
 		"## 建议精读位置",
-		`- 给出建议回到 EPUB 精读的顺序；有来源编号时优先使用 ${sourceReferenceExample} 这种编号。`,
+		`- 给出建议回到 EPUB 精读的顺序；有来源时优先使用 ${sourceReferenceExample} 这种占位符。`,
 		"",
 		"# 书籍信息",
 		`- 书名：${normalizeConfigValue(input.bookTitle) || "未知书名"}`,
@@ -1144,6 +1174,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		"# \u5b9a\u4f4d\u89c4\u5219",
 		"\u53ef\u70b9\u51fb\u8df3\u8f6c\u7531\u9605\u8bfb\u5668\u754c\u9762\u63d0\u4f9b\uff1b\u4f60\u4e0d\u8981\u628a EPUB \u5185\u90e8\u951a\u70b9\uff08\u5982 #id\u3001#_idParaDest\uff09\u5199\u6210\u9700\u8981\u7528\u6237\u70b9\u51fb\u7684\u94fe\u63a5\u3002",
 		sourceReferenceRule,
+		sourceReferenceFormatRule,
 		scopeContext ? "" : "",
 		scopeContext
 			? "# \u9605\u8bfb\u8303\u56f4\u4e0e\u5916\u90e8\u7ed3\u6784\u7ebf\u7d22"
@@ -1153,7 +1184,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 			: "",
 		scopeContext,
 		sourceBlockText
-			? `摘要可以综合多个段落，但关键知识点、核心结论和重要原文应尽量带来源编号，例如 ${sourceReferenceExample}。插件会把来源编号转换成可点击链接。`
+			? `摘要可以综合多个段落，但关键知识点、核心结论和重要原文应尽量带来源占位符，例如 ${sourceReferenceExample}。不要把 Uxxx.Pyyy 显示给读者；插件会把占位符转换成“原文”按钮，范围信息放在悬停提示中。`
 			: "",
 		"",
 		"# 全书目录",
@@ -2272,8 +2303,17 @@ export function buildEpubAiReadingNoteSection(
 		result,
 		scopeLabel,
 	);
+	const sourceMapComment = serializeEpubAiReadingSourceMapComment(
+		buildEpubAiReadingSourceMap({
+			filePath: result.filePath,
+			chapterHref: result.chapterHref,
+			sourceBlocks: result.sourceBlocks || [],
+			closeReadingUnits: result.closeReadingUnits || [],
+		}),
+	);
 	const lines = [
 		`<!-- weave-epub-ai-reading:start key="${key}" -->`,
+		sourceMapComment,
 		`## ${normalizeConfigValue(result.chapterTitle) || "当前章节"}`,
 		"",
 		"> [!info] AI 阅读",
@@ -2436,6 +2476,10 @@ export async function ensureEpubAiReadingNote(
 	await DirectoryUtils.ensureDirForFile(app.vault.adapter, targetPath);
 	const existing = app.vault.getAbstractFileByPath(targetPath);
 	if (existing instanceof TFile) {
+		const current = await app.vault.read(existing);
+		if (!current.trim()) {
+			await app.vault.modify(existing, buildEpubAiReadingEmptyNoteMarkdown(book));
+		}
 		return existing;
 	}
 	return await app.vault.create(

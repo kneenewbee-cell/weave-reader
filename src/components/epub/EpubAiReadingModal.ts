@@ -1284,11 +1284,7 @@ export class EpubAiReadingModal extends Modal {
 			return;
 		}
 		try {
-			await openFileWithExistingLeaf(this.app, this.noteFile, {
-				openInNewTab: true,
-				focus: true,
-				openState: { mode: "preview" },
-			});
+			await this.openAiReadingNoteFile(this.noteFile, this.activeInput.filePath);
 			this.setStatus(`已打开 AI 阅读笔记：${this.noteFile.path}`);
 			this.close();
 		} catch (error) {
@@ -1311,11 +1307,7 @@ export class EpubAiReadingModal extends Modal {
 		try {
 			const noteFile = await upsertEpubAiReadingNote(this.app, this.result);
 			this.noteFile = noteFile;
-			await openFileWithExistingLeaf(this.app, noteFile, {
-				openInNewTab: true,
-				focus: true,
-				openState: { mode: "preview" },
-			});
+			await this.openAiReadingNoteFile(noteFile, this.result.filePath);
 			this.setStatus(`已生成/更新 AI 阅读笔记：${noteFile.path}`);
 			new Notice("AI 阅读笔记已生成");
 			this.rememberCurrentResult(true);
@@ -1333,5 +1325,13 @@ export class EpubAiReadingModal extends Modal {
 				}`,
 			);
 		}
+	}
+
+	private async openAiReadingNoteFile(noteFile: TFile, sourceFile: string): Promise<void> {
+		await openFileWithExistingLeaf(this.app, noteFile, {
+			openInNewTab: true,
+			focus: true,
+			openState: { mode: "preview" },
+		});
 	}
 }

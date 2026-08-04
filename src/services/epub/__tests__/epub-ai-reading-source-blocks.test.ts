@@ -3,6 +3,7 @@ import type { ReaderParagraph } from "../reader-engine-types";
 import {
 	buildEpubAiReadingSourceBlocksFromParagraphs,
 	decorateEpubAiReadingSourceReferences,
+	decorateEpubAiReadingLegacyNoteBareSourceReferences,
 	filterReaderParagraphsForAiReadingDraft,
 	formatEpubAiReadingSourceBlocksForPrompt,
 	formatEpubAiReadingSourceReferenceLabel,
@@ -171,7 +172,7 @@ describe("epub-ai-reading-source-blocks", () => {
 		]);
 
 		expect(decorated).toContain(
-			"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)|原文]]",
+			"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)&flashStyle=pulse&flashColor=yellow|原文]]",
 		);
 		expect(decorated).toContain("Unknown marker. [段999]");
 	});
@@ -190,7 +191,7 @@ describe("epub-ai-reading-source-blocks", () => {
 		]);
 
 		expect(decorated).toContain(
-			"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)|原文]]",
+			"[[Books/demo.epub#weave-cfi=epubcfi(/6/2)&flashStyle=pulse&flashColor=yellow|原文]]",
 		);
 		expect(decorated).not.toContain("[P001]");
 	});
@@ -224,6 +225,469 @@ describe("epub-ai-reading-source-blocks", () => {
 		expect(decorated).toContain("[[Book.epub#old|原文]]");
 		expect(decorated).not.toContain("|U016.P001]]");
 		expect(decorated).not.toContain("|段001]]");
+	});
+
+	it("decorates bare unit paragraph references generated in prose", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U208.P026",
+				chapterHref: "OEBPS/B21326_06.xhtml",
+				headingPath: ["Chapter 6", "Growing a tree"],
+				text: "A later paragraph pulled into the source range.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#u208p026|U208.P026]]",
+			},
+			{
+				id: "U208.P030",
+				chapterHref: "OEBPS/B21326_06.xhtml",
+				headingPath: ["Chapter 6", "Growing a tree"],
+				text: "Another boundary paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#u208p030|U208.P030]]",
+			},
+			{
+				id: "U208.P046",
+				chapterHref: "OEBPS/B21326_06.xhtml",
+				headingPath: ["Chapter 6", "Growing a tree"],
+				text: "Final boundary paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#u208p046|U208.P046]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Source anchors point to later paragraphs (U208.P026, U208.P030, U208.P046).",
+			blocks,
+		);
+
+		expect(decorated).toContain("[[Book.epub#u208p026|原文]]");
+		expect(decorated).toContain("[[Book.epub#u208p030|原文]]");
+		expect(decorated).toContain("[[Book.epub#u208p046|原文]]");
+		expect(decorated).not.toContain("|U208.P026]]");
+		expect(decorated).not.toContain("|U208.P030]]");
+		expect(decorated).not.toContain("|U208.P046]]");
+		expect(decorated).not.toContain("(U208.P026, U208.P030, U208.P046)");
+	});
+
+	it("decorates shorthand unit paragraph ranges generated in prose", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U143.P004",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Start paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004|U143.P004]]",
+			},
+			{
+				id: "U143.P005",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Middle paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:middle&eid=ai-source-U143-P005|U143.P005]]",
+			},
+			{
+				id: "U143.P008",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "End paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:end&eid=ai-source-U143-P008|U143.P008]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Read U143.P004-P008 for the complete example.",
+			blocks,
+		);
+
+		expect(decorated).toContain("|原文]]");
+		expect(decorated).toContain("rangeEndCfi=readium%3Aend");
+		expect(decorated).toContain("rangeCfis=readium%3Astart,readium%3Amiddle,readium%3Aend");
+		expect(decorated).toContain("sourceTitle=");
+		expect(decorated).not.toContain("|U143.P004]]");
+		expect(decorated).not.toContain("|U143.P008]]");
+		expect(decorated).not.toContain("]]-[[");
+		expect(decorated).not.toContain("-P008");
+	});
+
+	it("decorates model source placeholders without exposing source ids", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U143.P004",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Start paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004|U143.P004]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Key idea {{source:U143.P004}}.",
+			blocks,
+		);
+
+		expect(decorated).toBe(
+			"Key idea [[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow|原文]].",
+		);
+		expect(decorated).not.toContain("{{source:");
+		expect(decorated).not.toContain("|U143.P004]]");
+	});
+
+	it("decorates model source range placeholders as one source button", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U143.P004",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Start paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004|U143.P004]]",
+			},
+			{
+				id: "U143.P005",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Middle paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:middle&eid=ai-source-U143-P005|U143.P005]]",
+			},
+			{
+				id: "U143.P008",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "End paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:end&eid=ai-source-U143-P008|U143.P008]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Whole example {{source-range:U143.P004-U143.P008}}.",
+			blocks,
+		);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart,readium%3Amiddle,readium%3Aend",
+		);
+		expect(decorated).toContain("|原文]].");
+		expect(decorated.match(/\|原文\]\]/g)).toHaveLength(1);
+		expect(decorated).not.toContain("{{source-range:");
+		expect(decorated).not.toContain("|U143.P004]]");
+		expect(decorated).not.toContain("|U143.P008]]");
+	});
+
+	it("collapses adjacent consecutive source placeholders into one range button", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U191.P006",
+				chapterHref: "OEBPS/B21326_05.xhtml",
+				headingPath: ["Chapter 5", "Image alignment"],
+				text: "First paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p006&eid=ai-source-U191-P006|U191.P006]]",
+			},
+			{
+				id: "U191.P007",
+				chapterHref: "OEBPS/B21326_05.xhtml",
+				headingPath: ["Chapter 5", "Image alignment"],
+				text: "Second paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p007&eid=ai-source-U191-P007|U191.P007]]",
+			},
+			{
+				id: "U191.P008",
+				chapterHref: "OEBPS/B21326_05.xhtml",
+				headingPath: ["Chapter 5", "Image alignment"],
+				text: "Third paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p008&eid=ai-source-U191-P008|U191.P008]]",
+			},
+			{
+				id: "U191.P009",
+				chapterHref: "OEBPS/B21326_05.xhtml",
+				headingPath: ["Chapter 5", "Image alignment"],
+				text: "Fourth paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p009&eid=ai-source-U191-P009|U191.P009]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Noise from nearby headings ({{source:U191.P006}} {{source:U191.P007}} {{source:U191.P008}} {{source:U191.P009}}) should be one range.",
+			blocks,
+		);
+
+		expect(decorated.match(/\|原文\]\]/g)).toHaveLength(1);
+		expect(decorated).toContain("eid=ai-source-U191-P006");
+		expect(decorated).toContain("rangeEndCfi=readium%3Ap009");
+		expect(decorated).toContain(
+			"rangeCfis=readium%3Ap006,readium%3Ap007,readium%3Ap008,readium%3Ap009",
+		);
+		expect(decorated).not.toContain("eid=ai-source-U191-P007|原文");
+		expect(decorated).not.toContain("eid=ai-source-U191-P008|原文");
+		expect(decorated).not.toContain("eid=ai-source-U191-P009|原文");
+	});
+
+	it("collapses bracketed source marker ranges generated by the model", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U143.P004",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Start paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004|U143.P004]]",
+			},
+			{
+				id: "U143.P008",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "End paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:end&eid=ai-source-U143-P008|U143.P008]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Model cited [U143.P004]-[U143.P008] for the whole range.",
+			blocks,
+		);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart,readium%3Aend",
+		);
+		expect(decorated).toContain("|原文]] for the whole range.");
+		expect(decorated).not.toContain("]]-[[" );
+		expect(decorated.match(/\|原文\]\]/g)).toHaveLength(1);
+	});
+
+	it("decorates comma-separated shorthand paragraph ids after a unit reference", () => {
+		const blocks: EpubAiReadingSourceBlock[] = [
+			{
+				id: "U149.P005",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "First boundary paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p005&eid=ai-source-U149-P005|U149.P005]]",
+			},
+			{
+				id: "U149.P017",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Second boundary paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p017&eid=ai-source-U149-P017|U149.P017]]",
+			},
+			{
+				id: "U149.P024",
+				chapterHref: "OEBPS/B21326_04.xhtml",
+				headingPath: ["Chapter 4", "Tables"],
+				text: "Final boundary paragraph.",
+				kind: "paragraph",
+				sourceLink: "[[Book.epub#weave-cfi=readium:p024&eid=ai-source-U149-P024|U149.P024]]",
+			},
+		];
+
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"Noise appears in U149.P005, P017-P024.",
+			blocks,
+		);
+
+		expect(decorated).toContain("[[Book.epub#weave-cfi=readium:p005&eid=ai-source-U149-P005&flashStyle=pulse&flashColor=yellow|原文]]");
+		expect(decorated).toContain("|原文]]");
+		expect(decorated).toContain("rangeEndCfi=");
+		expect(decorated).not.toContain("|U149.P005]]");
+		expect(decorated).not.toContain("|U149.P017]]");
+		expect(decorated).not.toContain("|U149.P024]]");
+		expect(decorated).not.toContain("P017-P024");
+	});
+
+	it("decorates legacy note bare source references with exact existing links", () => {
+		const markdown = [
+			"See [[Book.epub#weave-cfi=readium:exact&eid=ai-source-U208-P026|原文]].",
+			"Boundary paragraph U208.P026 should be clickable.",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain(
+			"Boundary paragraph [[Book.epub#weave-cfi=readium:exact&eid=ai-source-U208-P026&flashStyle=pulse&flashColor=yellow|原文]] should be clickable.",
+		);
+	});
+
+	it("adds pulse flash metadata to existing AI source links", () => {
+		const markdown = [
+			"See [[Book.epub#weave-cfi=readium:exact&eid=ai-source-U208-P026|U208.P026]].",
+			"Static [[Book.epub#weave-cfi=readium:kept&eid=ai-source-U208-P027&flashStyle=highlight&flashColor=yellow|U208.P027]].",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:exact&eid=ai-source-U208-P026&flashStyle=pulse&flashColor=yellow|原文]]",
+		);
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:kept&eid=ai-source-U208-P027&flashStyle=pulse&flashColor=yellow|原文]]",
+		);
+	});
+
+	it("decorates legacy note bare source references with the range source link when exact links are unavailable", () => {
+		const markdown = [
+			"> 原文：[[Book.epub#weave-cfi=readium:scope|打开原文]]",
+			"Boundary paragraphs U208.P026 and U208.P030 should still navigate.",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:scope&flashStyle=pulse&flashColor=yellow|原文]]",
+		);
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:scope&flashStyle=pulse&flashColor=yellow|原文]]",
+		);
+	});
+
+	it("decorates legacy note shorthand source ranges with exact existing links", () => {
+		const markdown = [
+			"Exact end [[Book.epub#weave-cfi=readium:end&eid=ai-source-U143-P008|U143.P008]].",
+			"Use [[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004|U143.P004]]-P008.",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart,readium%3Aend",
+		);
+		expect(decorated).toContain("|原文]]");
+		expect(decorated).not.toContain("]]-[[");
+		expect(decorated).not.toContain("|U143.P004]]-P008");
+	});
+
+	it("collapses legacy note source ranges already stored as two links", () => {
+		const markdown = [
+			"Use [[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004|鍘熸枃]]-[[Book.epub#weave-cfi=readium:end&eid=ai-source-U143-P008|鍘熸枃]] for the range.",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:start&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart,readium%3Aend",
+		);
+		expect(decorated).toContain("|原文]] for the range.");
+		expect(decorated).not.toContain("]]-[[" );
+		expect(decorated.match(/\|原文\]\]/g)).toHaveLength(1);
+	});
+
+	it("reuses legacy unit-alias links without exact source ids for shorthand ranges", () => {
+		const markdown = [
+			"Known fallback [[Book.epub#weave-cfi=readium:fallback|U160.P005]].",
+			"Use [[Book.epub#weave-cfi=readium:start&eid=ai-source-U160-P001|U160.P001]]-P005.",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain(
+			"[[Book.epub#weave-cfi=readium:start&eid=ai-source-U160-P001&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Afallback&rangeCfis=readium%3Astart,readium%3Afallback",
+		);
+		expect(decorated).toContain("|原文]]");
+		expect(decorated).not.toContain("]]-[[");
+	});
+
+	it("enriches legacy source-title range links with range CFIs", () => {
+		const markdown = [
+			"Exact middle [[Book.epub#weave-cfi=readium:middle&eid=ai-source-U191-P007|U191.P007]].",
+			"Exact end [[Book.epub#weave-cfi=readium:end&eid=ai-source-U191-P008|U191.P008]].",
+			"Range [[Book.epub#weave-cfi=readium:start&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU191.P006-U191.P008|原文]].",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated).toContain("eid=ai-source-U191-P006");
+		expect(decorated).toContain("rangeEndCfi=readium%3Aend");
+		expect(decorated).toContain(
+			"rangeCfis=readium%3Astart,readium%3Amiddle,readium%3Aend",
+		);
+		expect(decorated).toContain("|原文]].");
+	});
+
+	it("enriches filtered legacy source-title ranges from full-note source links", () => {
+		const fullNoteMarkdown = [
+			"Exact end [[Book.epub#weave-cfi=readium:end&eid=ai-source-U191-P010|U191.P010]].",
+		].join("\n");
+		const filteredMarkdown =
+			"Range [[Book.epub#weave-cfi=readium:start&eid=ai-source-U191-P009&flashStyle=pulse&flashColor=yellow&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU191.P009-U191.P010|鍘熸枃]].";
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(
+			filteredMarkdown,
+			fullNoteMarkdown,
+		);
+
+		expect(decorated).toContain("eid=ai-source-U191-P009");
+		expect(decorated).toContain("rangeEndCfi=readium%3Aend");
+		expect(decorated).toContain("rangeCfis=readium%3Astart,readium%3Aend");
+		expect(decorated).toContain("|原文]].");
+	});
+
+	it("enriches filtered source-title ranges from hidden source maps", () => {
+		const sourceMap = {
+			version: 1,
+			filePath: "Book.epub",
+			blocks: [
+				{
+					id: "U192.P002",
+					chapterHref: "text/ch5.xhtml",
+					cfi: "readium:p002",
+					sourceLink:
+						"[[Book.epub#weave-loc=opaque-loc-p002&eid=ai-source-U192-P002|U192.P002]]",
+					kind: "paragraph",
+					headingPath: ["Chapter 5", "Image alignment", "How it works"],
+				},
+				{
+					id: "U192.P003",
+					chapterHref: "text/ch5.xhtml",
+					cfi: "readium:p003",
+					sourceLink:
+						"[[Book.epub#weave-loc=opaque-loc-p003&eid=ai-source-U192-P003|U192.P003]]",
+					kind: "paragraph",
+					headingPath: ["Chapter 5", "Image alignment", "How it works"],
+				},
+			],
+			units: [],
+		};
+		const fullNoteMarkdown = `<!-- weave-epub-ai-reading-source-map:${encodeURIComponent(
+			JSON.stringify(sourceMap),
+		)} -->`;
+		const filteredMarkdown =
+			"Range [[Book.epub#weave-loc=opaque-loc-p002&eid=ai-source-U192-P002&flashStyle=pulse&flashColor=yellow&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU192.P002-U192.P003|鍘熸枃]].";
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(
+			filteredMarkdown,
+			fullNoteMarkdown,
+		);
+
+		expect(decorated).toContain("eid=ai-source-U192-P002");
+		expect(decorated).toContain("rangeEndCfi=readium%3Ap003");
+		expect(decorated).toContain("rangeCfis=readium%3Ap002,readium%3Ap003");
+		expect(decorated).toContain("|原文]].");
+	});
+
+	it("collapses adjacent consecutive source buttons in legacy notes", () => {
+		const markdown = [
+			"Noise ([[Book.epub#weave-cfi=readium:p006&eid=ai-source-U191-P006|原文]] [[Book.epub#weave-cfi=readium:p007&eid=ai-source-U191-P007|原文]] [[Book.epub#weave-cfi=readium:p008&eid=ai-source-U191-P008|原文]] [[Book.epub#weave-cfi=readium:p009&eid=ai-source-U191-P009|原文]]) should be a range.",
+		].join("\n");
+
+		const decorated = decorateEpubAiReadingLegacyNoteBareSourceReferences(markdown);
+
+		expect(decorated.match(/\|原文\]\]/g)).toHaveLength(1);
+		expect(decorated).toContain("eid=ai-source-U191-P006");
+		expect(decorated).toContain("rangeEndCfi=readium%3Ap009");
+		expect(decorated).toContain(
+			"rangeCfis=readium%3Ap006,readium%3Ap007,readium%3Ap008,readium%3Ap009",
+		);
 	});
 
 	it("formats reader-facing source labels and hover titles", () => {

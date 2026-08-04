@@ -24,7 +24,6 @@ import { canOpenEpubFile } from "../services/epub/epub-premium";
 import { stripSupportedBookExtension } from "../services/epub/book-format";
 import {
 	EPUB_DUAL_WINDOW_SESSION_EVENT,
-	EPUB_RUNTIME,
 	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
 	dispatchEpubAnnotationCompareContextEvent,
 	dispatchEpubDualWindowReaderDisplayEvent,
@@ -42,10 +41,11 @@ import {
 	type EpubDualWindowSessionDetail,
 	type EpubDualWindowSwapPanes,
 } from "../services/epub";
+import { EPUB_RUNTIME } from "../services/epub/epub-runtime";
 import type { EpubCanvasService } from "../services/epub/EpubCanvasService";
 import { reportEpubError } from "../services/epub/epub-error";
 import type { CanvasLayoutDirection } from "../services/epub/canvas-types";
-import { resolveRecentEpubPath } from "../utils/epub-leaf-utils";
+import { pathsReferToSameOpenBook, resolveRecentEpubPath } from "../utils/epub-leaf-utils";
 import {
 	pendingLocateFromLegacyState,
 	type BookLocateIntent,
@@ -157,6 +157,7 @@ export class EpubView extends ItemView {
 		openAnnotationVersions?: () => Promise<void>;
 		openAiReading?: () => Promise<void>;
 		openAiReadingNote?: () => Promise<void>;
+		openAiReadingDualWindow?: () => Promise<void>;
 		addBookmark?: () => Promise<void>;
 		canUseReadingProgress?: () => boolean;
 		canUseReadingReference?: () => boolean;
@@ -634,6 +635,15 @@ export class EpubView extends ItemView {
 					void this.actionHandlers.openAnnotationDualWindow?.();
 				});
 			});
+			if (this.actionHandlers.openAiReadingDualWindow) {
+				dualWindowMenu.addItem((subItem) => {
+					subItem.setTitle("原书与 AI 阅读笔记");
+					subItem.setIcon("book-open-check");
+					subItem.onClick(() => {
+						void this.actionHandlers.openAiReadingDualWindow?.();
+					});
+				});
+			}
 			dualWindowMenu.addItem((subItem) => {
 				subItem.setTitle("\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4");
 				subItem.setIcon("git-compare");
@@ -2064,7 +2074,11 @@ export class EpubView extends ItemView {
 				const detail = (event as CustomEvent<EpubDualWindowSessionDetail>).detail || null;
 				const eventPath = normalizePath(String(detail?.filePath || "").trim());
 				const currentPath = normalizePath(String(this.filePath || "").trim());
-				if (!eventPath || !currentPath || eventPath !== currentPath) {
+				if (
+					!eventPath ||
+					!currentPath ||
+					(eventPath !== currentPath && !pathsReferToSameOpenBook(eventPath, currentPath))
+				) {
 					return;
 				}
 				this.updateDualWindowSwapBtn();

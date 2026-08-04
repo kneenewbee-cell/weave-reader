@@ -337,7 +337,7 @@ describe("FoliateReaderService comment marker layering", () => {
 		expect(Number(hitArea?.getAttribute("x"))).toBeGreaterThanOrEqual(94);
 	});
 
-	it("draws source-locate focus as a visible translucent box over an existing styled annotation", () => {
+	it("draws source-locate focus as a visible outline box instead of a filled highlight", () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {
 			const overlay = (service as any).createTemporaryFocusOverlay(
@@ -353,14 +353,250 @@ describe("FoliateReaderService comment marker layering", () => {
 			);
 			const rects = Array.from(overlay.querySelectorAll("rect"));
 
-			expect(rects).toHaveLength(2);
-			expect(rects[0].getAttribute("fill")).not.toBe("none");
-			expect(Number(rects[0].getAttribute("fill-opacity"))).toBeGreaterThan(0);
-			expect(rects[1].getAttribute("fill")).toBe("none");
-			expect(rects[1].getAttribute("stroke-opacity")).toBe("0.95");
+			expect(rects).toHaveLength(1);
+			expect(rects[0].getAttribute("data-weave-source-locate-focus")).toBe("outline");
+			expect(rects[0].getAttribute("fill")).toBe("none");
+			expect(rects[0].getAttribute("stroke")).not.toBe("none");
+			expect(Number(rects[0].getAttribute("stroke-width"))).toBeGreaterThanOrEqual(3);
+			expect(rects[0].getAttribute("stroke-opacity")).toBe("1");
 		} finally {
 			service.destroy();
 		}
+	});
+
+	it("merges multi-line source-locate rects into one visible outline box", () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const overlay = (service as any).createTemporaryFocusOverlay(
+				[
+					{ left: 20, top: 10, width: 180, height: 20 },
+					{ left: 20, top: 34, width: 160, height: 20 },
+					{ left: 20, top: 58, width: 60, height: 20 },
+				],
+				"yellow",
+				"pulse"
+			);
+			const rects = Array.from(overlay.querySelectorAll('[data-weave-source-locate-focus="outline"]'));
+
+			expect(rects).toHaveLength(1);
+			expect(rects[0].getAttribute("x")).toBe("17");
+			expect(rects[0].getAttribute("y")).toBe("7");
+			expect(rects[0].getAttribute("width")).toBe("186");
+			expect(rects[0].getAttribute("height")).toBe("74");
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("splits source-locate range segments into independently rendered temporary highlights", () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const highlights = (service as any).getHighlightsForSegmentedRender({
+				cfiRange: "cfi:start",
+				color: "yellow",
+				text: "Source range",
+				sourceFile: "",
+				value: "cfi:start",
+				temporary: true,
+				flashStyle: "pulse",
+				segments: [
+					{ cfiRange: "cfi:start", text: "Source range" },
+					{ cfiRange: "cfi:middle", text: "Source range" },
+					{ cfiRange: "cfi:end", text: "Source range" },
+				],
+			});
+
+			expect(highlights).toHaveLength(3);
+			expect(highlights.map((highlight: { cfiRange: string }) => highlight.cfiRange)).toEqual([
+				"cfi:start",
+				"cfi:middle",
+				"cfi:end",
+			]);
+			expect(highlights.every((highlight: { segments?: unknown }) => !highlight.segments)).toBe(true);
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("resolves source-locate range segment rects together before drawing one outline", () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			vi.spyOn(service as any, "resolveHighlightOverlayRects").mockReturnValue([]);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{
+					index: 0,
+					frameDocument: document.implementation.createHTMLDocument("chapter"),
+					frameElement: null,
+				},
+			]);
+			vi.spyOn((service as any).parser, "resolveRangeInLoadedSection").mockImplementation(
+				(cfi: string) => ({ cfi }) as unknown as Range
+			);
+			vi.spyOn(service as any, "createViewportRectList").mockImplementation(
+				(_frame: unknown, range: { cfi: string }) => {
+					if (range.cfi === "cfi:start") {
+						return [{ left: 20, top: 10, width: 180, height: 20 }];
+					}
+					if (range.cfi === "cfi:middle") {
+						return [{ left: 20, top: 34, width: 160, height: 20 }];
+					}
+					if (range.cfi === "cfi:end") {
+						return [{ left: 20, top: 58, width: 60, height: 20 }];
+					}
+					return null;
+				}
+			);
+
+			const rects = (service as any).resolveAnnotationDrawRects(
+				{
+					cfiRange: "cfi:start",
+					color: "yellow",
+					text: "Source range",
+					sourceFile: "",
+					value: "cfi:start",
+					temporary: true,
+					flashStyle: "pulse",
+					segments: [
+						{ cfiRange: "cfi:start", text: "Source range" },
+						{ cfiRange: "cfi:middle", text: "Source range" },
+						{ cfiRange: "cfi:end", text: "Source range" },
+					],
+				},
+				[{ left: 20, top: 10, width: 180, height: 20 }]
+			);
+			const overlay = (service as any).createTemporaryFocusOverlay(
+				rects,
+				"yellow",
+				"pulse"
+			);
+			const outlines = Array.from(
+				overlay.querySelectorAll('[data-weave-source-locate-focus="outline"]')
+			);
+
+			expect(rects).toHaveLength(3);
+			expect(outlines).toHaveLength(1);
+			expect(outlines[0].getAttribute("x")).toBe("17");
+			expect(outlines[0].getAttribute("y")).toBe("7");
+			expect(outlines[0].getAttribute("width")).toBe("186");
+			expect(outlines[0].getAttribute("height")).toBe("74");
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("marks pulse source-locate focus overlays for animation", () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const overlay = (service as any).createTemporaryFocusOverlay(
+				[
+					{
+						left: 10,
+						top: 20,
+						width: 90,
+						height: 18,
+					},
+				],
+				"yellow",
+				"pulse"
+			);
+
+			expect(overlay.getAttribute("data-weave-source-locate-flash-style")).toBe("pulse");
+			expect(overlay.classList.contains("weave-source-locate-focus-pulse")).toBe(true);
+			expect(overlay.querySelector("animate")?.getAttribute("attributeName")).toBe("opacity");
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("starts a runtime pulse animation on source-locate outline boxes", () => {
+		const originalAnimateDescriptor = Object.getOwnPropertyDescriptor(
+			SVGElement.prototype,
+			"animate"
+		);
+		const originalRaf = window.requestAnimationFrame;
+		const animateSpy = vi.fn(() => ({ cancel: vi.fn() }));
+		Object.defineProperty(SVGElement.prototype, "animate", {
+			configurable: true,
+			value: animateSpy,
+		});
+		window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+			callback(0);
+			return 1;
+		}) as typeof window.requestAnimationFrame;
+
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			(service as any).createTemporaryFocusOverlay(
+				[
+					{
+						left: 10,
+						top: 20,
+						width: 90,
+						height: 18,
+					},
+				],
+				"yellow",
+				"pulse"
+			);
+
+			expect(animateSpy).toHaveBeenCalledTimes(1);
+			expect(animateSpy.mock.calls[0]?.[0]).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ opacity: 1 }),
+					expect.objectContaining({ opacity: 0.12 }),
+				])
+			);
+			expect(animateSpy.mock.calls[0]?.[1]).toMatchObject({
+				duration: 560,
+				iterations: 6,
+			});
+		} finally {
+			service.destroy();
+			window.requestAnimationFrame = originalRaf;
+			if (originalAnimateDescriptor) {
+				Object.defineProperty(SVGElement.prototype, "animate", originalAnimateDescriptor);
+			} else {
+				delete (SVGElement.prototype as { animate?: unknown }).animate;
+			}
+		}
+	});
+
+	it("draws pulse temporary source-locate annotations as an outline box instead of the default filled highlighter", () => {
+		const highlightOverlay = vi.fn(() =>
+			activeDocument.createElementNS("http://www.w3.org/2000/svg", "g")
+		);
+		const renderer = new ReaderAnnotationOverlayRenderer({
+			resolveHighlightTint: () => "#ffe58a",
+			getObsidianCSSVar: (_name, fallback) => fallback,
+			getConcealmentPalette: () => ({ base: "#111", stripe: "#222", border: "#333" }),
+			onCommentMarkerClick: vi.fn(),
+			onReferenceBadgeClick: vi.fn(),
+		});
+
+		const overlay = renderer.createCompositeAnnotationOverlay(
+			createReaderFoliateAnnotation({
+				cfiRange: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+				color: "yellow",
+				text: "Temporary source",
+				temporary: true,
+				flashStyle: "pulse",
+			}),
+			[{ left: 10, top: 20, width: 90, height: 18 }],
+			{
+				Overlayer: {
+					highlight: highlightOverlay,
+				},
+			}
+		);
+
+		expect(highlightOverlay).not.toHaveBeenCalled();
+		expect(overlay.getAttribute("data-weave-source-locate-flash-style")).toBe("pulse");
+		expect(overlay.classList.contains("weave-source-locate-focus-pulse")).toBe(true);
+		expect(overlay.querySelector("animate")?.getAttribute("attributeName")).toBe("opacity");
+		const outline = overlay.querySelector('[data-weave-source-locate-focus="outline"]');
+		expect(outline).not.toBeNull();
+		expect(outline?.getAttribute("fill")).toBe("none");
+		expect(Number(outline?.getAttribute("stroke-width"))).toBeGreaterThanOrEqual(3);
 	});
 
 	it("draws a reference badge inside the composite overlay when a styled highlight has multiple references", async () => {

@@ -1,5 +1,5 @@
 import type { EpubHighlightStyle } from "./types";
-import type { HighlightClickInfo, ReaderViewportRect } from "./reader-engine-types";
+import type { FlashStyle, HighlightClickInfo, ReaderViewportRect } from "./reader-engine-types";
 import type { ReaderFoliateAnnotation } from "./reader-annotation-model";
 import {
 	createAnchorPointFromRect,
@@ -13,6 +13,50 @@ import { i18n } from "../../utils/i18n";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const THOUGHT_MARKER_COLOR = "#111111";
+
+function attachSourceLocatePulseAnimation(group: SVGElement): void {
+	const animate = activeDocument.createElementNS(SVG_NS, "animate");
+	animate.setAttribute("attributeName", "opacity");
+	animate.setAttribute("values", "1;0.12;1");
+	animate.setAttribute("dur", "0.56s");
+	animate.setAttribute("repeatCount", "6");
+	animate.setAttribute("fill", "remove");
+	group.appendChild(animate);
+}
+
+function startSourceLocatePulseAnimation(element: SVGElement): void {
+	const run = () => {
+		const animate = (element as SVGElement & {
+			animate?: (keyframes: Keyframe[], options: KeyframeAnimationOptions) => Animation;
+		}).animate;
+		if (typeof animate !== "function") {
+			return;
+		}
+		try {
+			animate.call(
+				element,
+				[
+					{ opacity: 1, strokeWidth: "3.25px" },
+					{ opacity: 0.12, strokeWidth: "5.75px" },
+					{ opacity: 1, strokeWidth: "3.25px" },
+				],
+				{
+					duration: 560,
+					iterations: 6,
+					easing: "ease-in-out",
+				}
+			);
+		} catch {
+			// SVG animation support varies inside EPUB iframes; the static outline remains visible.
+		}
+	};
+	const frameWindow = element.ownerDocument?.defaultView || window;
+	if (typeof frameWindow.requestAnimationFrame === "function") {
+		frameWindow.requestAnimationFrame(() => run());
+		return;
+	}
+	run();
+}
 
 export type FoliateOverlayerModule = {
 	Overlayer: {
@@ -99,6 +143,25 @@ function createWavyLineOverlay(rect: RawViewportRect, strokeColor: string): SVGE
 	return path;
 }
 
+function mergeRawViewportRects(rects: RawViewportRect[]): RawViewportRect[] {
+	const validRects = rects.filter((rect) => rect.width > 0 && rect.height > 0);
+	if (validRects.length <= 1) {
+		return validRects;
+	}
+	const left = Math.min(...validRects.map((rect) => rect.left));
+	const top = Math.min(...validRects.map((rect) => rect.top));
+	const right = Math.max(...validRects.map((rect) => rect.left + rect.width));
+	const bottom = Math.max(...validRects.map((rect) => rect.top + rect.height));
+	return [
+		{
+			left,
+			top,
+			width: right - left,
+			height: bottom - top,
+		},
+	];
+}
+
 export class ReaderAnnotationOverlayRenderer {
 	constructor(private readonly ports: ReaderAnnotationOverlayPorts) {}
 
@@ -109,8 +172,16 @@ export class ReaderAnnotationOverlayRenderer {
 	): SVGElement {
 		const group = activeDocument.createElementNS(SVG_NS, "g");
 		const isThought = annotation.presentation === "thought";
+		const isTemporarySourceLocatePulse = annotation.temporary && annotation.flashStyle === "pulse";
+		if (isTemporarySourceLocatePulse) {
+			group.setAttribute("data-weave-source-locate-flash-style", "pulse");
+			group.classList.add("weave-source-locate-focus-pulse");
+			attachSourceLocatePulseAnimation(group);
+		}
 
-		if (!isThought && annotation.style) {
+		if (isTemporarySourceLocatePulse) {
+			group.appendChild(this.createTemporaryFocusOverlay(rects, annotation.color, annotation.flashStyle));
+		} else if (!isThought && annotation.style) {
 			group.appendChild(this.createStyledAnnotationOverlay(rects, annotation.style, annotation.color));
 		} else if (!isThought && overlayer) {
 			group.appendChild(
@@ -126,7 +197,13 @@ export class ReaderAnnotationOverlayRenderer {
 		}
 
 		if (annotation.focusColor) {
-			group.appendChild(this.createTemporaryFocusOverlay(rects, annotation.focusColor));
+			group.appendChild(
+				this.createTemporaryFocusOverlay(
+					rects,
+					annotation.focusColor,
+					annotation.focusFlashStyle
+				)
+			);
 		}
 
 		if (annotation.referenceCount && annotation.referenceCount > 1) {
@@ -194,40 +271,40 @@ export class ReaderAnnotationOverlayRenderer {
 		return group;
 	}
 
-	createTemporaryFocusOverlay(rects: unknown[], color: string): SVGElement {
+	createTemporaryFocusOverlay(
+		rects: unknown[],
+		color: string,
+		flashStyle?: FlashStyle
+	): SVGElement {
 		const group = activeDocument.createElementNS(SVG_NS, "g");
 		const strokeColor = this.ports.resolveHighlightTint(color);
+		if (flashStyle === "pulse") {
+			group.setAttribute("data-weave-source-locate-flash-style", "pulse");
+			group.classList.add("weave-source-locate-focus-pulse");
+			attachSourceLocatePulseAnimation(group);
+		}
 
-		for (const rect of rects as RawViewportRect[]) {
+		for (const rect of mergeRawViewportRects(rects as RawViewportRect[])) {
 			if (rect.width <= 0 || rect.height <= 0) {
 				continue;
 			}
-			const fill = activeDocument.createElementNS(SVG_NS, "rect");
-			fill.setAttribute("data-weave-source-locate-focus", "fill");
-			fill.setAttribute("x", String(rect.left - 1.5));
-			fill.setAttribute("y", String(rect.top - 1.5));
-			fill.setAttribute("width", String(rect.width + 3));
-			fill.setAttribute("height", String(rect.height + 3));
-			fill.setAttribute("rx", "5");
-			fill.setAttribute("fill", strokeColor);
-			fill.setAttribute("fill-opacity", "0.24");
-			fill.setAttribute("stroke", "none");
-			setSvgInteractionAttributes(fill, { pointerEvents: "none" });
-			group.appendChild(fill);
-
 			const outline = activeDocument.createElementNS(SVG_NS, "rect");
 			outline.setAttribute("data-weave-source-locate-focus", "outline");
-			outline.setAttribute("x", String(rect.left - 1.5));
-			outline.setAttribute("y", String(rect.top - 1.5));
-			outline.setAttribute("width", String(rect.width + 3));
-			outline.setAttribute("height", String(rect.height + 3));
-			outline.setAttribute("rx", "5");
+			outline.setAttribute("x", String(rect.left - 3));
+			outline.setAttribute("y", String(rect.top - 3));
+			outline.setAttribute("width", String(rect.width + 6));
+			outline.setAttribute("height", String(rect.height + 6));
+			outline.setAttribute("rx", "6");
 			outline.setAttribute("fill", "none");
 			outline.setAttribute("stroke", strokeColor);
-			outline.setAttribute("stroke-width", "2");
-			outline.setAttribute("stroke-opacity", "0.95");
+			outline.setAttribute("stroke-width", "3.25");
+			outline.setAttribute("stroke-opacity", "1");
+			outline.setAttribute("vector-effect", "non-scaling-stroke");
 			setSvgInteractionAttributes(outline, { pointerEvents: "none" });
 			group.appendChild(outline);
+			if (flashStyle === "pulse") {
+				startSourceLocatePulseAnimation(outline);
+			}
 		}
 
 		return group;

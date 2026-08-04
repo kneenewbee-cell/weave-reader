@@ -31,6 +31,8 @@ export interface NavigateAndHighlightOptions {
 	text?: string;
 	flashStyle?: FlashStyle;
 	flashColor?: string;
+	rangeEndCfi?: string;
+	rangeCfis?: string[];
 	dismiss?: "click" | "auto";
 	sourceFile?: string;
 	sourceRef?: string;
@@ -138,6 +140,7 @@ export interface ReaderHighlightInput {
 	// 引用统计
 	referenceCount?: number;
 	referenceHeat?: number;
+	flashStyle?: FlashStyle;
 }
 
 export interface ReaderHighlightSegment {
@@ -300,6 +303,7 @@ export interface EpubReaderEngine {
 		options?: boolean | ReaderAppearanceApplyOptions
 	): Promise<void>;
 	onRelocated(callback: (position: ReadingPosition) => void): () => void;
+	onPaginationChanged?(callback: (info: PaginationInfo) => void): () => void;
 	setLayoutMode(
 		mode: EpubLayoutMode,
 		flowMode: EpubFlowMode,
@@ -318,6 +322,13 @@ export interface EpubReaderEngine {
 	getCurrentChapterHref?(): string;
 	getParagraphsForChapter?(
 		chapterIndex: number,
+		options?: { includeHtml?: boolean }
+	): Promise<ReaderParagraph[]>;
+	getTocParagraphsForReadingPoint?(
+		href: string,
+		titleHint: string | undefined,
+		flatTocItems: FlatTocExportItem[],
+		itemIndex: number,
 		options?: { includeHtml?: boolean }
 	): Promise<ReaderParagraph[]>;
 	getCurrentParagraphLocation?(options?: {

@@ -25,6 +25,30 @@ describe("navigation-intent locate helpers", () => {
 			text: "Hello",
 			flashStyle: undefined,
 			flashColor: undefined,
+			rangeEndCfi: undefined,
+			rangeCfis: undefined,
+			showLocateOverlay: undefined,
+		});
+	});
+
+	it("preserves AI source range metadata in pending locate state", () => {
+		expect(
+			bookLocateFromPending({
+				cfi: "readium:start",
+				text: "",
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			}),
+		).toEqual({
+			cfi: "readium:start",
+			href: undefined,
+			text: "",
+			flashStyle: "pulse",
+			flashColor: "yellow",
+			rangeEndCfi: "readium:end",
+			rangeCfis: ["readium:start", "readium:middle", "readium:end"],
 			showLocateOverlay: undefined,
 		});
 	});

@@ -33,6 +33,7 @@ import type { EpubBookFootnoteEntry, EpubBookFootnotesDraft } from "./reader-eng
 import {
 	extractTocHrefFragment,
 	resolveTocExportEndBoundary,
+	resolveTocExportNextReadingBoundary,
 	type FlatTocExportItem,
 } from "./epub-toc-export-scope";
 import { resolvedRangeCoversHighlightText } from "./highlight/highlight-identity";
@@ -249,6 +250,15 @@ export interface FoliateSectionReadingPointDraft {
 	chapterHref: string;
 	markdown?: string;
 	assets?: FoliateChapterExportAsset[];
+}
+
+export interface FoliateTocReadingPointSourceRange {
+	title: string;
+	href: string;
+	chapterIndex: number;
+	doc: Document;
+	startElement: Element;
+	endElement: Element | null;
 }
 
 export interface FoliateChapterExportAsset {
@@ -601,6 +611,56 @@ export class FoliateVaultPublicationParser {
 			chapterHref: href,
 			markdown: markdownExport.markdown || text,
 			assets: markdownExport.assets,
+		};
+	}
+
+	async getTocReadingPointSourceRange(
+		href: string,
+		titleHint: string | undefined,
+		flatTocItems: FlatTocExportItem[],
+		itemIndex: number
+	): Promise<FoliateTocReadingPointSourceRange | null> {
+		const resolved = await this.resolveHrefTarget(href, titleHint);
+		if (!resolved?.doc) {
+			return null;
+		}
+
+		const title = this.normalizeReadingPointTitle(
+			titleHint ||
+				this.getSectionTitleByHref(resolved.href) ||
+				this.getSectionTitleByIndex(resolved.index) ||
+				`绔犺妭 ${resolved.index + 1}`
+		);
+		const startElement = this.resolveTocExportStartElement(
+			resolved.doc,
+			href,
+			titleHint,
+			resolved.range
+		);
+		if (!startElement) {
+			return null;
+		}
+
+		const endBoundary = resolveTocExportNextReadingBoundary(flatTocItems, itemIndex);
+		const endHref = endBoundary?.href
+			? this.normalizeInternalHref(resolved.href, endBoundary.href)
+			: "";
+		const endElement =
+			endBoundary && this.normalizeSectionHref(endHref) === resolved.href
+				? this.resolveTocExportBoundaryElement(
+						resolved.doc,
+						endHref,
+						endBoundary.label
+					)
+				: null;
+
+		return {
+			title,
+			href: resolved.href,
+			chapterIndex: resolved.index,
+			doc: resolved.doc,
+			startElement,
+			endElement,
 		};
 	}
 

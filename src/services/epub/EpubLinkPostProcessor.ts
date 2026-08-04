@@ -11,7 +11,7 @@ import {
 	stripSupportedBookExtension,
 } from "./book-format";
 import { maybeMigrateEpubLinksInMarkdownFile } from "./epub-link-content-migration";
-import { EpubLinkService } from "./EpubLinkService";
+import { EpubLinkService, type EpubLinkParams } from "./EpubLinkService";
 import { resolveEpubSourceNavigationTextHint } from "./epub-source-navigation-text-hint";
 import { isSupportedEpubProtocolName } from "./epub-runtime";
 import { dispatchEpubDualWindowAnnotationEvent } from "./epub-dual-window";
@@ -22,6 +22,10 @@ import {
 	EPUB_AI_READING_ALL_SCOPE_ID,
 	resolveEpubAiReadingScopeSelection,
 } from "./epub-ai-reading-scope";
+import {
+	parseEpubAiReadingSourceMapsFromMarkdown,
+	type EpubAiReadingSourceMapBlock,
+} from "./epub-ai-reading-source-map";
 import type { TocItem } from "./types";
 
 type BoundEpubLinkElement = HTMLAnchorElement & {
@@ -69,7 +73,7 @@ interface AiReadingNoteRangeAnchor {
 	start: HTMLElement;
 }
 
-interface AiReadingNoteSourceRange {
+export interface AiReadingNoteSourceRange {
 	key: string;
 	label: string;
 	href: string;
@@ -84,13 +88,20 @@ interface AiReadingSourceMarkdownSection {
 	typeKey: string;
 }
 
-const AI_READING_NOTE_TYPE_FILTER_OPTIONS: AnnotationNoteFilterOption[] = [
+export const AI_READING_NOTE_TYPE_FILTER_OPTIONS: AnnotationNoteFilterOption[] = [
 	{ value: "summary", label: "总览" },
 	{ value: "core", label: "重点" },
 	{ value: "knowledge", label: "知识点" },
 	{ value: "quotes", label: "原文" },
 	{ value: "relations", label: "关系" },
 ];
+
+const RAW_EPUB_LOCATOR_WIKILINK_PATTERN =
+	/\[\[([^\]\n]*#(?:weave-loc|weave-cfi)=[^\]\n]*?)\|([^\]\n]+)\]\]/g;
+const AI_SOURCE_PLACEHOLDER_PATTERN =
+	/\{\{\s*source\s*:\s*(U\d{3}\.P\d{3})\s*\}\}/gi;
+const AI_SOURCE_RANGE_PLACEHOLDER_PATTERN =
+	/\{\{\s*source-range\s*:\s*(U\d{3}\.P\d{3})\s*[-\u2010-\u2015]\s*((?:U\d{3}\.)?P\d{3})\s*\}\}/gi;
 
 function extractEpubProtocolName(href: string): string {
 	const normalizedHref = String(href || "").trim();
@@ -179,7 +190,7 @@ function applyEpubCalloutAppearanceAttributes(root: HTMLElement): void {
 	}
 }
 
-interface AnnotationNoteFilterOption {
+export interface AnnotationNoteFilterOption {
 	value: string;
 	label: string;
 }
@@ -899,7 +910,7 @@ function stripAiReadingSourceRangeMarkers(markdown: string): string {
 		.trim();
 }
 
-function collectAiReadingSourceRanges(markdown: string): AiReadingNoteSourceRange[] {
+export function collectAiReadingSourceRanges(markdown: string): AiReadingNoteSourceRange[] {
 	const source = String(markdown || "");
 	const markerPattern =
 		/<div\s+class="weave-epub-ai-reading-note-root"[^>]*><\/div>/g;
@@ -1027,7 +1038,7 @@ function getAiReadingSourceMarkdownAncestors(
 	return ancestors;
 }
 
-function filterAiReadingSourceMarkdownByType(
+export function filterAiReadingSourceMarkdownByType(
 	markdown: string,
 	typeKey: string,
 ): string {
@@ -1648,6 +1659,7 @@ function mountAiReadingNoteFilter(
 	let sourcePreviewShouldHideAddedOriginalContent = false;
 	let sourcePreviewHidePending = false;
 	let sourcePreviewHideSweepId = 0;
+	let sourcePreviewHideSweepKey = "";
 	let sourcePreviewObserver: MutationObserver | null = null;
 	let sourcePreviewDetachedBlocks: Array<{
 		element: HTMLElement;
@@ -1661,6 +1673,7 @@ function mountAiReadingNoteFilter(
 	let selectedRangeHref = "";
 	let selectedRangeIncludesDescendants = false;
 	let selectedScopeCanGenerate = false;
+	let contentFilterRefreshPending = false;
 
 	const unloadSourcePreviewComponent = (component: Component | null) => {
 		(component as unknown as { unload?: () => void } | null)?.unload?.();
@@ -2111,6 +2124,7 @@ function mountAiReadingNoteFilter(
 		);
 		if (!sourcePreviewActive) {
 			sourcePreviewHideSweepId += 1;
+			sourcePreviewHideSweepKey = "";
 			setOriginalContentHiddenForSourcePreview(false);
 		}
 		let visibleCount = 0;
@@ -2173,13 +2187,27 @@ function mountAiReadingNoteFilter(
 		);
 		if (sourcePreviewActive) {
 			setOriginalContentHiddenForSourcePreview(true);
-			scheduleSourcePreviewOriginalContentHideSweep();
+			const hideSweepKey = [
+				selectedRangeKey,
+				selectedRangeHref,
+				typeValue,
+				sourcePreviewRenderedKey,
+			].join("\n");
+			if (hideSweepKey !== sourcePreviewHideSweepKey) {
+				sourcePreviewHideSweepKey = hideSweepKey;
+				scheduleSourcePreviewOriginalContentHideSweep();
+			}
 		}
 	};
 
 	const queueContentFilterRefresh = () => {
+		if (contentFilterRefreshPending) {
+			return;
+		}
+		contentFilterRefreshPending = true;
 		const activeWindow = marker.ownerDocument.defaultView || window;
 		activeWindow.setTimeout(() => {
+			contentFilterRefreshPending = false;
 			if (!scope.contains(marker)) {
 				contentFilterObserver?.disconnect();
 				contentFilterObserver = null;
@@ -2447,6 +2475,8 @@ function resolveProtocolLocatorHref(href: string): string | null {
 				flashStyle: parsed.flashStyle,
 				flashColor: parsed.flashColor,
 				sourceTitle: parsed.sourceTitle,
+				rangeEndCfi: parsed.rangeEndCfi,
+				rangeCfis: parsed.rangeCfis,
 			},
 		);
 		return locatorHref && isSupportedBookLocatorHref(locatorHref)
@@ -2455,6 +2485,777 @@ function resolveProtocolLocatorHref(href: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+function shouldSkipRawEpubLocatorWikilinkRepair(node: Node): boolean {
+	const parent = node.parentElement;
+	if (!parent) {
+		return true;
+	}
+	return Boolean(parent.closest("a, code, pre, script, style, textarea"));
+}
+
+function repairRawEpubLocatorWikilinks(root: HTMLElement): void {
+	const doc = root.ownerDocument;
+	const textNodes: Text[] = [];
+	const walker = doc.createTreeWalker(root, 4, {
+		acceptNode(node) {
+			if (shouldSkipRawEpubLocatorWikilinkRepair(node)) {
+				return 2;
+			}
+			RAW_EPUB_LOCATOR_WIKILINK_PATTERN.lastIndex = 0;
+			return RAW_EPUB_LOCATOR_WIKILINK_PATTERN.test(node.nodeValue || "")
+				? 1
+				: 2;
+		},
+	});
+	let current = walker.nextNode();
+	while (current) {
+		textNodes.push(current as Text);
+		current = walker.nextNode();
+	}
+
+	for (const textNode of textNodes) {
+		const source = textNode.nodeValue || "";
+		RAW_EPUB_LOCATOR_WIKILINK_PATTERN.lastIndex = 0;
+		let lastIndex = 0;
+		let match: RegExpExecArray | null;
+		const fragment = doc.createDocumentFragment();
+		while ((match = RAW_EPUB_LOCATOR_WIKILINK_PATTERN.exec(source))) {
+			const fullMatch = match[0] || "";
+			const target = match[1] || "";
+			const alias = match[2] || "";
+			if (match.index > lastIndex) {
+				fragment.append(doc.createTextNode(source.slice(lastIndex, match.index)));
+			}
+			const linkEl = doc.createElement("a");
+			linkEl.setAttribute("href", target);
+			linkEl.textContent = alias;
+			fragment.append(linkEl);
+			lastIndex = match.index + fullMatch.length;
+		}
+		if (lastIndex < source.length) {
+			fragment.append(doc.createTextNode(source.slice(lastIndex)));
+		}
+		textNode.replaceWith(fragment);
+	}
+}
+
+interface RenderedAiSourceLinkInfo {
+	linkEl: HTMLAnchorElement;
+	locatorHref: string;
+	filePath: string;
+	parsed: EpubLinkParams;
+	id: string;
+	unit: string;
+	paragraph: number;
+}
+
+type AiSourceMapBlockWithFile = EpubAiReadingSourceMapBlock & {
+	filePath: string;
+};
+
+function resolveAnchorLocatorHref(linkEl: HTMLAnchorElement): string {
+	const rawHref =
+		linkEl.getAttribute("href") || linkEl.getAttribute("data-href") || "";
+	return (
+		resolveProtocolLocatorHref(rawHref) ||
+		(isSupportedBookLocatorHref(rawHref) ? rawHref : "")
+	);
+}
+
+function getRenderedAiSourceLinkInfo(
+	linkEl: HTMLAnchorElement,
+): RenderedAiSourceLinkInfo | null {
+	const locatorHref = resolveAnchorLocatorHref(linkEl);
+	const hashIdx = locatorHref.indexOf("#");
+	if (hashIdx === -1) {
+		return null;
+	}
+	const filePath = locatorHref.substring(0, hashIdx);
+	const parsed = EpubLinkService.parseEpubLink(locatorHref.substring(hashIdx));
+	const excerptId = String(parsed?.excerptId || "").trim();
+	const match = excerptId.match(/^ai-source-(U\d{3})-P(\d{3})$/);
+	if (!parsed || !match) {
+		return null;
+	}
+	return {
+		linkEl,
+		locatorHref,
+		filePath,
+		parsed,
+		id: `${match[1]}.P${match[2]}`,
+		unit: match[1],
+		paragraph: Number(match[2]),
+	};
+}
+
+function getAiSourceIdFromParsedLink(parsed: EpubLinkParams): {
+	unit: string;
+	paragraph: number;
+	id: string;
+} | null {
+	const excerptId = String(parsed.excerptId || "").trim();
+	const match = excerptId.match(/^ai-source-(U\d{3})-P(\d{3})$/);
+	if (!match) {
+		return null;
+	}
+	const paragraph = Number(match[2]);
+	if (!Number.isFinite(paragraph)) {
+		return null;
+	}
+	return {
+		unit: match[1],
+		paragraph,
+		id: `${match[1]}.P${match[2]}`,
+	};
+}
+
+function collectAiSourceCfisById(root: HTMLElement): Map<string, string> {
+	const byId = new Map<string, string>();
+	for (const linkEl of Array.from(root.querySelectorAll<HTMLAnchorElement>("a"))) {
+		const info = getRenderedAiSourceLinkInfo(linkEl);
+		if (info?.parsed.cfi && !byId.has(info.id)) {
+			byId.set(info.id, info.parsed.cfi);
+		}
+	}
+	return byId;
+}
+
+function collectAiSourceCfisByIdFromMarkdown(markdown: string): Map<string, string> {
+	const byId = new Map<string, string>();
+	const pattern = /\[\[([^\]|]*#(?:weave-loc|weave-cfi)=[^\]|]+)(?:\|[^\]]*)?\]\]/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(String(markdown || "")))) {
+		const target = match[1] || "";
+		const hashIdx = target.indexOf("#");
+		if (hashIdx === -1) {
+			continue;
+		}
+		const parsed = EpubLinkService.parseEpubLink(target.substring(hashIdx));
+		if (!parsed?.cfi) {
+			continue;
+		}
+		const source = getAiSourceIdFromParsedLink(parsed);
+		if (source && !byId.has(source.id)) {
+			byId.set(source.id, parsed.cfi);
+		}
+	}
+	return byId;
+}
+
+function collectAiSourceMapBlocksByIdFromMarkdown(
+	markdown: string,
+): Map<string, AiSourceMapBlockWithFile> {
+	const byId = new Map<string, AiSourceMapBlockWithFile>();
+	for (const sourceMap of parseEpubAiReadingSourceMapsFromMarkdown(markdown)) {
+		const filePath = String(sourceMap.filePath || "").trim();
+		for (const block of sourceMap.blocks || []) {
+			const id = String(block.id || "").trim();
+			if (!id || byId.has(id)) {
+				continue;
+			}
+			byId.set(id, { ...block, filePath });
+		}
+	}
+	return byId;
+}
+
+async function collectAiSourceCfisByIdFromMarkdownFile(
+	app: App,
+	sourceMarkdownPath: string,
+): Promise<Map<string, string>> {
+	const path = String(sourceMarkdownPath || "").trim();
+	const sourceFile = path
+		? app.vault?.getAbstractFileByPath?.(path)
+		: null;
+	if (!(sourceFile instanceof TFile)) {
+		return new Map();
+	}
+	const content = await app.vault.cachedRead(sourceFile);
+	return collectAiSourceCfisByIdFromMarkdown(content);
+}
+
+async function collectAiSourceMapBlocksByIdFromMarkdownFile(
+	app: App,
+	sourceMarkdownPath: string,
+): Promise<Map<string, AiSourceMapBlockWithFile>> {
+	const path = String(sourceMarkdownPath || "").trim();
+	const sourceFile = path
+		? app.vault?.getAbstractFileByPath?.(path)
+		: null;
+	if (!(sourceFile instanceof TFile)) {
+		return new Map();
+	}
+	const content = await app.vault.cachedRead(sourceFile);
+	return collectAiSourceMapBlocksByIdFromMarkdown(content);
+}
+
+function collectAiSourceCfisByIdFromSourceMapBlocks(
+	blocksById: Map<string, AiSourceMapBlockWithFile>,
+): Map<string, string> {
+	const cfisById = new Map<string, string>();
+	for (const [id, block] of blocksById) {
+		const cfi = String(block.cfi || "").trim();
+		if (cfi && !cfisById.has(id)) {
+			cfisById.set(id, cfi);
+		}
+	}
+	return cfisById;
+}
+
+function buildAiSourceRangeMetadataFromCfiIndex(
+	parsed: EpubLinkParams,
+	cfisById: Map<string, string>,
+	rangeTitleText = parsed.sourceTitle || "",
+): { rangeEndCfi?: string; rangeCfis?: string[] } | null {
+	const source = getAiSourceIdFromParsedLink(parsed);
+	const range = parseAiSourceRangeIdsFromText(rangeTitleText);
+	if (
+		!source ||
+		!range ||
+		range.unit !== source.unit ||
+		range.startParagraph !== source.paragraph
+	) {
+		return null;
+	}
+	const rangeCfis: string[] = [];
+	for (
+		let paragraph = range.startParagraph;
+		paragraph <= range.endParagraph;
+		paragraph += 1
+	) {
+		const cfi = cfisById.get(formatAiSourceId(range.unit, paragraph));
+		if (cfi) {
+			rangeCfis.push(cfi);
+		}
+	}
+	const uniqueRangeCfis = Array.from(new Set(rangeCfis));
+	if (uniqueRangeCfis.length <= 1) {
+		return null;
+	}
+	const endCfi =
+		cfisById.get(formatAiSourceId(range.unit, range.endParagraph)) ||
+		uniqueRangeCfis[uniqueRangeCfis.length - 1];
+	return {
+		rangeEndCfi: endCfi,
+		rangeCfis: uniqueRangeCfis,
+	};
+}
+
+function getAiSourceRangeExpectedCfiCount(
+	parsed: EpubLinkParams,
+	rangeTitleText: string,
+): number | null {
+	const source = getAiSourceIdFromParsedLink(parsed);
+	const range = parseAiSourceRangeIdsFromText(rangeTitleText);
+	if (
+		!source ||
+		!range ||
+		range.unit !== source.unit ||
+		range.startParagraph !== source.paragraph
+	) {
+		return null;
+	}
+	return range.endParagraph - range.startParagraph + 1;
+}
+
+function shouldEnrichAiSourceRangeMetadata(
+	parsed: EpubLinkParams,
+	rangeTitleText: string,
+	rangeCfis?: string[],
+): boolean {
+	const expectedCount = getAiSourceRangeExpectedCfiCount(parsed, rangeTitleText);
+	if (expectedCount !== null) {
+		return !rangeCfis || rangeCfis.length < expectedCount;
+	}
+	return !rangeCfis || rangeCfis.length <= 1;
+}
+
+function formatAiSourceId(unit: string, paragraph: number): string {
+	return `${unit}.P${String(paragraph).padStart(3, "0")}`;
+}
+
+function parseAiSourceRangeIdsFromText(
+	value: string,
+): { unit: string; startParagraph: number; endParagraph: number } | null {
+	const match = String(value || "").match(
+		/\b(U\d{3})\.P(\d{3})\s*[-\u2010-\u2015]\s*(?:(U\d{3})\.)?P(\d{3})\b/i,
+	);
+	if (!match) {
+		return null;
+	}
+	const startUnit = match[1].toUpperCase();
+	const endUnit = (match[3] || startUnit).toUpperCase();
+	const startParagraph = Number(match[2]);
+	const endParagraph = Number(match[4]);
+	if (
+		startUnit !== endUnit ||
+		!Number.isFinite(startParagraph) ||
+		!Number.isFinite(endParagraph) ||
+		endParagraph <= startParagraph
+	) {
+		return null;
+	}
+	return { unit: startUnit, startParagraph, endParagraph };
+}
+
+function normalizeAiSourceId(value: string): string {
+	const match = String(value || "")
+		.trim()
+		.match(/^(U\d{3})\.P(\d{3})$/i);
+	return match ? `${match[1].toUpperCase()}.P${match[2]}` : "";
+}
+
+function resolveAiSourceRangeEndId(
+	startId: string,
+	endRawId: string,
+): string {
+	const startMatch = normalizeAiSourceId(startId).match(/^(U\d{3})\.P\d{3}$/);
+	const endText = String(endRawId || "").trim();
+	if (/^P\d{3}$/i.test(endText) && startMatch) {
+		return `${startMatch[1]}.${endText.toUpperCase()}`;
+	}
+	return normalizeAiSourceId(endText);
+}
+
+function parseAiSourceWikilinkTarget(sourceLink: string): string {
+	const match = String(sourceLink || "").match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/);
+	return String(match?.[1] || sourceLink || "").trim();
+}
+
+function getLocatorHrefFromSourceMapBlock(
+	block: AiSourceMapBlockWithFile,
+): string {
+	const sourceTarget = parseAiSourceWikilinkTarget(block.sourceLink || "");
+	if (sourceTarget) {
+		const locatorHref =
+			resolveProtocolLocatorHref(sourceTarget) ||
+			(isSupportedBookLocatorHref(sourceTarget) ? sourceTarget : "");
+		if (locatorHref) {
+			return locatorHref;
+		}
+	}
+	const filePath = String(block.filePath || "").trim();
+	const cfi = String(block.cfi || "").trim();
+	if (!filePath || !cfi) {
+		return "";
+	}
+	const excerptId = normalizeAiSourceId(block.id).replace(".", "-");
+	return EpubLinkService.buildEpubLocatorHref(
+		filePath,
+		cfi,
+		"",
+		undefined,
+		undefined,
+		`ai-source-${excerptId}`,
+		{
+			preferCompactLocator: true,
+			flashStyle: "pulse",
+			flashColor: "yellow",
+			sourceTitle: `原文：${block.id}`,
+		},
+	);
+}
+
+function buildAiSourceLocatorHrefFromSourceMap(
+	blocksById: Map<string, AiSourceMapBlockWithFile>,
+	startId: string,
+	endId?: string,
+): { href: string; title: string } | null {
+	const normalizedStartId = normalizeAiSourceId(startId);
+	const startBlock = blocksById.get(normalizedStartId);
+	if (!normalizedStartId || !startBlock) {
+		return null;
+	}
+	const startHref = getLocatorHrefFromSourceMapBlock(startBlock);
+	const hashIdx = startHref.indexOf("#");
+	if (hashIdx === -1) {
+		return null;
+	}
+	const filePath = startHref.substring(0, hashIdx);
+	const parsed = EpubLinkService.parseEpubLink(startHref.substring(hashIdx));
+	if (!parsed?.cfi) {
+		return null;
+	}
+	const normalizedEndId = endId ? normalizeAiSourceId(endId) : "";
+	if (!normalizedEndId || normalizedEndId === normalizedStartId) {
+		const title = `原文：${normalizedStartId}`;
+		const href = EpubLinkService.buildEpubLocatorHref(
+			filePath || startBlock.filePath,
+			parsed.cfi,
+			parsed.text,
+			parsed.chapter,
+			parsed.sourceId,
+			parsed.excerptId,
+			{
+				includeText: Boolean(String(parsed.text || "").trim()),
+				includeChapter: parsed.chapter !== undefined,
+				preferCompactLocator: true,
+				flashStyle: "pulse",
+				flashColor: parsed.flashColor || "yellow",
+				sourceTitle: title,
+			},
+		);
+		return href ? { href, title } : null;
+	}
+	const range = parseAiSourceRangeIdsFromText(
+		`${normalizedStartId}-${normalizedEndId}`,
+	);
+	if (!range) {
+		return null;
+	}
+	const rangeCfis: string[] = [];
+	for (
+		let paragraph = range.startParagraph;
+		paragraph <= range.endParagraph;
+		paragraph += 1
+	) {
+		const block = blocksById.get(formatAiSourceId(range.unit, paragraph));
+		const cfi = String(block?.cfi || "").trim();
+		if (cfi) {
+			rangeCfis.push(cfi);
+		}
+	}
+	const uniqueRangeCfis = Array.from(new Set(rangeCfis));
+	if (uniqueRangeCfis.length === 0) {
+		uniqueRangeCfis.push(parsed.cfi);
+	}
+	const endBlock = blocksById.get(normalizedEndId);
+	const rangeEndCfi =
+		String(endBlock?.cfi || "").trim() ||
+		uniqueRangeCfis[uniqueRangeCfis.length - 1] ||
+		parsed.cfi;
+	const title = `原文范围：${normalizedStartId}-${normalizedEndId}`;
+	const href = EpubLinkService.buildEpubLocatorHref(
+		filePath || startBlock.filePath,
+		parsed.cfi,
+		parsed.text,
+		parsed.chapter,
+		parsed.sourceId,
+		parsed.excerptId,
+		{
+			includeText: Boolean(String(parsed.text || "").trim()),
+			includeChapter: parsed.chapter !== undefined,
+			preferCompactLocator: true,
+			flashStyle: "pulse",
+			flashColor: parsed.flashColor || "yellow",
+			sourceTitle: title,
+			rangeEndCfi,
+			rangeCfis: uniqueRangeCfis,
+		},
+	);
+	return href ? { href, title } : null;
+}
+
+function shouldSkipAiSourcePlaceholderRender(node: Node): boolean {
+	const parent = node.parentElement;
+	if (!parent) {
+		return true;
+	}
+	return Boolean(parent.closest("a, code, pre, script, style, textarea"));
+}
+
+function hasAiSourcePlaceholderText(root: HTMLElement): boolean {
+	const text = String(root.textContent || "");
+	AI_SOURCE_PLACEHOLDER_PATTERN.lastIndex = 0;
+	AI_SOURCE_RANGE_PLACEHOLDER_PATTERN.lastIndex = 0;
+	return (
+		AI_SOURCE_PLACEHOLDER_PATTERN.test(text) ||
+		AI_SOURCE_RANGE_PLACEHOLDER_PATTERN.test(text)
+	);
+}
+
+function renderAiSourcePlaceholdersFromSourceMap(
+	app: App,
+	root: HTMLElement,
+	ctx: MarkdownPostProcessorContext,
+): void {
+	const sourcePath = String(ctx?.sourcePath || "").trim();
+	if (
+		!sourcePath ||
+		typeof app.vault?.getAbstractFileByPath !== "function" ||
+		typeof app.vault?.cachedRead !== "function" ||
+		!hasAiSourcePlaceholderText(root)
+	) {
+		return;
+	}
+
+	queueMicrotask(() => {
+		void (async () => {
+			let blocksById: Map<string, AiSourceMapBlockWithFile>;
+			try {
+				blocksById = await collectAiSourceMapBlocksByIdFromMarkdownFile(
+					app,
+					sourcePath,
+				);
+			} catch {
+				return;
+			}
+			if (blocksById.size === 0) {
+				return;
+			}
+
+			const doc = root.ownerDocument;
+			const textNodes: Text[] = [];
+			const walker = doc.createTreeWalker(root, 4, {
+				acceptNode(node) {
+					if (shouldSkipAiSourcePlaceholderRender(node)) {
+						return 2;
+					}
+					const text = node.nodeValue || "";
+					AI_SOURCE_PLACEHOLDER_PATTERN.lastIndex = 0;
+					AI_SOURCE_RANGE_PLACEHOLDER_PATTERN.lastIndex = 0;
+					return AI_SOURCE_PLACEHOLDER_PATTERN.test(text) ||
+						AI_SOURCE_RANGE_PLACEHOLDER_PATTERN.test(text)
+						? 1
+						: 2;
+				},
+			});
+			let current = walker.nextNode();
+			while (current) {
+				textNodes.push(current as Text);
+				current = walker.nextNode();
+			}
+
+			for (const textNode of textNodes) {
+				const source = textNode.nodeValue || "";
+				const tokenPattern =
+					/\{\{\s*(source-range|source)\s*:\s*(U\d{3}\.P\d{3})(?:\s*[-\u2010-\u2015]\s*((?:U\d{3}\.)?P\d{3}))?\s*\}\}/gi;
+				let lastIndex = 0;
+				let match: RegExpExecArray | null;
+				const fragment = doc.createDocumentFragment();
+				while ((match = tokenPattern.exec(source))) {
+					const fullMatch = match[0] || "";
+					const kind = String(match[1] || "").toLowerCase();
+					const startId = normalizeAiSourceId(match[2] || "");
+					const endId =
+						kind === "source-range"
+							? resolveAiSourceRangeEndId(startId, match[3] || "")
+							: "";
+					if (match.index > lastIndex) {
+						fragment.append(doc.createTextNode(source.slice(lastIndex, match.index)));
+					}
+					const locator = buildAiSourceLocatorHrefFromSourceMap(
+						blocksById,
+						startId,
+						endId,
+					);
+					if (locator) {
+						const linkEl = doc.createElement("a");
+						linkEl.setAttribute("href", locator.href);
+						linkEl.setAttribute("title", locator.title);
+						linkEl.setAttribute("aria-label", locator.title);
+						linkEl.setAttribute("data-tooltip-position", "top");
+						linkEl.textContent = "原文";
+						bindEpubLocatorLink(app, linkEl, locator.href, ctx, "原文");
+						fragment.append(linkEl);
+					} else {
+						fragment.append(doc.createTextNode(fullMatch));
+					}
+					lastIndex = match.index + fullMatch.length;
+				}
+				if (lastIndex < source.length) {
+					fragment.append(doc.createTextNode(source.slice(lastIndex)));
+				}
+				textNode.replaceWith(fragment);
+			}
+		})();
+	});
+}
+
+function enrichRenderedSingleAiSourceTitleRangeLinks(root: HTMLElement): void {
+	const cfisById = collectAiSourceCfisById(root);
+	for (const linkEl of Array.from(root.querySelectorAll<HTMLAnchorElement>("a"))) {
+		const info = getRenderedAiSourceLinkInfo(linkEl);
+		if (
+			!info ||
+			info.parsed.rangeEndCfi ||
+			(info.parsed.rangeCfis && info.parsed.rangeCfis.length > 0)
+		) {
+			continue;
+		}
+		const titleText =
+			info.parsed.sourceTitle ||
+			linkEl.getAttribute("title") ||
+			linkEl.getAttribute("aria-label") ||
+			"";
+		const range = parseAiSourceRangeIdsFromText(titleText);
+		if (
+			!range ||
+			range.unit !== info.unit ||
+			range.startParagraph !== info.paragraph
+		) {
+			continue;
+		}
+		const endCfi = cfisById.get(
+			formatAiSourceId(range.unit, range.endParagraph),
+		);
+		if (!info.parsed.cfi || !endCfi) {
+			continue;
+		}
+		const rangeCfis: string[] = [];
+		for (
+			let paragraph = range.startParagraph;
+			paragraph <= range.endParagraph;
+			paragraph += 1
+		) {
+			const cfi = cfisById.get(formatAiSourceId(range.unit, paragraph));
+			if (cfi) {
+				rangeCfis.push(cfi);
+			}
+		}
+		if (rangeCfis.length === 0) {
+			rangeCfis.push(info.parsed.cfi, endCfi);
+		}
+		const nextHref = EpubLinkService.buildEpubLocatorHref(
+			info.filePath,
+			info.parsed.cfi,
+			info.parsed.text,
+			info.parsed.chapter,
+			info.parsed.sourceId,
+			info.parsed.excerptId,
+			{
+				includeText: Boolean(String(info.parsed.text || "").trim()),
+				includeChapter: info.parsed.chapter !== undefined,
+				preferCompactLocator: true,
+				flashStyle: info.parsed.flashStyle || "pulse",
+				flashColor: info.parsed.flashColor || "yellow",
+				sourceTitle: titleText || `${info.id}-${formatAiSourceId(range.unit, range.endParagraph)}`,
+				rangeEndCfi: endCfi,
+				rangeCfis,
+			},
+		);
+		if (nextHref) {
+			linkEl.setAttribute("href", nextHref);
+		}
+	}
+}
+
+function getNextDashSeparatedAnchor(
+	startLinkEl: HTMLAnchorElement,
+): { endLinkEl: HTMLAnchorElement; separatorNodes: Node[] } | null {
+	const separatorNodes: Node[] = [];
+	let node = startLinkEl.nextSibling;
+	let separatorText = "";
+	while (node) {
+		if (node.nodeType === 3) {
+			separatorText += node.nodeValue || "";
+			separatorNodes.push(node);
+			node = node.nextSibling;
+			continue;
+		}
+		if (
+			node.nodeType === 1 &&
+			((node as Element).tagName || "").toLowerCase() === "a"
+		) {
+			const compactSeparator = separatorText.replace(/\s/g, "");
+			return ["-", "–", "—", "－"].includes(compactSeparator)
+				? { endLinkEl: node as HTMLAnchorElement, separatorNodes }
+				: null;
+		}
+		if (
+			node.nodeType === 1 &&
+			!(node as Element).matches("a") &&
+			!String(node.textContent || "").trim()
+		) {
+			separatorText += node.textContent || "";
+			separatorNodes.push(node);
+			node = node.nextSibling;
+			continue;
+		}
+		return null;
+	}
+	return null;
+}
+
+function collapseRenderedAdjacentAiSourceRangeLinks(root: HTMLElement): void {
+	const cfisById = collectAiSourceCfisById(root);
+	for (const startLinkEl of Array.from(
+		root.querySelectorAll<HTMLAnchorElement>("a"),
+	)) {
+		if (!root.contains(startLinkEl)) {
+			continue;
+		}
+		const start = getRenderedAiSourceLinkInfo(startLinkEl);
+		if (
+			!start ||
+			start.parsed.rangeEndCfi ||
+			(start.parsed.rangeCfis && start.parsed.rangeCfis.length > 0)
+		) {
+			continue;
+		}
+		const next = getNextDashSeparatedAnchor(startLinkEl);
+		if (!next) {
+			continue;
+		}
+		const end = getRenderedAiSourceLinkInfo(next.endLinkEl);
+		if (
+			!end ||
+			start.filePath !== end.filePath ||
+			start.parsed.sourceId !== end.parsed.sourceId ||
+			start.unit !== end.unit ||
+			end.paragraph <= start.paragraph
+		) {
+			continue;
+		}
+		const rangeCfis: string[] = [];
+		for (let paragraph = start.paragraph; paragraph <= end.paragraph; paragraph += 1) {
+			const cfi = cfisById.get(formatAiSourceId(start.unit, paragraph));
+			if (cfi) {
+				rangeCfis.push(cfi);
+			}
+		}
+		if (!start.parsed.cfi || !end.parsed.cfi) {
+			continue;
+		}
+		if (rangeCfis.length === 0) {
+			rangeCfis.push(start.parsed.cfi, end.parsed.cfi);
+		}
+		const nextHref = EpubLinkService.buildEpubLocatorHref(
+			start.filePath,
+			start.parsed.cfi,
+			start.parsed.text,
+			start.parsed.chapter,
+			start.parsed.sourceId,
+			start.parsed.excerptId,
+			{
+				includeText: Boolean(String(start.parsed.text || "").trim()),
+				includeChapter: start.parsed.chapter !== undefined,
+				preferCompactLocator: true,
+				flashStyle: "pulse",
+				flashColor: start.parsed.flashColor || "yellow",
+				sourceTitle:
+					start.parsed.sourceTitle ||
+					`原文范围：${start.id}-${end.id}`,
+				rangeEndCfi: end.parsed.cfi,
+				rangeCfis,
+			},
+		);
+		if (!nextHref) {
+			continue;
+		}
+		startLinkEl.setAttribute("href", nextHref);
+		startLinkEl.textContent = startLinkEl.textContent || "原文";
+		for (const node of next.separatorNodes) {
+			node.remove();
+		}
+		next.endLinkEl.remove();
+	}
+}
+
+function isAiReadingSourceLocatorLink(
+	parsed: EpubLinkParams,
+	displayText: string,
+): boolean {
+	const excerptId = String(parsed.excerptId || "").trim();
+	if (excerptId.startsWith("ai-source-")) {
+		return true;
+	}
+	if (parsed.rangeEndCfi || (parsed.rangeCfis && parsed.rangeCfis.length > 0)) {
+		return true;
+	}
+	return /^U\d{3}\.P\d{3}$/i.test(String(displayText || "").trim());
 }
 
 function bindEpubLocatorLink(
@@ -2519,7 +3320,77 @@ function bindEpubLocatorLink(
 				parsed,
 				calloutQuoteText,
 			);
-			if (parsed.flashStyle || parsed.flashColor) {
+			const linkText = String(displayText || boundLinkEl.textContent || "").trim();
+			const isAiReadingSourceLink = isAiReadingSourceLocatorLink(parsed, linkText);
+			const effectiveFlashStyle =
+				isAiReadingSourceLink && parsed.flashStyle !== "none"
+					? "pulse"
+					: parsed.flashStyle;
+			const effectiveFlashColor =
+				isAiReadingSourceLink && effectiveFlashStyle !== "none"
+					? parsed.flashColor || "yellow"
+					: parsed.flashColor;
+			if (effectiveFlashStyle || effectiveFlashColor) {
+				let rangeMetadata = {
+					rangeEndCfi: parsed.rangeEndCfi,
+					rangeCfis: parsed.rangeCfis,
+				};
+				const rangeTitleText =
+					parsed.sourceTitle ||
+					boundLinkEl.getAttribute("title") ||
+					boundLinkEl.getAttribute("aria-label") ||
+					"";
+				if (
+					isAiReadingSourceLink &&
+					shouldEnrichAiSourceRangeMetadata(
+						parsed,
+						rangeTitleText,
+						rangeMetadata.rangeCfis,
+					) &&
+					sourceMarkdownPath &&
+					typeof app.vault?.getAbstractFileByPath === "function" &&
+					typeof app.vault?.cachedRead === "function"
+				) {
+					try {
+						const sourceMapBlocksById =
+							await collectAiSourceMapBlocksByIdFromMarkdownFile(
+								app,
+								sourceMarkdownPath,
+							);
+						const sourceMapCfisById =
+							collectAiSourceCfisByIdFromSourceMapBlocks(
+								sourceMapBlocksById,
+							);
+						const sourceMapRangeMetadata =
+							buildAiSourceRangeMetadataFromCfiIndex(
+								parsed,
+								sourceMapCfisById,
+								rangeTitleText,
+							);
+						const noteCfisById = sourceMapRangeMetadata?.rangeCfis?.length
+							? sourceMapCfisById
+							: await collectAiSourceCfisByIdFromMarkdownFile(
+									app,
+									sourceMarkdownPath,
+								);
+						const noteRangeMetadata =
+							sourceMapRangeMetadata ||
+							buildAiSourceRangeMetadataFromCfiIndex(
+								parsed,
+								noteCfisById,
+								rangeTitleText,
+							);
+						if (noteRangeMetadata?.rangeCfis?.length) {
+							rangeMetadata = {
+								rangeEndCfi:
+									noteRangeMetadata.rangeEndCfi || rangeMetadata.rangeEndCfi,
+								rangeCfis: noteRangeMetadata.rangeCfis,
+							};
+						}
+					} catch {
+						// Keep the source link clickable even if legacy range enrichment fails.
+					}
+				}
 				await linkService.navigateToEpubLocation(
 					filePath,
 					parsed.cfi,
@@ -2527,8 +3398,15 @@ function bindEpubLocatorLink(
 					parsed.sourceId,
 					sourceMarkdownPath,
 					{
-						flashStyle: parsed.flashStyle,
-						flashColor: parsed.flashColor,
+						flashStyle: effectiveFlashStyle,
+						flashColor: effectiveFlashColor,
+						showLocateOverlay: effectiveFlashStyle !== "none",
+						...(rangeMetadata.rangeEndCfi
+							? { rangeEndCfi: rangeMetadata.rangeEndCfi }
+							: {}),
+						...(rangeMetadata.rangeCfis
+							? { rangeCfis: rangeMetadata.rangeCfis }
+							: {}),
 					},
 				);
 				return;
@@ -2599,6 +3477,11 @@ export function createEpubLinkPostProcessor(app: App) {
 			});
 		}
 
+		repairRawEpubLocatorWikilinks(el);
+		renderAiSourcePlaceholdersFromSourceMap(app, el, ctx);
+
+		enrichRenderedSingleAiSourceTitleRangeLinks(el);
+		collapseRenderedAdjacentAiSourceRangeLinks(el);
 		const links = el.querySelectorAll("a");
 
 		links.forEach((linkEl) => {

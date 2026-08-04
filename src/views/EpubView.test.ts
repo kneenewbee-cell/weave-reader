@@ -326,6 +326,7 @@ describe('EpubView', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		const openAnnotationNote = vi.fn();
 		const openAiReadingNote = vi.fn();
+		const openAiReadingDualWindow = vi.fn();
 		const items: Array<{
 			title?: string;
 			icon?: string;
@@ -392,11 +393,12 @@ describe('EpubView', () => {
 		(view as any).actionHandlers = {
 			openAnnotationNote,
 			openAiReadingNote,
+			openAiReadingDualWindow,
 		};
 
 		(view as any).appendNotesPaneMenu(menu);
 
-		const notesMenuItem = items.find((item) => item.title === '笔记');
+		const notesMenuItem = items.find((item) => item.icon === 'notebook-tabs');
 		expect(notesMenuItem?.icon).toBe('notebook-tabs');
 		expect(menu.addSeparator).toHaveBeenCalled();
 		const subItems = (notesMenuItem?.subItems || []) as Array<{
@@ -405,8 +407,8 @@ describe('EpubView', () => {
 			click?: () => void;
 		}>;
 		expect(subItems.map((item) => item.title)).toEqual([
-			'打开标注笔记',
-			'打开 AI 阅读笔记',
+			'\u6253\u5f00\u6807\u6ce8\u7b14\u8bb0',
+			'\u6253\u5f00 AI \u9605\u8bfb\u7b14\u8bb0',
 		]);
 		expect(subItems.map((item) => item.icon)).toEqual([
 			'notebook-pen',
@@ -416,5 +418,104 @@ describe('EpubView', () => {
 		subItems[1]?.click?.();
 		expect(openAnnotationNote).toHaveBeenCalledOnce();
 		expect(openAiReadingNote).toHaveBeenCalledOnce();
+		expect(openAiReadingDualWindow).not.toHaveBeenCalled();
+	});
+
+	it('adds AI reading dual window to the dual-window pane menu', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		const openAnnotationDualWindow = vi.fn();
+		const openAiReadingDualWindow = vi.fn();
+		const openAnnotationCompareDualWindow = vi.fn();
+		const items: Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+			subItems?: unknown[];
+			setTitle: (title: string) => unknown;
+			setIcon: (icon: string) => unknown;
+			onClick: (callback: () => void) => unknown;
+			setSubmenu?: () => unknown;
+		}> = [];
+		const menu = {
+			addItem: vi.fn((callback: (item: any) => void) => {
+				const item = {
+					setTitle(title: string) {
+						this.title = title;
+						return this;
+					},
+					setIcon(icon: string) {
+						this.icon = icon;
+						return this;
+					},
+					onClick(click: () => void) {
+						this.click = click;
+						return this;
+					},
+					setSubmenu() {
+						const subItems: unknown[] = [];
+						this.subItems = subItems;
+						return {
+							addItem: (subCallback: (subItem: any) => void) => {
+								const subItem = {
+									setTitle(title: string) {
+										this.title = title;
+										return this;
+									},
+									setIcon(icon: string) {
+										this.icon = icon;
+										return this;
+									},
+									onClick(click: () => void) {
+										this.click = click;
+										return this;
+									},
+									setDisabled(disabled: boolean) {
+										this.disabled = disabled;
+										return this;
+									},
+								};
+								subItems.push(subItem);
+								subCallback(subItem);
+							},
+						};
+					},
+				};
+				items.push(item);
+				callback(item);
+			}),
+		};
+		(view as any).filePath = 'Books/demo.epub';
+		(view as any).actionHandlers = {
+			openAnnotationDualWindow,
+			openAiReadingDualWindow,
+			openAnnotationCompareDualWindow,
+		};
+
+		(view as any).appendDualWindowPaneMenu(menu);
+
+		const dualWindowMenuItem = items.find((item) => item.icon === 'columns-2');
+		const subItems = (dualWindowMenuItem?.subItems || []) as Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+		}>;
+		expect(subItems.map((item) => item.title)).toEqual([
+			'\u539f\u4e66\u4e0e\u6807\u6ce8\u7b14\u8bb0',
+			'\u539f\u4e66\u4e0e AI \u9605\u8bfb\u7b14\u8bb0',
+			'\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4',
+			'\u539f\u4e66\u4e0e\u7ffb\u8bd1\uff08\u6682\u672a\u5f00\u653e\uff09',
+		]);
+		expect(subItems.map((item) => item.icon)).toEqual([
+			'notebook-pen',
+			'book-open-check',
+			'git-compare',
+			'languages',
+		]);
+		subItems[0]?.click?.();
+		subItems[1]?.click?.();
+		subItems[2]?.click?.();
+		expect(openAnnotationDualWindow).toHaveBeenCalledOnce();
+		expect(openAiReadingDualWindow).toHaveBeenCalledOnce();
+		expect(openAnnotationCompareDualWindow).toHaveBeenCalledOnce();
 	});
 });

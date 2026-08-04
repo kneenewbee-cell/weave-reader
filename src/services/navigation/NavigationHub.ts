@@ -49,6 +49,8 @@ function locateToPendingState(locate?: NavigationIntent["locate"]): PendingLocat
 		text,
 		flashStyle: locate.flashStyle,
 		flashColor: locate.flashColor,
+		rangeEndCfi: locate.rangeEndCfi,
+		rangeCfis: locate.rangeCfis,
 		showLocateOverlay: locate.showLocateOverlay,
 	};
 }

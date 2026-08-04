@@ -43,3 +43,16 @@ export function resolveTocExportEndBoundary(
 
 	return null;
 }
+
+export function resolveTocExportNextReadingBoundary(
+	flatItems: FlatTocExportItem[],
+	currentIndex: number
+): FlatTocExportItem | null {
+	for (let index = currentIndex + 1; index < flatItems.length; index += 1) {
+		const candidate = flatItems[index];
+		if (normalizeTocHref(candidate?.href || "")) {
+			return candidate;
+		}
+	}
+	return null;
+}

@@ -25,6 +25,8 @@ export interface EpubLinkParams {
 	flashStyle?: FlashStyle;
 	flashColor?: string;
 	sourceTitle?: string;
+	rangeEndCfi?: string;
+	rangeCfis?: string[];
 	/** EPUB package 内章节 href；与 cfi 二选一或同时存在（cfi 优先）。 */
 	tocHref?: string;
 }
@@ -37,6 +39,8 @@ export interface EpubLinkWriteOptions {
 	flashStyle?: FlashStyle;
 	flashColor?: string;
 	sourceTitle?: string;
+	rangeEndCfi?: string;
+	rangeCfis?: string[];
 }
 
 interface EpubLocatorSubpathInput {
@@ -48,6 +52,8 @@ interface EpubLocatorSubpathInput {
 	flashStyle?: FlashStyle;
 	flashColor?: string;
 	sourceTitle?: string;
+	rangeEndCfi?: string;
+	rangeCfis?: string[];
 	includeText?: boolean;
 	includeChapter?: boolean;
 	preferCompactLocator?: boolean;
@@ -314,11 +320,50 @@ export class EpubLinkService {
 		return cfi.startsWith("epubcfi(") && cfi.length >= EpubLinkService.COMPACT_EPUBCFI_THRESHOLD;
 	}
 
+	private static decodeParamValue(value: string): string {
+		try {
+			return decodeURIComponent(value);
+		} catch {
+			return value;
+		}
+	}
+
+	private static parseRangeCfisParam(value?: string): string[] | undefined {
+		const raw = String(value || "").trim();
+		if (!raw) {
+			return undefined;
+		}
+		const rawParts = raw
+			.split(",")
+			.map((item) => EpubLinkService.decodeParamValue(item).trim())
+			.filter(Boolean);
+		if (rawParts.length > 1) {
+			return rawParts;
+		}
+		const decoded = EpubLinkService.decodeParamValue(raw);
+		const cfiMatches = decoded.match(/epubcfi\([^)]*\)/g);
+		if (cfiMatches && cfiMatches.length > 1) {
+			return cfiMatches.map((item) => item.trim()).filter(Boolean);
+		}
+		const decodedParts = decoded
+			.split(",")
+			.map((item) => item.trim())
+			.filter(Boolean);
+		return decodedParts.length > 0 ? decodedParts : undefined;
+	}
+
 	private static parseHashMetadata(
 		hashContent: string
 	): Pick<
 		EpubLinkParams,
-		"sourceId" | "excerptId" | "chapter" | "flashStyle" | "flashColor" | "sourceTitle"
+		| "sourceId"
+		| "excerptId"
+		| "chapter"
+		| "flashStyle"
+		| "flashColor"
+		| "sourceTitle"
+		| "rangeEndCfi"
+		| "rangeCfis"
 	> {
 		const chapterMatch = hashContent.match(/[&?]chapter=(\d+)/);
 		const sourceIdMatch = hashContent.match(/[&?]sid=([^&|\]]*)/);
@@ -326,6 +371,8 @@ export class EpubLinkService {
 		const flashStyleMatch = hashContent.match(/[&?]flashStyle=([^&|\]]*)/);
 		const flashColorMatch = hashContent.match(/[&?]flashColor=([^&|\]]*)/);
 		const sourceTitleMatch = hashContent.match(/[&?]sourceTitle=([^&|\]]*)/);
+		const rangeEndCfiMatch = hashContent.match(/[&?]rangeEndCfi=([^&|\]]*)/);
+		const rangeCfisMatch = hashContent.match(/[&?]rangeCfis=([^&|\]]*)/);
 		const flashStyle = flashStyleMatch?.[1]
 			? decodeURIComponent(flashStyleMatch[1])
 			: "";
@@ -343,6 +390,10 @@ export class EpubLinkService {
 			sourceTitle: sourceTitleMatch?.[1]
 				? decodeURIComponent(sourceTitleMatch[1])
 				: undefined,
+			rangeEndCfi: rangeEndCfiMatch?.[1]
+				? decodeURIComponent(rangeEndCfiMatch[1])
+				: undefined,
+			rangeCfis: EpubLinkService.parseRangeCfisParam(rangeCfisMatch?.[1]),
 		};
 	}
 
@@ -390,6 +441,17 @@ export class EpubLinkService {
 		}
 		if (input.sourceTitle) {
 			subpath += `&sourceTitle=${encodeURIComponent(input.sourceTitle)}`;
+		}
+		if (input.rangeEndCfi) {
+			subpath += `&rangeEndCfi=${encodeURIComponent(input.rangeEndCfi)}`;
+		}
+		const rangeCfis = (input.rangeCfis || [])
+			.map((cfi) => String(cfi || "").trim())
+			.filter(Boolean);
+		if (rangeCfis.length > 0) {
+			subpath += `&rangeCfis=${rangeCfis
+				.map((cfi) => encodeURIComponent(cfi))
+				.join(",")}`;
 		}
 		return subpath;
 	}
@@ -446,6 +508,8 @@ export class EpubLinkService {
 			flashStyle: writeOptions?.flashStyle,
 			flashColor: writeOptions?.flashColor,
 			sourceTitle: writeOptions?.sourceTitle,
+			rangeEndCfi: writeOptions?.rangeEndCfi,
+			rangeCfis: writeOptions?.rangeCfis,
 			includeText: writeOptions?.includeText === true,
 			includeChapter: writeOptions?.includeChapter === true,
 			preferCompactLocator: writeOptions?.preferCompactLocator !== false,
@@ -1094,6 +1158,8 @@ export class EpubLinkService {
 			flashStyle: writeOptions?.flashStyle,
 			flashColor: writeOptions?.flashColor,
 			sourceTitle: writeOptions?.sourceTitle,
+			rangeEndCfi: writeOptions?.rangeEndCfi,
+			rangeCfis: writeOptions?.rangeCfis,
 			includeText: writeOptions?.includeText === true,
 			includeChapter: writeOptions?.includeChapter === true,
 			preferCompactLocator: writeOptions?.preferCompactLocator !== false,
@@ -1260,6 +1326,8 @@ export class EpubLinkService {
 						...(hashMetadata.flashStyle ? { flashStyle: hashMetadata.flashStyle } : {}),
 						...(hashMetadata.flashColor ? { flashColor: hashMetadata.flashColor } : {}),
 						...(hashMetadata.sourceTitle ? { sourceTitle: hashMetadata.sourceTitle } : {}),
+						...(hashMetadata.rangeEndCfi ? { rangeEndCfi: hashMetadata.rangeEndCfi } : {}),
+						...(hashMetadata.rangeCfis ? { rangeCfis: hashMetadata.rangeCfis } : {}),
 					};
 				}
 			}
@@ -1300,6 +1368,8 @@ export class EpubLinkService {
 				...(hashMetadata.flashStyle ? { flashStyle: hashMetadata.flashStyle } : {}),
 				...(hashMetadata.flashColor ? { flashColor: hashMetadata.flashColor } : {}),
 				...(hashMetadata.sourceTitle ? { sourceTitle: hashMetadata.sourceTitle } : {}),
+				...(hashMetadata.rangeEndCfi ? { rangeEndCfi: hashMetadata.rangeEndCfi } : {}),
+				...(hashMetadata.rangeCfis ? { rangeCfis: hashMetadata.rangeCfis } : {}),
 			};
 		} catch (e) {
 			logger.warn("[EpubLinkService] Failed to parse epub link:", subpath, e);
@@ -1317,6 +1387,8 @@ export class EpubLinkService {
 		const flashStyle = params.flashStyle;
 		const flashColor = params.flashColor;
 		const sourceTitle = params.sourceTitle;
+		const rangeEndCfi = params.rangeEndCfi;
+		const rangeCfis = params.rangeCfis;
 
 		if (!file && !sourceId) {
 			return null;
@@ -1339,6 +1411,8 @@ export class EpubLinkService {
 				: {}),
 			...(flashColor ? { flashColor } : {}),
 			...(sourceTitle ? { sourceTitle } : {}),
+			...(rangeEndCfi ? { rangeEndCfi } : {}),
+			...(rangeCfis ? { rangeCfis: EpubLinkService.parseRangeCfisParam(rangeCfis) } : {}),
 		};
 	}
 
@@ -1396,6 +1470,9 @@ export class EpubLinkService {
 		options?: {
 			flashStyle?: FlashStyle;
 			flashColor?: string;
+			showLocateOverlay?: boolean;
+			rangeEndCfi?: string;
+			rangeCfis?: string[];
 		}
 	): Promise<void> {
 		if (
@@ -1419,6 +1496,11 @@ export class EpubLinkService {
 					text,
 					...(options?.flashStyle ? { flashStyle: options.flashStyle } : {}),
 					...(options?.flashColor ? { flashColor: options.flashColor } : {}),
+					...(options?.showLocateOverlay !== undefined
+						? { showLocateOverlay: options.showLocateOverlay }
+						: {}),
+					...(options?.rangeEndCfi ? { rangeEndCfi: options.rangeEndCfi } : {}),
+					...(options?.rangeCfis ? { rangeCfis: options.rangeCfis } : {}),
 				},
 				context: { sourceId, sourceMarkdownPath },
 				policy: shouldUseSourceNavigationLeafRules

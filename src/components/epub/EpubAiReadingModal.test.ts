@@ -7,6 +7,7 @@ import {
 	upsertEpubAiReadingNote,
 } from "../../services/epub/epub-ai-reading";
 import { EPUB_AI_READING_ALL_SCOPE_ID } from "../../services/epub/epub-ai-reading-scope";
+import { resolveEpubHost } from "../../services/epub/epub-host";
 import type { TocItem } from "../../services/epub/types";
 import { openFileWithExistingLeaf } from "../../utils/workspace-navigation";
 
@@ -26,9 +27,14 @@ vi.mock("../../utils/workspace-navigation", () => ({
 	openFileWithExistingLeaf: vi.fn(),
 }));
 
+vi.mock("../../services/epub/epub-host", () => ({
+	resolveEpubHost: vi.fn(() => null),
+}));
+
 const mockedRequestEpubAiReading = vi.mocked(requestEpubAiReading);
 const mockedUpsertEpubAiReadingNote = vi.mocked(upsertEpubAiReadingNote);
 const mockedOpenFileWithExistingLeaf = vi.mocked(openFileWithExistingLeaf);
+const mockedResolveEpubHost = vi.mocked(resolveEpubHost);
 const mockedMarkdownRender = vi.mocked(MarkdownRenderer.render);
 
 function createMockFile(path: string): TFile {
@@ -73,6 +79,8 @@ describe("EpubAiReadingModal", () => {
 		mockedRequestEpubAiReading.mockReset();
 		mockedUpsertEpubAiReadingNote.mockReset();
 		mockedOpenFileWithExistingLeaf.mockReset();
+		mockedResolveEpubHost.mockReset();
+		mockedResolveEpubHost.mockReturnValue(null);
 		mockedMarkdownRender.mockClear();
 		vi.restoreAllMocks();
 	});
@@ -1102,6 +1110,10 @@ describe("EpubAiReadingModal", () => {
 
 	it("closes after generating and opening a note", async () => {
 		const noteFile = createMockFile("AI阅读笔记/Demo Book - AI阅读.md");
+		const openEpubAiReadingNote = vi.fn(async () => undefined);
+		mockedResolveEpubHost.mockReturnValue({
+			openEpubAiReadingNote,
+		});
 		mockedUpsertEpubAiReadingNote.mockResolvedValue(noteFile);
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
@@ -1138,15 +1150,12 @@ describe("EpubAiReadingModal", () => {
 
 		await waitFor(() => {
 			expect(mockedUpsertEpubAiReadingNote).toHaveBeenCalled();
-			expect(mockedOpenFileWithExistingLeaf).toHaveBeenCalledWith(
-				app,
-				noteFile,
-				{
-					openInNewTab: true,
-					focus: true,
-					openState: { mode: "preview" },
-				},
-			);
+			expect(openEpubAiReadingNote).not.toHaveBeenCalled();
+			expect(mockedOpenFileWithExistingLeaf).toHaveBeenCalledWith(app, noteFile, {
+				openInNewTab: true,
+				focus: true,
+				openState: { mode: "preview" },
+			});
 			expect(closeSpy).toHaveBeenCalled();
 		});
 	});

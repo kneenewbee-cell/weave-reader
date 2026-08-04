@@ -1,11 +1,12 @@
 import { getReaderHighlightIdentityKey } from "./highlight/highlight-identity";
 import type { ReaderColorScheme } from "./reader-theme-tokens";
-import type { ReaderHighlight, ReaderHighlightInput } from "./reader-engine-types";
+import type { FlashStyle, ReaderHighlight, ReaderHighlightInput } from "./reader-engine-types";
 import type { EpubStrikethroughDisplayMode } from "./types";
 
 export type ReaderFoliateAnnotation = ReaderHighlight & {
 	value: string;
 	focusColor?: string;
+	focusFlashStyle?: FlashStyle;
 };
 
 export type RenderedReaderFoliateAnnotation = {
@@ -15,7 +16,8 @@ export type RenderedReaderFoliateAnnotation = {
 
 export function createReaderFoliateAnnotation(
 	highlight: ReaderHighlight,
-	focusColor?: string
+	focusColor?: string,
+	focusFlashStyle?: FlashStyle
 ): ReaderFoliateAnnotation {
 	const annotation: ReaderFoliateAnnotation = {
 		...highlight,
@@ -24,6 +26,9 @@ export function createReaderFoliateAnnotation(
 	};
 	if (focusColor) {
 		annotation.focusColor = focusColor;
+	}
+	if (focusFlashStyle) {
+		annotation.focusFlashStyle = focusFlashStyle;
 	}
 	return annotation;
 }
@@ -91,6 +96,7 @@ export function isSameFoliateAnnotation(
 		a.style === b.style &&
 		a.hasCommentDivider === b.hasCommentDivider &&
 		a.focusColor === b.focusColor &&
+		a.focusFlashStyle === b.focusFlashStyle &&
 		a.text === b.text &&
 		a.sourceFile === b.sourceFile &&
 		a.sourceRef === b.sourceRef &&
@@ -122,6 +128,8 @@ export function buildAnnotationRenderSignature(input: {
 		`references:${input.annotation.referenceCount || 0}`,
 		`heat:${input.annotation.referenceHeat || 0}`,
 		`focus:${input.annotation.focusColor || ""}`,
+		`flash:${input.annotation.flashStyle || ""}`,
+		`focusFlash:${input.annotation.focusFlashStyle || ""}`,
 		`strikethrough:${input.currentStrikethroughPresentation}`,
 		`scheme:${input.colorScheme}`,
 		`concealment:${isTemporarilyRevealed ? "revealed" : "concealed"}`,

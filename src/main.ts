@@ -56,6 +56,7 @@ import {
 	type EpubAnnotationNoteAnnotationInput,
 	type EpubAnnotationSemantic,
 	type EpubAnnotatedBookPackageResult,
+	type EpubHostOpenAiReadingNoteInput,
 	type EpubHostOpenAnnotationNoteInput,
 	type ImportEpubAnnotatedBookPackageOptions,
 	type ImportEpubAnnotatedBookPackageResult,
@@ -84,6 +85,7 @@ import {
 import { EpubExcerptOfficialApiService } from "./services/epub/EpubExcerptOfficialApiService";
 import {
 	openEpubBookshelf,
+	openEpubAiReadingNote,
 	openEpubReader,
 	registerEpubMarkdownPostProcessor,
 	registerEpubProtocolHandler,
@@ -1208,6 +1210,22 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 
 	async refreshEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
 		await this.writeEpubAnnotationNoteMarkdown(input);
+	}
+
+	async openEpubAiReadingNote(input: EpubHostOpenAiReadingNoteInput): Promise<void> {
+		const notePath = normalizePath(String(input.notePath || "").trim());
+		const noteFile = this.app.vault.getAbstractFileByPath(notePath);
+		if (!(noteFile instanceof TFile)) {
+			new Notice("AI阅读笔记不存在");
+			return;
+		}
+		await openEpubAiReadingNote(this.app, noteFile, {
+			bookId: input.bookId,
+			sourceFile: input.sourceFile,
+			dualWindowMode: input.dualWindowMode,
+			openMode: input.openMode || "existing",
+			focus: input.focus !== false,
+		});
 	}
 
 	async openEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {

@@ -166,6 +166,7 @@ export type {
 	EpubHostCreateCardInput,
 	EpubHostExportBookNotesInput,
 	EpubHostExportChapterInput,
+	EpubHostOpenAiReadingNoteInput,
 	EpubHostOpenAnnotationNoteInput,
 	EpubHostIncrementalReadingTopicOption,
 	EpubHostMarkdownAsset,

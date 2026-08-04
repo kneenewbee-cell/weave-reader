@@ -34,7 +34,11 @@ vi.mock("obsidian", () => ({
 			.replace(/\/$/, ""),
 }));
 
-import { createEpubLinkPostProcessor } from "../EpubLinkPostProcessor";
+import {
+	collectAiReadingSourceRanges,
+	createEpubLinkPostProcessor,
+	filterAiReadingSourceMarkdownByType,
+} from "../EpubLinkPostProcessor";
 import { EpubLinkService } from "../EpubLinkService";
 import { EPUB_DUAL_WINDOW_ANNOTATION_EVENT } from "../epub-dual-window";
 import { EPUB_AI_READING_ALL_SCOPE_ID } from "../epub-ai-reading-scope";
@@ -77,6 +81,29 @@ beforeAll(() => {
 });
 
 describe("EpubLinkPostProcessor", () => {
+	it("filters AI reading source markdown to core sections only", () => {
+		const markdown = [
+			"## U191 第五章：图像处理 > 图像对齐 > 操作指南...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="第五章：图像处理 &gt; 图像对齐 &gt; 操作指南..." data-scope-href="text/ch5.xhtml#steps"></div>',
+			"### 小节摘要",
+			"summary should be hidden",
+			"### 核心结论",
+			"core should be visible",
+			"### 关键知识点",
+			"knowledge should be hidden",
+		].join("\n");
+
+		const [range] = collectAiReadingSourceRanges(markdown);
+		const filtered = filterAiReadingSourceMarkdownByType(range.markdown, "core");
+
+		expect(filtered).toContain("核心结论");
+		expect(filtered).toContain("core should be visible");
+		expect(filtered).not.toContain("小节摘要");
+		expect(filtered).not.toContain("summary should be hidden");
+		expect(filtered).not.toContain("关键知识点");
+		expect(filtered).not.toContain("knowledge should be hidden");
+	});
+
 	beforeEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -247,6 +274,452 @@ describe("EpubLinkPostProcessor", () => {
 			"",
 			"epubsrc-demo",
 			undefined,
+		);
+	});
+
+	it("shows the source locate overlay for flashing AI source links", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=epubcfi(/6/2)&sid=epubsrc-demo&eid=ai-source-U016-P003&flashStyle=pulse&flashColor=yellow">U016.P003</a>';
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, {} as any);
+
+		const link = container.querySelector("a");
+		expect(link).not.toBeNull();
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"",
+			"epubsrc-demo",
+			undefined,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+			},
+		);
+	});
+
+	it("routes AI source range links with reader-facing labels", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart%2Creadium%3Amiddle%2Creadium%3Aend&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU143.P004-U143.P008">原文</a>';
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo.md" } as any);
+
+		const link = container.querySelector("a");
+		expect(link).not.toBeNull();
+		expect(link!.getAttribute("title")).toBe("原文范围：U143.P004-U143.P008");
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+	});
+
+	it("collapses rendered adjacent AI source endpoint links into a range link", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML = [
+			'<p>Range ',
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow">原文</a>',
+			'–',
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:end&sid=epubsrc-demo&eid=ai-source-U191-P008&flashStyle=pulse&flashColor=yellow">原文</a>',
+			".</p>",
+			'<p>Middle <a class="internal-link" href="Books/demo.epub#weave-cfi=readium:middle&sid=epubsrc-demo&eid=ai-source-U191-P007&flashStyle=pulse&flashColor=yellow">原文</a></p>',
+		].join("");
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		expect(container.querySelectorAll("p:first-child a")).toHaveLength(1);
+		expect(container.querySelector("p:first-child")?.textContent).toBe("Range 原文.");
+
+		container.querySelector("p:first-child a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+	});
+
+	it("enriches rendered single AI source range links from their tooltip title", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const rangeTitle = encodeURIComponent("原文范围：U191.P001-U191.P005");
+		const container = document.createElement("div");
+		container.innerHTML = [
+			'<p>Range ',
+			`<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U191-P001&flashStyle=pulse&flashColor=yellow&sourceTitle=${rangeTitle}">原文</a>`,
+			".</p>",
+			'<p>Middle <a class="internal-link" href="Books/demo.epub#weave-cfi=readium:middle&sid=epubsrc-demo&eid=ai-source-U191-P003&flashStyle=pulse&flashColor=yellow">原文</a></p>',
+			'<p>End <a class="internal-link" href="Books/demo.epub#weave-cfi=readium:end&sid=epubsrc-demo&eid=ai-source-U191-P005&flashStyle=pulse&flashColor=yellow">原文</a></p>',
+		].join("");
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		container.querySelector("p:first-child a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+	});
+
+	it("enriches single AI source range links from the full note when filtered DOM omits middle paragraphs", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const sourcePath = "AI闃呰绗旇/demo - AI闃呰.md";
+		const noteFile = new TFile();
+		const rangeTitle = encodeURIComponent("Source range: U192.P001-U192.P005");
+		const noteMarkdown = [
+			"hidden all source refs",
+			"[[Books/demo.epub#weave-cfi=readium:p001&sid=epubsrc-demo&eid=ai-source-U192-P001&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p002&sid=epubsrc-demo&eid=ai-source-U192-P002&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p003&sid=epubsrc-demo&eid=ai-source-U192-P003&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p004&sid=epubsrc-demo&eid=ai-source-U192-P004&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p005&sid=epubsrc-demo&eid=ai-source-U192-P005&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+		].join("\n");
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		};
+
+		const container = document.createElement("div");
+		container.innerHTML = [
+			"<p>Visible filtered range ",
+			`<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:p001&sid=epubsrc-demo&eid=ai-source-U192-P001&flashStyle=pulse&flashColor=yellow&sourceTitle=${rangeTitle}">鍘熸枃</a>`,
+			".</p>",
+		].join("");
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+
+		container.querySelector("a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:p001",
+			"",
+			"epubsrc-demo",
+			sourcePath,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:p005",
+				rangeCfis: [
+					"readium:p001",
+					"readium:p002",
+					"readium:p003",
+					"readium:p004",
+					"readium:p005",
+				],
+			},
+		);
+	});
+
+	it("repairs raw AI source wikilink text that Obsidian did not parse", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.textContent =
+			"Source [[Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart%2Creadium%3Aend&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU191.P006-U191.P008|原文]] end.";
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		expect(container.textContent).toBe("Source 原文 end.");
+		expect(container.querySelector("a")).not.toBeNull();
+
+		container.querySelector("a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:end"],
+			},
+		);
+	});
+
+	it("renders AI source placeholders from the persisted source map", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const sourcePath = "AI阅读笔记/demo - AI阅读.md";
+		const noteFile = new TFile();
+		const sourceMap = {
+			version: 1,
+			filePath: "Books/demo.epub",
+			blocks: [
+				{
+					id: "U191.P006",
+					cfi: "readium:p006",
+					sourceLink:
+						"[[Books/demo.epub#weave-cfi=readium:p006&sid=epubsrc-demo&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow|U191.P006]]",
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				},
+				{
+					id: "U191.P007",
+					cfi: "readium:p007",
+					sourceLink:
+						"[[Books/demo.epub#weave-cfi=readium:p007&sid=epubsrc-demo&eid=ai-source-U191-P007&flashStyle=pulse&flashColor=yellow|U191.P007]]",
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				},
+				{
+					id: "U191.P008",
+					cfi: "readium:p008",
+					sourceLink:
+						"[[Books/demo.epub#weave-cfi=readium:p008&sid=epubsrc-demo&eid=ai-source-U191-P008&flashStyle=pulse&flashColor=yellow|U191.P008]]",
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				},
+			],
+			units: [
+				{
+					id: "U191",
+					label: "Unit",
+					href: "text/ch5.xhtml#unit",
+					pathLabels: ["Chapter 5", "Unit"],
+					flatIndex: 191,
+					depth: 2,
+					sourceBlockIds: ["U191.P006", "U191.P007", "U191.P008"],
+				},
+			],
+		};
+		const noteMarkdown = `<!-- weave-epub-ai-reading-source-map:${encodeURIComponent(
+			JSON.stringify(sourceMap),
+		)} -->`;
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		};
+		const container = document.createElement("div");
+		container.textContent = "Claim {{source-range:U191.P006-U191.P008}}.";
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await Promise.resolve();
+
+		const link = container.querySelector("a");
+		expect(container.textContent).toBe("Claim 原文.");
+		expect(link?.getAttribute("title")).toBe("原文范围：U191.P006-U191.P008");
+		expect(link?.getAttribute("href")).toContain(
+			"rangeCfis=readium%3Ap006,readium%3Ap007,readium%3Ap008",
+		);
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:p006",
+			"",
+			"epubsrc-demo",
+			sourcePath,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:p008",
+				rangeCfis: ["readium:p006", "readium:p007", "readium:p008"],
+			},
+		);
+	});
+
+	it("fills missing middle source cfis for an existing AI source range link", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+		const sourcePath = "AI阅读笔记/demo - AI阅读.md";
+		const noteFile = new TFile();
+		const sourceMap = {
+			version: 1,
+			filePath: "Books/demo.epub",
+			blocks: Array.from({ length: 6 }, (_, index) => {
+				const paragraph = String(index + 2).padStart(3, "0");
+				return {
+					id: `U192.P${paragraph}`,
+					cfi: `readium:p${paragraph}`,
+					sourceLink: `[[Books/demo.epub#weave-cfi=readium:p${paragraph}&sid=epubsrc-demo&eid=ai-source-U192-P${paragraph}&flashStyle=pulse&flashColor=yellow|U192.P${paragraph}]]`,
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				};
+			}),
+			units: [],
+		};
+		const noteMarkdown = `<!-- weave-epub-ai-reading-source-map:${encodeURIComponent(
+			JSON.stringify(sourceMap),
+		)} -->`;
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		};
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:p002&sid=epubsrc-demo&eid=ai-source-U192-P002&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Ap007&rangeCfis=readium%3Ap002,readium%3Ap007&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU192.P002-U192.P007">原文</a>';
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+		const link = container.querySelector("a");
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:p002",
+			"",
+			"epubsrc-demo",
+			sourcePath,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:p007",
+				rangeCfis: [
+					"readium:p002",
+					"readium:p003",
+					"readium:p004",
+					"readium:p005",
+					"readium:p006",
+					"readium:p007",
+				],
+			},
+		);
+	});
+
+	it("auto-flashes legacy AI reading unit paragraph locator links", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=epubcfi(/6/2)&sid=epubsrc-demo">U191.P006</a>';
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		const link = container.querySelector("a");
+		expect(link).not.toBeNull();
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+			},
 		);
 	});
 
