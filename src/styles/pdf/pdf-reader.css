@@ -380,7 +380,8 @@
 .weave-pdf-text-annotation {
 	position: absolute;
 	border-radius: 2px;
-	pointer-events: none;
+	cursor: pointer;
+	pointer-events: auto;
 }
 
 .weave-pdf-text-annotation--highlight {
@@ -390,8 +391,20 @@
 }
 
 .weave-pdf-text-annotation--underline {
-	border-bottom: 2px solid var(--weave-pdf-text-annotation-color, #ffd54a);
 	opacity: 0.9;
+}
+
+.weave-pdf-text-annotation--underline::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -4px;
+	height: 1.5px;
+	border-radius: 999px;
+	background: var(--weave-pdf-text-annotation-color, #ffd54a);
+	pointer-events: none;
+	opacity: 0.78;
 }
 
 .weave-pdf-text-annotation--wavy::after,
@@ -404,21 +417,26 @@
 }
 
 .weave-pdf-text-annotation--wavy::after {
-	bottom: 0;
-	height: 6px;
+	bottom: -5px;
+	height: 4px;
 	background: var(--weave-pdf-text-annotation-color, #ffd54a);
 	-webkit-mask: url("data:image/svg+xml,%3Csvg width='24' height='8' viewBox='0 0 24 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 5 C3 1 5 1 7 5 S11 9 13 5 S17 1 19 5 S22 9 23 5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") left center / 24px 8px repeat-x;
 	mask: url("data:image/svg+xml,%3Csvg width='24' height='8' viewBox='0 0 24 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 5 C3 1 5 1 7 5 S11 9 13 5 S17 1 19 5 S22 9 23 5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") left center / 24px 8px repeat-x;
-	opacity: 0.9;
+	opacity: 0.56;
 }
 
 .weave-pdf-text-annotation--strikethrough::after {
-	top: 50%;
-	height: 2px;
+	top: auto;
+	bottom: -3px;
+	height: 1px;
 	border-radius: 999px;
-	background: var(--weave-pdf-text-annotation-color, #ffd54a);
-	transform: translateY(-50%);
-	opacity: 0.9;
+	background: repeating-linear-gradient(
+		to right,
+		var(--weave-pdf-text-annotation-color, #ffd54a) 0 7px,
+		transparent 7px 10px
+	);
+	transform: none;
+	opacity: 0.6;
 }
 
 .weave-pdf-text-annotation--note {
@@ -789,7 +807,8 @@
 }
 
 .weave-pdf-text-action-bar.epub-selection-toolbar .weave-epub-semantic-chip:hover .weave-epub-semantic-dot,
-.weave-pdf-text-action-bar.epub-selection-toolbar .weave-epub-semantic-chip:focus-visible .weave-epub-semantic-dot {
+.weave-pdf-text-action-bar.epub-selection-toolbar .weave-epub-semantic-chip:focus-visible .weave-epub-semantic-dot,
+.weave-pdf-text-action-bar.epub-selection-toolbar .weave-epub-semantic-chip.is-active .weave-epub-semantic-dot {
 	filter: drop-shadow(0 0 7px color-mix(in srgb, var(--weave-semantic-color, #ffe58a) 74%, transparent));
 	transform: scale(1.14);
 }
@@ -893,6 +912,14 @@
 
 .weave-pdf-text-action-bar.epub-selection-toolbar .weave-pdf-text-action-button.action-item.comment-action:hover {
 	color: #c29bff;
+}
+
+.weave-pdf-text-action-bar.epub-selection-toolbar .weave-pdf-text-action-button.action-item.danger-action {
+	color: rgba(248, 113, 113, 0.92);
+}
+
+.weave-pdf-text-action-bar.epub-selection-toolbar .weave-pdf-text-action-button.action-item.danger-action:hover {
+	color: #fecaca;
 }
 
 .weave-pdf-text-action-bar .weave-pdf-text-action-button .action-icon {

@@ -10,6 +10,7 @@ function enhanceDiv<T extends HTMLDivElement>(div: T) {
 	const el = div as T & {
 		empty: () => void;
 		addClass: (...classes: string[]) => void;
+		toggleClass: (name: string, force?: boolean) => void;
 		createDiv: (options?: string | { cls?: string | string[]; text?: string | DocumentFragment }) => HTMLDivElement;
 	};
 	el.empty = () => {
@@ -17,6 +18,9 @@ function enhanceDiv<T extends HTMLDivElement>(div: T) {
 	};
 	el.addClass = (...classes: string[]) => {
 		el.classList.add(...classes);
+	};
+	el.toggleClass = (name: string, force?: boolean) => {
+		el.classList.toggle(name, force);
 	};
 	el.createDiv = (options) => {
 		const child = enhanceDiv(document.createElement('div'));
@@ -127,6 +131,7 @@ vi.mock('obsidian', () => {
 		Platform: { isMobile: true },
 		TFile: class {},
 		WorkspaceLeaf: class {},
+		normalizePath: (value: string) => String(value || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, ''),
 		setIcon: vi.fn(),
 	};
 });
@@ -251,6 +256,36 @@ describe('EpubView', () => {
 
 		expect((view as any).scope).toBeNull();
 		expect((view as any).readerKeymapHandlers).toHaveLength(0);
+	});
+
+	it('redirects stale PDF state from the EPUB reader to the PDF reader view', async () => {
+		const setViewState = vi.fn(async () => undefined);
+		const app = { scope: {} };
+		const leaf = { app, setViewState };
+		const view = new EpubView(leaf as any, { app } as any);
+		(view as any).isOpen = true;
+		const mountComponent = vi.spyOn(view as any, 'mountComponent');
+
+		await view.setState(
+			{
+				filePath: 'Books/demo.pdf',
+				annotationId: 'pdf-anno-1',
+				pageNumber: 2,
+			},
+			null
+		);
+
+		expect(setViewState).toHaveBeenCalledWith({
+			type: 'weave-pdf-reader',
+			active: true,
+			state: {
+				filePath: 'Books/demo.pdf',
+				file: 'Books/demo.pdf',
+				annotationId: 'pdf-anno-1',
+				pageNumber: 2,
+			},
+		});
+		expect(mountComponent).not.toHaveBeenCalled();
 	});
 
 	it('re-registers reader shortcuts without leaking handlers from the previous scope', () => {

@@ -221,12 +221,15 @@ export class Plugin {
 
 // Mock Notice class
 export class Notice {
+  static messages: string[] = [];
+
   message: string;
   timeout: number;
 
   constructor(message: string, timeout?: number) {
     this.message = message;
     this.timeout = timeout || 5000;
+    Notice.messages.push(message);
     logger.debug(`Notice: ${message}`);
   }
 

@@ -1,8 +1,9 @@
 ﻿import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, TFile, WorkspaceLeaf, loadPdfJs } from "obsidian";
+import { App, Notice, TFile, WorkspaceLeaf, loadPdfJs } from "obsidian";
 import { epubActiveDocumentStore } from "../stores/epub-active-document-store";
 import { getEpubStorageService } from "../services/epub/epub-storage-access";
+import { EPUB_DUAL_WINDOW_ANNOTATION_EVENT } from "../services/epub/epub-dual-window";
 import { PdfView } from "./PdfView";
 
 vi.mock("../services/epub/epub-storage-access", () => ({
@@ -1866,6 +1867,121 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
+	it("opens an EPUB-style edit toolbar for an existing PDF text annotation and changes its semantic", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
+			?.click();
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation")).toHaveLength(1);
+		});
+		adapter.write.mockClear();
+
+		view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation")?.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true })
+		);
+
+		const editBar = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-action-bar");
+		expect(editBar).toBeTruthy();
+		expect(editBar?.dataset.editingAnnotationId).toBeTruthy();
+		expect(view.contentEl.querySelector(".weave-pdf-text-annotation.is-editing")).toBeNull();
+		expect(editBar?.querySelector('[data-weave-pdf-action="delete-text-annotation"]')).toBeTruthy();
+		expect(
+			editBar?.querySelector('[data-weave-pdf-action="semantic-text-annotation"][data-semantic-id="quote"]')
+		).toHaveClass("is-active");
+
+		editBar
+			?.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-annotation"][data-semantic-id="definition"]')
+			?.click();
+
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelector(".weave-pdf-text-annotation--underline")).toBeTruthy();
+		});
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			text: "Hello",
+			kind: "underline",
+			color: "#0EA5E9",
+			semanticId: "definition",
+			semanticStyle: "underline",
+		});
+		restoreCanvas();
+	});
+
+	it("edits and deletes an existing PDF text annotation from the edit toolbar", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
+			?.click();
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation")).toHaveLength(1);
+		});
+		adapter.write.mockClear();
+
+		view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation")?.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true })
+		);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="note-text-annotation"]')
+			?.click();
+		const noteInput = view.contentEl.querySelector<HTMLTextAreaElement>(".weave-pdf-text-note-input");
+		expect(noteInput).toBeTruthy();
+		noteInput!.value = "补充想法";
+		noteInput!.dispatchEvent(new Event("input", { bubbles: true }));
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="save-text-annotation-note"]')
+			?.click();
+
+		await vi.waitFor(() => {
+			expect(getLastPdfTextAnnotationsPayload(adapter).payload.annotations[0].note).toBe("补充想法");
+		});
+		adapter.write.mockClear();
+
+		view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation")?.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true })
+		);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="delete-text-annotation"]')
+			?.click();
+
+		await vi.waitFor(() => {
+			expect(view.contentEl.querySelectorAll(".weave-pdf-text-annotation")).toHaveLength(0);
+		});
+		await vi.waitFor(() => {
+			expect(getLastPdfTextAnnotationsPayload(adapter).payload.annotations).toHaveLength(0);
+		});
+		expect(
+			view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-action="undo-annotation"]')?.disabled
+		).toBe(false);
+		restoreCanvas();
+	});
+
 	it("navigates to a PDF text annotation when annotationId is provided in the view state", async () => {
 		const restoreCanvas = installCanvasMock();
 		const { pdf } = createMockPdfDocument(1);
@@ -1915,6 +2031,130 @@ describe("PdfView custom PDF reader", () => {
 		const focusFrame = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation-focus");
 		expect(focusFrame).toBeTruthy();
 		expect(focusFrame?.dataset.annotationId).toBe("loaded-pdf-annotation");
+		restoreCanvas();
+	});
+
+	it("focuses the matching PDF annotation from dual-window note events", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).endsWith("/annotations.json")
+		);
+		adapter.read.mockResolvedValue(
+			JSON.stringify({
+				format: "weave-reader-pdf-annotations/v1",
+				version: 1,
+				bookId: "pdf-book-demo",
+				sourcePath: "Books/duboule-page.pdf",
+				pageCount: 1,
+				annotations: [
+					{
+						id: "loaded-pdf-annotation",
+						pageNumber: 1,
+						kind: "highlight",
+						color: "#14B8A6",
+						text: "Loaded annotation",
+						rects: [{ x: 0.1, y: 0.2, width: 0.25, height: 0.05 }],
+						createdAt: 1,
+					},
+				],
+				updatedAt: 1,
+			})
+		);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		window.dispatchEvent(
+			new CustomEvent(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, {
+				detail: {
+					mode: "book-annotation-note",
+					phase: "enter",
+					bookId: "pdf-book-demo",
+					filePath: "Books/duboule-page.pdf",
+					pageNumber: 1,
+					annotationId: "loaded-pdf-annotation",
+				},
+			})
+		);
+
+		const focusFrame = view.contentEl.querySelector<HTMLElement>(".weave-pdf-text-annotation-focus");
+		expect(focusFrame).toBeTruthy();
+		expect(focusFrame?.dataset.annotationId).toBe("loaded-pdf-annotation");
+		restoreCanvas();
+	});
+
+	it("shows a lightweight notice after clicking a PDF annotation note line in dual-window mode", async () => {
+		const noticeMessages = (Notice as unknown as { messages: string[] }).messages;
+		noticeMessages.length = 0;
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).endsWith("/annotations.json")
+		);
+		adapter.read.mockResolvedValue(
+			JSON.stringify({
+				format: "weave-reader-pdf-annotations/v1",
+				version: 1,
+				bookId: "pdf-book-demo",
+				sourcePath: "Books/duboule-page.pdf",
+				pageCount: 1,
+				annotations: [
+					{
+						id: "loaded-pdf-annotation",
+						pageNumber: 1,
+						kind: "highlight",
+						color: "#14B8A6",
+						text: "Loaded annotation",
+						rects: [{ x: 0.1, y: 0.2, width: 0.25, height: 0.05 }],
+						createdAt: 1,
+					},
+				],
+				updatedAt: 1,
+			})
+		);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		window.dispatchEvent(
+			new CustomEvent(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, {
+				detail: {
+					mode: "book-annotation-note",
+					phase: "enter",
+					bookId: "pdf-book-demo",
+					filePath: "Books/duboule-page.pdf",
+					pageNumber: 1,
+					annotationId: "loaded-pdf-annotation",
+				},
+			})
+		);
+		expect(noticeMessages).toEqual([]);
+
+		window.dispatchEvent(
+			new CustomEvent(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, {
+				detail: {
+					mode: "book-annotation-note",
+					phase: "click",
+					bookId: "pdf-book-demo",
+					filePath: "Books/duboule-page.pdf",
+					pageNumber: 1,
+					annotationId: "loaded-pdf-annotation",
+				},
+			})
+		);
+
+		expect(noticeMessages).toContain("已跳转到第 1 页");
 		restoreCanvas();
 	});
 
@@ -2093,6 +2333,98 @@ describe("PdfView custom PDF reader", () => {
 			kind: "note",
 			note: "需要回看",
 		});
+		restoreCanvas();
+	});
+
+	it("merges a PDF text note into a later semantic annotation on the same selection", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf();
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter, files } = createPdfView();
+		applyPdfSemanticPluginSettings(app);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="note-text-selection"]')
+			?.click();
+		const noteInput = view.contentEl.querySelector<HTMLTextAreaElement>(".weave-pdf-text-note-input");
+		expect(noteInput).toBeTruthy();
+		noteInput!.value = "先写的想法";
+		noteInput!.dispatchEvent(new Event("input", { bubbles: true }));
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="save-text-note"]')
+			?.click();
+		await vi.waitFor(() => {
+			expect(getLastPdfTextAnnotationsPayload(adapter).payload.annotations).toHaveLength(1);
+		});
+		adapter.write.mockClear();
+
+		await selectSinglePdfText(view);
+		view.contentEl
+			.querySelector<HTMLButtonElement>('[data-weave-pdf-action="semantic-text-selection"][data-semantic-id="quote"]')
+			?.click();
+
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(payload.annotations).toHaveLength(1);
+		expect(payload.annotations[0]).toMatchObject({
+			text: "Hello",
+			kind: "highlight",
+			note: "先写的想法",
+			semanticId: "quote",
+			semanticStyle: "highlight",
+		});
+		const { markdown } = getLastPdfAnnotationMarkdown(files);
+		expect(markdown.match(/weave-pdf-annotation-note-line/g)).toHaveLength(1);
+		expect(markdown).toContain("先写的想法");
+		restoreCanvas();
+	});
+
+	it("does not merge a shifted PDF text note selection into a later semantic annotation", async () => {
+		const restoreCanvas = installCanvasMock();
+		const pdf = createSingleTextPdf("Repeated text");
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { app, view, adapter } = createPdfView();
+		const settings = applyPdfSemanticPluginSettings(app);
+		const quoteSemantic = settings.annotationSemantics.find((semantic) => semantic.id === "quote");
+		expect(quoteSemantic).toBeTruthy();
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		(view as any).selectedPdfTextSelection = {
+			pageNumber: 1,
+			text: "Repeated text",
+			rects: [{ x: 0.1, y: 0.2, width: 0.7, height: 0.04 }],
+		};
+		(view as any).createTextAnnotationFromSelection("note", "偏移前的想法");
+		await vi.waitFor(() => {
+			expect(getLastPdfTextAnnotationsPayload(adapter).payload.annotations).toHaveLength(1);
+		});
+		adapter.write.mockClear();
+
+		(view as any).selectedPdfTextSelection = {
+			pageNumber: 1,
+			text: "Repeated text",
+			rects: [{ x: 0.14, y: 0.2, width: 0.7, height: 0.04 }],
+		};
+		(view as any).createTextAnnotationFromSelection("highlight", "", quoteSemantic);
+
+		await vi.waitFor(() => {
+			expect(adapter.write).toHaveBeenCalled();
+		});
+		const { payload } = getLastPdfTextAnnotationsPayload(adapter);
+		expect(payload.annotations).toHaveLength(2);
+		expect(payload.annotations.map((annotation: any) => annotation.kind)).toEqual(["note", "highlight"]);
 		restoreCanvas();
 	});
 });

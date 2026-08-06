@@ -13,6 +13,10 @@ import type { VaultConfigLike } from "../types/obsidian-extensions";
 import { isPdfBookFormat, stripSupportedBookExtension } from "../services/epub/book-format";
 import { createDebouncedBookshelfProgressChangedNotifier } from "../services/epub/bookshelf-data-events";
 import { getEpubStorageService } from "../services/epub/epub-storage-access";
+import {
+	EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
+	type EpubDualWindowAnnotationDetail,
+} from "../services/epub/epub-dual-window";
 import { EPUB_RUNTIME } from "../services/epub/epub-runtime";
 import {
 	activeSemanticEntries,
@@ -118,6 +122,13 @@ interface PdfCaptureSelection {
 
 type PdfTextSemanticKind = Exclude<PdfTextAnnotationKind, "note">;
 
+interface PdfTextSemanticButtonOptions {
+	mode?: "expert" | "standard";
+	action?: string;
+	active?: boolean;
+	onClick?: (semantic: EpubAnnotationSemantic) => void;
+}
+
 type PdfPluginSettingsLike = Partial<{
 	readerUiMode: EpubReaderUiMode;
 	expertModeEnabled: boolean;
@@ -213,6 +224,7 @@ export class PdfView extends ItemView {
 	private captureSelection: PdfCaptureSelection | null = null;
 	private captureActionBarEl: HTMLElement | null = null;
 	private textActionBarEl: HTMLElement | null = null;
+	private editingTextAnnotationId = "";
 	private focusedTextAnnotationTimer: number | null = null;
 	private focusedTextAnnotationEl: HTMLElement | null = null;
 	private activeTextSelectionPointerId: number | null = null;
@@ -242,6 +254,9 @@ export class PdfView extends ItemView {
 		createDebouncedBookshelfProgressChangedNotifier();
 	private readonly handleContentKeyDown = (event: KeyboardEvent) => {
 		this.handleReaderKeyDown(event);
+	};
+	private readonly handleDualWindowAnnotationEvent = (event: Event) => {
+		this.handlePdfDualWindowAnnotationEvent(event);
 	};
 
 	constructor(leaf: WorkspaceLeaf) {
@@ -337,12 +352,51 @@ export class PdfView extends ItemView {
 		}
 	}
 
+	private handlePdfDualWindowAnnotationEvent(event: Event): void {
+		const detail = (event as CustomEvent<EpubDualWindowAnnotationDetail>).detail;
+		if (!detail || detail.mode !== "book-annotation-note") {
+			return;
+		}
+		if (normalizePath(detail.filePath || "") !== this.getCurrentFilePath()) {
+			return;
+		}
+		if (detail.phase === "leave") {
+			this.clearFocusedTextAnnotation();
+			return;
+		}
+		const annotationId = String(detail.annotationId || "").trim();
+		if (annotationId) {
+			const jumped = this.goToTextAnnotation(annotationId);
+			if (jumped && detail.phase === "click") {
+				this.showPdfAnnotationJumpNotice(this.currentPage);
+			}
+			return;
+		}
+		if (typeof detail.pageNumber === "number" && Number.isFinite(detail.pageNumber)) {
+			this.goToPage(Math.floor(detail.pageNumber), { scroll: true });
+			if (detail.phase === "click") {
+				this.showPdfAnnotationJumpNotice(this.currentPage);
+			}
+		}
+	}
+
+	private showPdfAnnotationJumpNotice(pageNumber: number): void {
+		if (!Number.isFinite(pageNumber) || pageNumber <= 0) {
+			return;
+		}
+		new Notice(`已跳转到第 ${Math.floor(pageNumber)} 页`, 1600);
+	}
+
 	async onOpen(): Promise<void> {
 		this.isOpen = true;
 		this.contentEl.empty();
 		this.contentEl.addClass("weave-pdf-view-content");
 		this.contentEl.tabIndex = 0;
 		this.contentEl.addEventListener("keydown", this.handleContentKeyDown);
+		window.addEventListener(
+			EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
+			this.handleDualWindowAnnotationEvent
+		);
 		this.activeLeafChangeRef = this.app.workspace.on("active-leaf-change", (leaf) => {
 			this.syncAsActivePdfDocumentIfActive(leaf);
 		});
@@ -365,6 +419,10 @@ export class PdfView extends ItemView {
 		this.bookshelfProgressChangedNotifier.dispose();
 		epubActiveDocumentStore.clearActiveDocument(this.getCurrentFilePath());
 		this.contentEl.removeEventListener("keydown", this.handleContentKeyDown);
+		window.removeEventListener(
+			EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
+			this.handleDualWindowAnnotationEvent
+		);
 		this.contentEl.removeAttribute("tabindex");
 		this.contentEl.removeClass("weave-pdf-view-content");
 		this.contentEl.empty();
@@ -393,6 +451,7 @@ export class PdfView extends ItemView {
 		this.captureSelection = null;
 		this.captureActionBarEl = null;
 		this.textActionBarEl = null;
+		this.editingTextAnnotationId = "";
 		this.clearFocusedTextAnnotation();
 		this.activeTextSelectionPointerId = null;
 		this.textSelectionDrag = null;
@@ -2270,6 +2329,11 @@ export class PdfView extends ItemView {
 
 	private renderTextSelectionActionBarForPage(pageNumber: number): void {
 		this.clearTextActionBar();
+		const hadEditingTextAnnotation = Boolean(this.editingTextAnnotationId);
+		this.editingTextAnnotationId = "";
+		if (hadEditingTextAnnotation) {
+			this.renderAllTextAnnotations();
+		}
 		const selection = this.selectedPdfTextSelection;
 		if (!selection || selection.pageNumber !== pageNumber || !selection.text.trim()) {
 			return;
@@ -2341,8 +2405,11 @@ export class PdfView extends ItemView {
 	private createTextSemanticButton(
 		parent: HTMLElement,
 		semantic: EpubAnnotationSemantic,
-		mode: "expert" | "standard" = "expert"
+		optionsOrMode: "expert" | "standard" | PdfTextSemanticButtonOptions = "expert"
 	): HTMLButtonElement {
+		const options: PdfTextSemanticButtonOptions =
+			typeof optionsOrMode === "string" ? { mode: optionsOrMode } : optionsOrMode;
+		const mode = options.mode ?? "expert";
 		const label = String(semantic.label || semantic.id || "标注").trim();
 		const button = parent.createEl("button", {
 			cls: `clickable-icon action-item weave-epub-semantic-chip${
@@ -2350,23 +2417,122 @@ export class PdfView extends ItemView {
 			}`,
 		});
 		button.type = "button";
-		button.setAttribute("data-weave-pdf-action", "semantic-text-selection");
+		button.setAttribute("data-weave-pdf-action", options.action ?? "semantic-text-selection");
 		button.setAttribute("data-semantic-id", semantic.id);
 		button.setAttribute("data-semantic-style", this.getSemanticPreviewStyle(semantic));
 		button.setAttribute("aria-label", label);
+		button.setAttribute("aria-pressed", options.active ? "true" : "false");
+		button.classList.toggle("is-active", Boolean(options.active));
 		button.style.setProperty("--weave-semantic-color", this.getSemanticColorHex(semantic.color));
 		button.createEl("span", { cls: "action-icon weave-epub-semantic-dot" });
 		button.createEl("span", { cls: "action-label weave-epub-semantic-label", text: label });
 		button.addEventListener("click", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
-			this.createTextAnnotationFromSelection(
-				this.getPdfTextKindForSemantic(semantic),
-				"",
-				semantic
-			);
+			if (options.onClick) {
+				options.onClick(semantic);
+				return;
+			}
+			this.createTextAnnotationFromSelection(this.getPdfTextKindForSemantic(semantic), "", semantic);
 		});
 		return button;
+	}
+
+	private openTextAnnotationEditBar(annotationId: string): void {
+		const annotation = this.findTextAnnotationById(annotationId);
+		if (!annotation) {
+			return;
+		}
+		this.editingTextAnnotationId = annotation.id;
+		this.clearFocusedTextAnnotation();
+		this.clearPdfTextSelection({ keepActionBar: true });
+		this.renderAllTextAnnotations();
+		this.renderTextAnnotationEditBar(annotation);
+	}
+
+	private renderTextAnnotationEditBar(annotation: PdfTextAnnotation): void {
+		this.clearTextActionBar();
+		const pageEl = this.pageEls.get(annotation.pageNumber);
+		const shell = pageEl?.querySelector<HTMLElement>(".weave-pdf-page-canvas-shell");
+		const canvas = shell?.querySelector<HTMLCanvasElement>("canvas");
+		if (!shell || !canvas || annotation.rects.length === 0) {
+			this.editingTextAnnotationId = "";
+			return;
+		}
+		const box = this.getPdfRectUnion(annotation.rects);
+		const cssWidth = this.getCanvasCssWidth(canvas);
+		const cssHeight = this.getCanvasCssHeight(canvas);
+		const readerUiMode = this.getPdfReaderUiMode();
+		const semanticActions = this.listPdfTextSemanticActions();
+		if (cssWidth <= 0 || cssHeight <= 0) {
+			this.editingTextAnnotationId = "";
+			return;
+		}
+		const centerX = Math.max(8 / cssWidth, Math.min(1 - 8 / cssWidth, box.left + (box.right - box.left) / 2));
+		const placeBelow = box.top * cssHeight < 42;
+		const bar = shell.createDiv({
+			cls: "weave-pdf-text-action-bar epub-selection-toolbar epub-glass-panel visible",
+			attr: {
+				"data-page-number": String(annotation.pageNumber),
+				role: "toolbar",
+			},
+		});
+		bar.dataset.readerUiMode = readerUiMode;
+		bar.dataset.editingAnnotationId = annotation.id;
+		bar.classList.add("is-editing-annotation");
+		bar.classList.toggle("is-below", placeBelow);
+		bar.classList.toggle("below-selection", placeBelow);
+		bar.style.left = `${10 + centerX * cssWidth}px`;
+		bar.style.top = `${10 + (placeBelow ? box.bottom * cssHeight + 8 : box.top * cssHeight - 8)}px`;
+		bar.style.setProperty("--toolbar-arrow-offset", "0px");
+		bar.addEventListener("mousedown", (event) => event.stopPropagation());
+		bar.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+		const mainRow = bar.createDiv({ cls: "selection-main-row" });
+		const actionsShell = mainRow.createDiv({ cls: "selection-actions-shell" });
+		if (readerUiMode === "expert" && semanticActions.length > 0) {
+			const semanticRow = actionsShell.createDiv({
+				cls: "toolbar-row weave-epub-expert-semantic-row",
+			});
+			for (const semantic of semanticActions) {
+				this.createTextSemanticButton(semanticRow, semantic, {
+					action: "semantic-text-annotation",
+					active: annotation.semanticId === semantic.id,
+					onClick: (nextSemantic) => {
+						this.updateTextAnnotationSemantic(annotation.id, nextSemantic);
+					},
+				});
+			}
+			actionsShell.createDiv({ cls: "selection-actions-divider" });
+		}
+		const actionsRow = actionsShell.createDiv({
+			cls: `toolbar-row actions-row selection-actions-row${
+				readerUiMode === "standard" ? " selection-standard-semantic-row" : ""
+			}`,
+		});
+		if (readerUiMode === "standard") {
+			for (const semantic of semanticActions) {
+				this.createTextSemanticButton(actionsRow, semantic, {
+					mode: "standard",
+					action: "semantic-text-annotation",
+					active: annotation.semanticId === semantic.id,
+					onClick: (nextSemantic) => {
+						this.updateTextAnnotationSemantic(annotation.id, nextSemantic);
+					},
+				});
+			}
+		}
+		this.createTextActionButton(actionsRow, "想法", "note-text-annotation", "message-square-plus", () => {
+			this.renderTextNoteEditorForAnnotation(annotation.id);
+		}, "comment-action");
+		this.createTextActionButton(actionsRow, "删除", "delete-text-annotation", "trash-2", () => {
+			this.deleteTextAnnotation(annotation.id);
+		}, "danger-action");
+		this.createTextActionButton(actionsRow, "取消", "cancel-text-annotation", "x", () => {
+			this.clearTextAnnotationEdit();
+		});
+		bar.createDiv({ cls: "toolbar-arrow" });
+		this.textActionBarEl = bar;
 	}
 
 	private renderTextNoteEditorForSelection(): void {
@@ -2399,6 +2565,44 @@ export class PdfView extends ItemView {
 				return;
 			}
 			this.clearPdfTextSelection();
+		});
+		bar.createDiv({ cls: "toolbar-arrow" });
+		window.setTimeout(() => input.focus(), 0);
+	}
+
+	private renderTextNoteEditorForAnnotation(annotationId: string): void {
+		const annotation = this.findTextAnnotationById(annotationId);
+		const bar = this.textActionBarEl;
+		if (!annotation || !bar) {
+			this.clearTextAnnotationEdit();
+			return;
+		}
+		bar.empty();
+		bar.addClass("is-note-editor");
+		bar.dataset.editingAnnotationId = annotation.id;
+		const mainRow = bar.createDiv({ cls: "selection-main-row" });
+		const actionsShell = mainRow.createDiv({ cls: "selection-actions-shell" });
+		const input = actionsShell.createEl("textarea", {
+			cls: "weave-pdf-text-note-input",
+			attr: {
+				placeholder: "输入想法",
+				rows: "3",
+			},
+		});
+		input.value = annotation.note ?? "";
+		const actions = actionsShell.createDiv({
+			cls: "toolbar-row actions-row selection-actions-row weave-pdf-text-note-actions",
+		});
+		this.createTextActionButton(actions, "保存", "save-text-annotation-note", "check", () => {
+			this.updateTextAnnotationNote(annotation.id, input.value);
+		}, "accent");
+		this.createTextActionButton(actions, "取消", "cancel-text-annotation-note", "x", () => {
+			const latest = this.findTextAnnotationById(annotation.id);
+			if (latest) {
+				this.renderTextAnnotationEditBar(latest);
+				return;
+			}
+			this.clearTextAnnotationEdit();
 		});
 		bar.createDiv({ cls: "toolbar-arrow" });
 		window.setTimeout(() => input.focus(), 0);
@@ -2443,14 +2647,104 @@ export class PdfView extends ItemView {
 		);
 	}
 
+	private normalizePdfAnnotationTextForMerge(text: string): string {
+		return String(text || "").trim().replace(/\s+/g, " ");
+	}
+
+	private arePdfTextAnnotationAreasMergeable(
+		leftRects: PdfTextAnnotationRect[],
+		rightRects: PdfTextAnnotationRect[]
+	): boolean {
+		if (leftRects.length === 0 || rightRects.length === 0 || leftRects.length !== rightRects.length) {
+			return false;
+		}
+		const remaining = [...rightRects];
+		for (const leftRect of leftRects) {
+			const matchIndex = remaining.findIndex((rightRect) =>
+				this.arePdfTextAnnotationRectsMergeable(leftRect, rightRect)
+			);
+			if (matchIndex < 0) {
+				return false;
+			}
+			remaining.splice(matchIndex, 1);
+		}
+		return true;
+	}
+
+	private arePdfTextAnnotationRectsMergeable(
+		leftRect: PdfTextAnnotationRect,
+		rightRect: PdfTextAnnotationRect
+	): boolean {
+		const leftRight = leftRect.x + leftRect.width;
+		const rightRight = rightRect.x + rightRect.width;
+		const leftBottom = leftRect.y + leftRect.height;
+		const rightBottom = rightRect.y + rightRect.height;
+		const verticalOverlap = Math.max(
+			0,
+			Math.min(leftBottom, rightBottom) - Math.max(leftRect.y, rightRect.y)
+		);
+		const minHeight = Math.min(leftRect.height, rightRect.height);
+		const edgeTolerance = Math.max(0.006, Math.min(leftRect.width, rightRect.width) * 0.025);
+		const heightTolerance = Math.max(0.006, minHeight * 0.35);
+		return (
+			minHeight > 0 &&
+			verticalOverlap / minHeight >= 0.8 &&
+			Math.abs(leftRect.x - rightRect.x) <= edgeTolerance &&
+			Math.abs(leftRight - rightRight) <= edgeTolerance &&
+			Math.abs(leftRect.height - rightRect.height) <= heightTolerance
+		);
+	}
+
+	private findMergeableTextAnnotationForSelection(selection: {
+		pageNumber: number;
+		text: string;
+		rects: PdfTextAnnotationRect[];
+	}): PdfTextAnnotation | null {
+		const selectedText = this.normalizePdfAnnotationTextForMerge(selection.text);
+		if (!selectedText || selection.rects.length === 0) {
+			return null;
+		}
+		return (
+			this.textAnnotations.find(
+				(annotation) =>
+					annotation.pageNumber === selection.pageNumber &&
+					this.normalizePdfAnnotationTextForMerge(annotation.text) === selectedText &&
+					this.arePdfTextAnnotationAreasMergeable(annotation.rects, selection.rects)
+			) ?? null
+		);
+	}
+
+	private shouldMergeTextAnnotationFromSelection(
+		kind: PdfTextAnnotationKind,
+		annotation: PdfTextAnnotation | null
+	): annotation is PdfTextAnnotation {
+		if (!annotation) {
+			return false;
+		}
+		return kind === "note" || annotation.kind === "note";
+	}
+
 	private clearTextActionBar(): void {
 		this.textActionBarEl?.remove();
 		this.textActionBarEl = null;
 	}
 
-	private clearPdfTextSelection(): void {
-		document.getSelection()?.removeAllRanges();
+	private clearTextAnnotationEdit(): void {
+		const pageNumber = this.findTextAnnotationById(this.editingTextAnnotationId)?.pageNumber;
+		this.editingTextAnnotationId = "";
 		this.clearTextActionBar();
+		if (pageNumber) {
+			this.renderTextAnnotationsForPage(pageNumber);
+			return;
+		}
+		this.renderAllTextAnnotations();
+	}
+
+	private clearPdfTextSelection(options: { keepActionBar?: boolean } = {}): void {
+		document.getSelection()?.removeAllRanges();
+		if (!options.keepActionBar) {
+			this.clearTextActionBar();
+		}
 		this.selectedPdfTextSelection = null;
 		this.textSelectionDrag = null;
 		this.activeTextSelectionPointerId = null;
@@ -2475,6 +2769,99 @@ export class PdfView extends ItemView {
 			// Fall through to the user-facing failure notice below.
 		}
 		new Notice("当前环境不支持复制文本");
+	}
+
+	private findTextAnnotationById(annotationId: string): PdfTextAnnotation | null {
+		return this.textAnnotations.find((annotation) => annotation.id === annotationId) ?? null;
+	}
+
+	private updateTextAnnotationSemantic(
+		annotationId: string,
+		semantic: EpubAnnotationSemantic
+	): void {
+		const annotation = this.findTextAnnotationById(annotationId);
+		if (!annotation) {
+			this.clearTextAnnotationEdit();
+			return;
+		}
+		this.pushUndoSnapshot();
+		const semanticStyle = normalizeAnnotationStyle(semantic.style);
+		this.textAnnotations = sortPdfTextAnnotationsByPosition(
+			this.textAnnotations.map((entry) =>
+				entry.id === annotation.id
+					? {
+							...entry,
+							kind: this.getPdfTextKindForSemantic(semantic),
+							color: this.getSemanticColorHex(semantic.color),
+							semanticId: semantic.id,
+							semanticLabel: semantic.label,
+							semanticColor: semantic.color,
+							semanticStyle,
+						}
+					: entry
+			)
+		);
+		this.editingTextAnnotationId = annotation.id;
+		this.annotationsDirty = true;
+		this.renderTextAnnotationsForPage(annotation.pageNumber);
+		const latest = this.findTextAnnotationById(annotation.id);
+		if (latest) {
+			this.renderTextAnnotationEditBar(latest);
+		}
+		this.updateToolbarState();
+		this.syncAsActivePdfDocument();
+		void this.persistPdfAnnotations();
+	}
+
+	private updateTextAnnotationNote(annotationId: string, note: string): void {
+		const annotation = this.findTextAnnotationById(annotationId);
+		if (!annotation) {
+			this.clearTextAnnotationEdit();
+			return;
+		}
+		this.pushUndoSnapshot();
+		const trimmedNote = note.trim();
+		this.textAnnotations = sortPdfTextAnnotationsByPosition(
+			this.textAnnotations.map((entry) => {
+				if (entry.id !== annotation.id) {
+					return entry;
+				}
+				const next: PdfTextAnnotation = { ...entry };
+				if (trimmedNote) {
+					next.note = trimmedNote;
+				} else {
+					delete next.note;
+				}
+				return next;
+			})
+		);
+		this.editingTextAnnotationId = annotation.id;
+		this.annotationsDirty = true;
+		this.renderTextAnnotationsForPage(annotation.pageNumber);
+		const latest = this.findTextAnnotationById(annotation.id);
+		if (latest) {
+			this.renderTextAnnotationEditBar(latest);
+		}
+		this.updateToolbarState();
+		this.syncAsActivePdfDocument();
+		void this.persistPdfAnnotations();
+	}
+
+	private deleteTextAnnotation(annotationId: string): void {
+		const annotation = this.findTextAnnotationById(annotationId);
+		if (!annotation) {
+			this.clearTextAnnotationEdit();
+			return;
+		}
+		this.pushUndoSnapshot();
+		this.textAnnotations = this.textAnnotations.filter((entry) => entry.id !== annotation.id);
+		this.editingTextAnnotationId = "";
+		this.annotationsDirty = true;
+		this.clearTextActionBar();
+		this.renderTextAnnotationsForPage(annotation.pageNumber);
+		this.updateToolbarState();
+		this.syncAsActivePdfDocument();
+		void this.persistPdfAnnotations();
 	}
 
 	private releaseTextSelectionPointer(layer: HTMLElement, pointerId: number): void {
@@ -2999,25 +3386,65 @@ export class PdfView extends ItemView {
 			return;
 		}
 		const semanticStyle = semantic ? normalizeAnnotationStyle(semantic.style) : undefined;
-		this.pushUndoSnapshot();
-		this.textAnnotations = sortPdfTextAnnotationsByPosition([
-			...this.textAnnotations,
-			{
-				id: this.createInkId(),
-				pageNumber: selection.pageNumber,
-				kind,
-				color: semantic ? this.getSemanticColorHex(semantic.color) : this.highlighterColor,
-				text: selection.text,
-				note: kind === "note" ? note : undefined,
-				semanticId: semantic?.id,
-				semanticLabel: semantic?.label,
-				semanticColor: semantic?.color,
-				semanticStyle,
-				rects: selection.rects,
-				createdAt: Date.now(),
-			},
-		]);
+		const mergeCandidate = this.findMergeableTextAnnotationForSelection(selection);
+		const mergeTarget = this.shouldMergeTextAnnotationFromSelection(kind, mergeCandidate)
+			? mergeCandidate
+			: null;
 		const pageNumber = selection.pageNumber;
+		this.pushUndoSnapshot();
+		if (mergeTarget) {
+			const trimmedNote = note.trim();
+			this.textAnnotations = sortPdfTextAnnotationsByPosition(
+				this.textAnnotations.map((annotation) => {
+					if (annotation.id !== mergeTarget.id) {
+						return annotation;
+					}
+					if (kind === "note") {
+						const next: PdfTextAnnotation = {
+							...annotation,
+							text: selection.text,
+							rects: selection.rects,
+						};
+						if (trimmedNote) {
+							next.note = trimmedNote;
+						} else {
+							delete next.note;
+						}
+						return next;
+					}
+					return {
+						...annotation,
+						pageNumber: selection.pageNumber,
+						kind,
+						color: semantic ? this.getSemanticColorHex(semantic.color) : this.highlighterColor,
+						text: selection.text,
+						semanticId: semantic?.id,
+						semanticLabel: semantic?.label,
+						semanticColor: semantic?.color,
+						semanticStyle,
+						rects: selection.rects,
+					};
+				})
+			);
+		} else {
+			this.textAnnotations = sortPdfTextAnnotationsByPosition([
+				...this.textAnnotations,
+				{
+					id: this.createInkId(),
+					pageNumber: selection.pageNumber,
+					kind,
+					color: semantic ? this.getSemanticColorHex(semantic.color) : this.highlighterColor,
+					text: selection.text,
+					note: kind === "note" ? note : undefined,
+					semanticId: semantic?.id,
+					semanticLabel: semantic?.label,
+					semanticColor: semantic?.color,
+					semanticStyle,
+					rects: selection.rects,
+					createdAt: Date.now(),
+				},
+			]);
+		}
 		this.clearPdfTextSelection();
 		this.annotationsDirty = true;
 		this.renderTextAnnotationsForPage(pageNumber);
@@ -3362,6 +3789,18 @@ export class PdfView extends ItemView {
 						el.style.width = `${this.formatPdfCssNumber(rect.width * 100)}%`;
 						el.style.height = `${this.formatPdfCssNumber(rect.height * 100)}%`;
 						el.style.setProperty("--weave-pdf-text-annotation-color", annotation.color);
+						el.addEventListener("mousedown", (event) => {
+							event.preventDefault();
+							event.stopPropagation();
+						});
+						el.addEventListener("pointerdown", (event) => {
+							event.stopPropagation();
+						});
+						el.addEventListener("click", (event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							this.openTextAnnotationEditBar(annotation.id);
+						});
 						return el;
 					})
 				)
@@ -3566,6 +4005,7 @@ export class PdfView extends ItemView {
 		this.inkStrokes = clonePdfInkStrokes(snapshot.inkStrokes);
 		this.textAnnotations = this.clonePdfTextAnnotations(snapshot.textAnnotations);
 		this.selectedInkStrokeIds.clear();
+		this.editingTextAnnotationId = "";
 		this.clearPdfTextSelection();
 		this.renderAllInkStrokes();
 		this.renderAllTextAnnotations();

@@ -63,6 +63,11 @@ describe("pdf-annotation-note-markdown", () => {
 		expect(markdown).toContain("- PDF: `Books/report.pdf`");
 		expect(markdown).toContain("- \u9875\u6570: 3");
 		expect(markdown).toContain('data-current-page="2"');
+		expect(markdown).toContain("class=\"weave-annotation-note-dual-window\"");
+		expect(markdown).toContain('data-weave-dual-window-action="open"');
+		expect(markdown).toContain('data-book-id="pdf-book-test"');
+		expect(markdown).toContain('data-source-file="Books/report.pdf"');
+		expect(markdown).toContain('data-dual-window-mode="false"');
 		expect(markdown).toContain('class="weave-annotation-note-chapter weave-pdf-annotation-note-page"');
 		expect(markdown).toContain('data-chapter-key="page-1"');
 		expect(markdown).toContain('data-chapter-title="\u7b2c 1 \u9875"');
@@ -80,6 +85,29 @@ describe("pdf-annotation-note-markdown", () => {
 		expect(markdown).toMatch(/<mark[^>]*>first on page one<\/mark>/);
 		expect(markdown).toContain("text-decoration-line: underline");
 		expect(markdown.endsWith("\n")).toBe(true);
+	});
+
+	it("hides the dual-window button when rendered for PDF dual-window mode", () => {
+		const markdown = renderPdfAnnotationNoteMarkdown({
+			bookId: "pdf-book-test",
+			book: {
+				title: "Report",
+				filePath: "Books/report.pdf",
+				pageCount: 3,
+			},
+			dualWindowMode: true,
+			annotations: [
+				annotation({
+					id: "page-1-first",
+					pageNumber: 1,
+					text: "first on page one",
+				}),
+			],
+		});
+
+		expect(markdown).toContain('data-dual-window-mode="true"');
+		expect(markdown).not.toContain("weave-annotation-note-dual-window");
+		expect(markdown).toContain('data-page-number="1"');
 	});
 
 	it("renders an empty read-only PDF annotation note when no text annotations exist", () => {

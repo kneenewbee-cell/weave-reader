@@ -133,6 +133,9 @@ import {
 	openAnnotationNoteFileInDualWindow,
 	openAnnotationNoteFileWithExistingLeaf,
 } from "./services/epub/open-annotation-note-file";
+import { PdfTextAnnotationStore } from "./services/pdf/pdf-text-annotation-store";
+import { renderPdfAnnotationNoteMarkdown } from "./services/pdf/pdf-annotation-note-markdown";
+import { resolvePdfPortableBookDataLocation } from "./services/pdf/pdf-portable-data-location";
 import type { AIConfig } from "./types/plugin-settings";
 import {
 	DEFAULT_BOOKSHELF_DISPLAY_MODE,
@@ -1208,6 +1211,94 @@ export default class StandaloneEpubPlugin extends Plugin implements EpubHostCapa
 
 	async refreshEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
 		await this.writeEpubAnnotationNoteMarkdown(input);
+	}
+
+	private async writePdfAnnotationNoteMarkdown(input: EpubHostOpenAnnotationNoteInput): Promise<{
+		location: ReturnType<typeof resolvePdfPortableBookDataLocation>;
+		noteFile: TFile;
+		resolvedSourcePath: string;
+	}> {
+		const resolvedSourcePath = normalizePath(String(input.filePath || "").trim());
+		if (!resolvedSourcePath) {
+			throw new Error("PDF file path is required");
+		}
+		const textAnnotationStore = new PdfTextAnnotationStore(this.app);
+		const loaded = await textAnnotationStore.load(resolvedSourcePath, 0);
+		const document = loaded.document;
+		const location = resolvePdfPortableBookDataLocation(resolvedSourcePath);
+		const sourceFile = this.app.vault.getAbstractFileByPath(resolvedSourcePath);
+		const fallbackTitle =
+			sourceFile instanceof TFile
+				? sourceFile.basename
+				: stripSupportedBookExtension(resolvedSourcePath.split("/").pop() || "PDF");
+		const markdown = renderPdfAnnotationNoteMarkdown({
+			bookId: location.bookId,
+			book: {
+				title: fallbackTitle,
+				filePath: resolvedSourcePath,
+				pageCount: document.pageCount,
+			},
+			annotations: document.annotations,
+			dualWindowMode: input.dualWindowMode === true,
+		});
+
+		await DirectoryUtils.ensureDirForFile(this.app.vault.adapter, location.annotationsMarkdownPath);
+		const existing = this.app.vault.getAbstractFileByPath(location.annotationsMarkdownPath);
+		let noteFile: TFile;
+		const normalizedMarkdown = markdown.endsWith("\n") ? markdown : `${markdown}\n`;
+		if (existing instanceof TFile) {
+			await this.app.vault.modify(existing, normalizedMarkdown);
+			noteFile = existing;
+		} else {
+			noteFile = await this.app.vault.create(location.annotationsMarkdownPath, normalizedMarkdown);
+		}
+
+		return {
+			location,
+			noteFile,
+			resolvedSourcePath,
+		};
+	}
+
+	async refreshPdfAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
+		await this.writePdfAnnotationNoteMarkdown(input);
+	}
+
+	async openPdfAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {
+		const { location, noteFile, resolvedSourcePath } =
+			await this.writePdfAnnotationNoteMarkdown(input);
+
+		const shouldOpenDualWindow =
+			input.dualWindowMode === true &&
+			(input.openMode || "existing") === "right-split" &&
+			Boolean(resolvedSourcePath);
+		const noteLeaf = shouldOpenDualWindow
+			? (
+					await openAnnotationNoteFileInDualWindow(
+						this.app,
+						noteFile,
+						{
+							type: EPUB_RUNTIME.viewTypes.pdfReader,
+							state: { filePath: resolvedSourcePath },
+						},
+						{ focusNote: input.focus !== false }
+					)
+				).noteLeaf
+			: await openAnnotationNoteFileWithExistingLeaf(this.app, noteFile, {
+					openMode: input.openMode || "existing",
+					focus: input.focus !== false,
+				});
+		markEpubDualWindowNoteLeaf(noteLeaf, input.dualWindowMode === true);
+		if (input.dualWindowMode === true && noteLeaf && resolvedSourcePath) {
+			registerEpubDualWindowSession(this.app, {
+				mode: "book-annotation-note",
+				bookId: location.bookId,
+				filePath: resolvedSourcePath,
+				notePath: noteFile.path,
+			});
+		} else if (resolvedSourcePath) {
+			unregisterEpubDualWindowSession(this.app, resolvedSourcePath);
+		}
 	}
 
 	async openEpubAnnotationNote(input: EpubHostOpenAnnotationNoteInput): Promise<void> {

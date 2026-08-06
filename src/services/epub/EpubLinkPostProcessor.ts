@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
-import { MarkdownPostProcessorContext, TFile, setIcon } from "obsidian";
-import { isSupportedBookLocatorHref, stripSupportedBookExtension } from "./book-format";
+import { MarkdownPostProcessorContext, Notice, TFile, setIcon } from "obsidian";
+import { isPdfBookFormat, isSupportedBookLocatorHref, stripSupportedBookExtension } from "./book-format";
 import { maybeMigrateEpubLinksInMarkdownFile } from "./epub-link-content-migration";
 import { EpubLinkService } from "./EpubLinkService";
 import { resolveEpubSourceNavigationTextHint } from "./epub-source-navigation-text-hint";
@@ -110,6 +110,7 @@ interface AnnotationNoteFilterOption {
 const ANNOTATION_NOTE_FILTER_MAX_RETRY = 6;
 const ANNOTATION_NOTE_FILTER_RETRY_DELAY_MS = 80;
 const ANNOTATION_NOTE_FILTER_REFRESH_DELAYS_MS = [80, 240, 520];
+const annotationNoteDocumentBindings = new WeakMap<Document, WeakSet<App>>();
 
 function normalizeFilterText(value: unknown): string {
 	return String(value || "")
@@ -285,6 +286,9 @@ function bindPdfAnnotationNoteNavigationControls(app: App, root: HTMLElement): v
 	if (!isPdfAnnotationNoteScope(marker, scope)) {
 		return;
 	}
+	if (marker?.dataset.dualWindowMode === "true") {
+		return;
+	}
 	const boundTarget = (marker || scope) as AnnotationNoteFilterMarker;
 	if (boundTarget.__weavePdfNavigationBound) {
 		return;
@@ -353,12 +357,14 @@ function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void
 		phase: "enter" | "leave" | "click"
 	): void => {
 		const { bookId, filePath } = readAnnotationNoteIdentity(line, marker);
+		const pageNumber = Number(line.dataset.pageNumber || "");
 		dispatchEpubDualWindowAnnotationEvent(scope.ownerDocument.defaultView || window, {
 			mode: "book-annotation-note",
 			phase,
 			bookId,
 			filePath,
 			cfiRange: line.dataset.cfiRange,
+			pageNumber: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : undefined,
 			chapterIndex: line.dataset.chapterIndex,
 			annotationId: line.dataset.annotationId,
 			semanticId: line.dataset.semanticId,
@@ -381,7 +387,12 @@ function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void
 			if (!bookId || !filePath) {
 				return;
 			}
-			void resolveEpubHost(app)?.openEpubAnnotationNote?.({
+			const host = resolveEpubHost(app);
+			const isPdfNote = isPdfAnnotationNoteScope(marker, scope) || isPdfBookFormat(filePath);
+			const openAnnotationNote = isPdfNote
+				? host?.openPdfAnnotationNote
+				: host?.openEpubAnnotationNote;
+			void openAnnotationNote?.call(host, {
 				bookId,
 				filePath,
 				dualWindowMode: true,
@@ -412,6 +423,54 @@ function bindAnnotationNoteDualWindowControls(app: App, root: HTMLElement): void
 			emitAnnotationEvent(line, "leave");
 		}
 	});
+}
+
+function bindAnnotationNoteDocumentDualWindowControls(app: App, doc: Document): void {
+	let boundApps = annotationNoteDocumentBindings.get(doc);
+	if (!boundApps) {
+		boundApps = new WeakSet<App>();
+		annotationNoteDocumentBindings.set(doc, boundApps);
+	}
+	if (boundApps.has(app)) {
+		return;
+	}
+	boundApps.add(app);
+
+	doc.addEventListener(
+		"click",
+		(event) => {
+			const body = doc.body;
+			if (!body) {
+				return;
+			}
+			const button = findAnnotationNoteDualWindowButton(event.target, body);
+			if (!button) {
+				return;
+			}
+			const { bookId, filePath } = readAnnotationNoteIdentity(button, null);
+			if (!bookId || !filePath || !isPdfBookFormat(filePath)) {
+				return;
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			const host = resolveEpubHost(app);
+			const openPdfAnnotationNote = host?.openPdfAnnotationNote;
+			if (!openPdfAnnotationNote) {
+				new Notice("PDF 双窗模式暂不可用，请重载插件");
+				return;
+			}
+			void openPdfAnnotationNote.call(host, {
+				bookId,
+				filePath,
+				dualWindowMode: true,
+				openMode: "right-split",
+				focus: false,
+			}).catch(() => {
+				new Notice("PDF 双窗模式打开失败");
+			});
+		},
+		true
+	);
 }
 
 function requestAnnotationNoteFilterRefresh(root: HTMLElement): void {
@@ -680,6 +739,7 @@ export function createEpubLinkPostProcessor(app: App) {
 	const scheduledMigrationPaths = new Set<string>();
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
 		applyEpubCalloutAppearanceAttributes(el);
+		bindAnnotationNoteDocumentDualWindowControls(app, el.ownerDocument);
 		mountAnnotationNoteFilter(el);
 		requestAnnotationNoteFilterRefresh(el);
 		bindPdfAnnotationNoteNavigationControls(app, el);

@@ -13,6 +13,7 @@ export interface RenderPdfAnnotationNoteMarkdownInput {
 	bookId: string;
 	annotations: PdfTextAnnotation[];
 	now?: Date;
+	dualWindowMode?: boolean;
 }
 
 const TEXT = {
@@ -28,6 +29,7 @@ const TEXT = {
 	pageUnit: "\u9875",
 	unsemantic: "\u672a\u6807\u6ce8\u8bed\u4e49",
 	comment: "\u5907\u6ce8",
+	dualWindow: "\u53cc\u7a97\u6a21\u5f0f",
 };
 
 function escapeHtml(value: unknown): string {
@@ -145,6 +147,7 @@ export function renderPdfAnnotationNoteMarkdown(
 	const bookId = String(input.bookId || "").trim();
 	const pageCount = Math.max(0, Math.floor(Number(input.book.pageCount) || 0));
 	const currentPage = normalizePageNumber(input.book.currentPage);
+	const dualWindowMode = input.dualWindowMode === true;
 	const generatedAt = (input.now || new Date()).toLocaleString("zh-CN", { hour12: false });
 	const annotations = sortPdfTextAnnotationsByPosition(
 		(input.annotations || []).filter((annotation) => String(annotation.text || "").trim())
@@ -152,7 +155,12 @@ export function renderPdfAnnotationNoteMarkdown(
 	const lines: string[] = [
 		`# ${title} - ${TEXT.noteTitle}`,
 		"",
-		`<div class="weave-annotation-note-root weave-pdf-annotation-note-root" data-annotation-note-kind="pdf" data-book-id="${escapeHtml(bookId)}" data-source-file="${escapeHtml(filePath)}" data-page-count="${pageCount}" data-current-page="${currentPage}"></div>`,
+		...(dualWindowMode
+			? []
+			: [
+					`<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="${escapeHtml(bookId)}" data-source-file="${escapeHtml(filePath)}">${TEXT.dualWindow}</button>`,
+				]),
+		`<div class="weave-annotation-note-root weave-pdf-annotation-note-root" data-annotation-note-kind="pdf" data-book-id="${escapeHtml(bookId)}" data-source-file="${escapeHtml(filePath)}" data-page-count="${pageCount}" data-current-page="${currentPage}" data-dual-window-mode="${dualWindowMode ? "true" : "false"}"></div>`,
 		"",
 		`> ${TEXT.readonlyNotice}`,
 		"",
