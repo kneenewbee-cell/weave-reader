@@ -5,6 +5,7 @@ export interface EpubRuntimeConfig {
 	pluginDirName: string;
 	viewTypes: {
 		reader: string;
+		pdfReader: string;
 		sidebar: string;
 		bookshelfSidebar: string;
 		aiReadingNote: string;
@@ -60,6 +61,7 @@ export const EPUB_RUNTIME: EpubRuntimeConfig = {
 	pluginDirName: isStandalone ? CURRENT_PLUGIN_ID : "weave",
 	viewTypes: {
 		reader: isStandalone ? "weave-epub-reader-standalone" : "weave-epub-reader",
+		pdfReader: isStandalone ? "weave-pdf-reader-standalone" : "weave-pdf-reader",
 		sidebar: isStandalone ? "weave-epub-sidebar-standalone" : "weave-epub-sidebar",
 		bookshelfSidebar: isStandalone
 			? "weave-epub-bookshelf-sidebar-standalone"

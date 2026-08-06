@@ -1,6 +1,7 @@
 import { createSupportedBookWikilinkRegex } from "../book-link-patterns";
 import {
 	getBookExtensionFromPath,
+	getBookFormatDisplayLabel,
 	isFreeBookFormat,
 	isSupportedBookLocatorHref,
 	isSupportedBookPath,
@@ -23,6 +24,15 @@ describe("book-format", () => {
 		expect(isSupportedBookPath("Books/demo.cbz")).toBe(true);
 		expect(usesFoliateGenericBookLoader("Books/demo.cbz")).toBe(true);
 		expect(stripSupportedBookExtension("demo.cbz")).toBe("demo");
+	});
+
+	it("recognizes PDF as a supported free book format outside Foliate", () => {
+		expect(getBookExtensionFromPath("Books/Paper.PDF")).toBe("pdf");
+		expect(isSupportedBookPath("Books/Paper.PDF")).toBe(true);
+		expect(getBookFormatDisplayLabel("Books/Paper.PDF")).toBe("PDF");
+		expect(isFreeBookFormat("Books/Paper.PDF")).toBe(true);
+		expect(usesFoliateGenericBookLoader("Books/Paper.PDF")).toBe(false);
+		expect(stripSupportedBookExtension("Paper.pdf")).toBe("Paper");
 	});
 
 	it("matches supported book wikilinks across extensions", () => {

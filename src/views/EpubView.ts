@@ -21,7 +21,7 @@ import type {
 	EpubReadingReferencePoint,
 } from "../services/epub";
 import { canOpenEpubFile } from "../services/epub/epub-premium";
-import { stripSupportedBookExtension } from "../services/epub/book-format";
+import { isPdfBookFormat, stripSupportedBookExtension } from "../services/epub/book-format";
 import {
 	EPUB_DUAL_WINDOW_SESSION_EVENT,
 	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
@@ -1177,6 +1177,10 @@ export class EpubView extends ItemView {
 				? (state as Record<string, unknown>)
 				: {};
 		const incomingPath = unknownPlainText(viewState.filePath || viewState.file).trim();
+		if (incomingPath && isPdfBookFormat(incomingPath)) {
+			await this.redirectPdfStateToPdfView(viewState, incomingPath);
+			return;
+		}
 		const incomingAnnotationCompare = normalizeEpubAnnotationCompareContext(viewState.annotationCompare);
 		const annotationCompareChanged =
 			JSON.stringify(incomingAnnotationCompare) !== JSON.stringify(this.annotationCompare);
@@ -1239,6 +1243,21 @@ export class EpubView extends ItemView {
 		} else if (this.pendingLocate && this.component) {
 			this.flushPendingLocateToReader();
 		}
+	}
+
+	private async redirectPdfStateToPdfView(
+		viewState: Record<string, unknown>,
+		filePath: string
+	): Promise<void> {
+		await this.leaf.setViewState({
+			type: EPUB_RUNTIME.viewTypes.pdfReader,
+			active: true,
+			state: {
+				...viewState,
+				filePath,
+				file: filePath,
+			},
+		});
 	}
 
 	async onOpen(): Promise<void> {

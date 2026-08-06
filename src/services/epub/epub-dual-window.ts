@@ -60,7 +60,8 @@ export interface EpubDualWindowAnnotationDetail {
 	phase: EpubDualWindowAnnotationPhase;
 	bookId: string;
 	filePath: string;
-	cfiRange: string;
+	cfiRange?: string;
+	pageNumber?: number;
 	chapterIndex?: number;
 	annotationId?: string;
 	semanticId?: string;
@@ -310,7 +311,13 @@ export function createEpubDualWindowAnnotationDetail(
 	const cfiRange = cleanString(input.cfiRange);
 	const phase = cleanString(input.phase) as EpubDualWindowAnnotationPhase;
 	const chapterIndex = cleanFiniteNumber(input.chapterIndex);
-	if (!bookId || !filePath || !cfiRange || !["enter", "leave", "click"].includes(phase)) {
+	const pageNumber = cleanFiniteNumber(input.pageNumber);
+	if (
+		!bookId ||
+		!filePath ||
+		(!cfiRange && pageNumber === null) ||
+		!["enter", "leave", "click"].includes(phase)
+	) {
 		return null;
 	}
 	return {
@@ -318,7 +325,8 @@ export function createEpubDualWindowAnnotationDetail(
 		phase,
 		bookId,
 		filePath,
-		cfiRange,
+		...(cfiRange ? { cfiRange } : {}),
+		...(pageNumber !== null ? { pageNumber: Math.max(1, Math.floor(pageNumber)) } : {}),
 		...(chapterIndex !== null ? { chapterIndex } : {}),
 		...(cleanString(input.annotationId) ? { annotationId: cleanString(input.annotationId) } : {}),
 		...(cleanString(input.semanticId) ? { semanticId: cleanString(input.semanticId) } : {}),

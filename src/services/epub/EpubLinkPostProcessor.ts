@@ -3,10 +3,12 @@ import {
 	Component,
 	MarkdownPostProcessorContext,
 	MarkdownRenderer,
+	Notice,
 	TFile,
 	setIcon,
 } from "obsidian";
 import {
+	isPdfBookFormat,
 	isSupportedBookLocatorHref,
 	stripSupportedBookExtension,
 } from "./book-format";
@@ -27,6 +29,7 @@ import {
 	type EpubAiReadingSourceMapBlock,
 } from "./epub-ai-reading-source-map";
 import type { TocItem } from "./types";
+import { openBookForSourceNavigation } from "../../utils/epub-leaf-utils";
 
 type BoundEpubLinkElement = HTMLAnchorElement & {
 	__weaveEpubClickHandler?: (event: MouseEvent) => void;
@@ -37,6 +40,7 @@ type AnnotationNoteFilterMarker = HTMLElement & {
 	__weaveApplyAnnotationNoteFilters?: () => void;
 	__weaveFilterRefreshPending?: boolean;
 	__weaveDualWindowControlsBound?: boolean;
+	__weavePdfNavigationBound?: boolean;
 };
 
 type AiReadingNoteFilterMarker = HTMLElement & {
@@ -198,6 +202,7 @@ export interface AnnotationNoteFilterOption {
 const ANNOTATION_NOTE_FILTER_MAX_RETRY = 6;
 const ANNOTATION_NOTE_FILTER_RETRY_DELAY_MS = 80;
 const ANNOTATION_NOTE_FILTER_REFRESH_DELAYS_MS = [80, 240, 520];
+const annotationNoteDocumentBindings = new WeakMap<Document, WeakSet<App>>();
 
 function normalizeFilterText(value: unknown): string {
 	return String(value || "")
@@ -373,10 +378,83 @@ function findAnnotationNoteLineFromEvent(
 	return line && scope.contains(line) ? line : null;
 }
 
-function didLeaveAnnotationNoteLine(
-	event: MouseEvent,
+function isPdfAnnotationNoteMarker(marker: HTMLElement | null): boolean {
+	return Boolean(
+		marker?.classList.contains("weave-pdf-annotation-note-root") ||
+			marker?.dataset.annotationNoteKind === "pdf"
+	);
+}
+
+function isPdfAnnotationNoteScope(marker: HTMLElement | null, scope: HTMLElement): boolean {
+	return (
+		isPdfAnnotationNoteMarker(marker) ||
+		Boolean(scope.querySelector(".weave-pdf-annotation-note-line"))
+	);
+}
+
+function readPdfAnnotationNoteNavigationTarget(
 	line: HTMLElement,
-): boolean {
+	marker: HTMLElement | null
+): { filePath: string; annotationId: string; pageNumber?: number } | null {
+	const filePath = String(line.dataset.sourceFile || marker?.dataset.sourceFile || "").trim();
+	const annotationId = String(line.dataset.annotationId || "").trim();
+	if (!filePath || !annotationId) {
+		return null;
+	}
+	const rawPageNumber = Number(line.dataset.pageNumber || "");
+	const pageNumber =
+		Number.isFinite(rawPageNumber) && rawPageNumber > 0
+			? Math.floor(rawPageNumber)
+			: undefined;
+	return { filePath, annotationId, pageNumber };
+}
+
+function bindPdfAnnotationNoteNavigationControls(app: App, root: HTMLElement): void {
+	const marker = findMountedAnnotationNoteMarker(root);
+	if (!marker && !root.querySelector(".weave-pdf-annotation-note-line")) {
+		return;
+	}
+	const scope = marker ? resolveAnnotationNoteScope(marker, root) : resolveAnnotationNoteContainer(root);
+	if (!isPdfAnnotationNoteScope(marker, scope)) {
+		return;
+	}
+	if (marker?.dataset.dualWindowMode === "true") {
+		return;
+	}
+	const boundTarget = (marker || scope) as AnnotationNoteFilterMarker;
+	if (boundTarget.__weavePdfNavigationBound) {
+		return;
+	}
+	boundTarget.__weavePdfNavigationBound = true;
+
+	scope.addEventListener(
+		"click",
+		(event) => {
+			const line = findAnnotationNoteLineFromEvent(event.target, scope);
+			if (!line?.classList.contains("weave-pdf-annotation-note-line")) {
+				return;
+			}
+			const target = readPdfAnnotationNoteNavigationTarget(line, marker);
+			if (!target) {
+				return;
+			}
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			void openBookForSourceNavigation(
+				app,
+				target.filePath,
+				{
+					annotationId: target.annotationId,
+					pageNumber: target.pageNumber,
+				},
+				{ focus: true }
+			);
+		},
+		true
+	);
+}
+
+function didLeaveAnnotationNoteLine(event: MouseEvent, line: HTMLElement): boolean {
 	const relatedTarget = event.relatedTarget;
 	return !(relatedTarget instanceof Node && line.contains(relatedTarget));
 }
@@ -437,6 +515,7 @@ function bindAnnotationNoteDualWindowControls(
 		phase: "enter" | "leave" | "click",
 	): void => {
 		const { bookId, filePath } = readAnnotationNoteIdentity(line, marker);
+		const pageNumber = parseOptionalDatasetNumber(line.dataset.pageNumber);
 		dispatchEpubDualWindowAnnotationEvent(
 			scope.ownerDocument.defaultView || window,
 			{
@@ -445,6 +524,7 @@ function bindAnnotationNoteDualWindowControls(
 				bookId,
 				filePath,
 				cfiRange: line.dataset.cfiRange,
+				pageNumber,
 				chapterIndex: parseOptionalDatasetNumber(line.dataset.chapterIndex),
 				annotationId: line.dataset.annotationId,
 				semanticId: line.dataset.semanticId,
@@ -470,7 +550,12 @@ function bindAnnotationNoteDualWindowControls(
 			if (!bookId || !filePath) {
 				return;
 			}
-			void safeResolveEpubHost(app)?.openEpubAnnotationNote?.({
+			const host = safeResolveEpubHost(app);
+			const isPdfNote = isPdfAnnotationNoteScope(marker, scope) || isPdfBookFormat(filePath);
+			const openAnnotationNote = isPdfNote
+				? host?.openPdfAnnotationNote
+				: host?.openEpubAnnotationNote;
+			void openAnnotationNote?.call(host, {
 				bookId,
 				filePath,
 				dualWindowMode: true,
@@ -501,6 +586,54 @@ function bindAnnotationNoteDualWindowControls(
 			emitAnnotationEvent(line, "leave");
 		}
 	});
+}
+
+function bindAnnotationNoteDocumentDualWindowControls(app: App, doc: Document): void {
+	let boundApps = annotationNoteDocumentBindings.get(doc);
+	if (!boundApps) {
+		boundApps = new WeakSet<App>();
+		annotationNoteDocumentBindings.set(doc, boundApps);
+	}
+	if (boundApps.has(app)) {
+		return;
+	}
+	boundApps.add(app);
+
+	doc.addEventListener(
+		"click",
+		(event) => {
+			const body = doc.body;
+			if (!body) {
+				return;
+			}
+			const button = findAnnotationNoteDualWindowButton(event.target, body);
+			if (!button) {
+				return;
+			}
+			const { bookId, filePath } = readAnnotationNoteIdentity(button, null);
+			if (!bookId || !filePath || !isPdfBookFormat(filePath)) {
+				return;
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			const host = resolveEpubHost(app);
+			const openPdfAnnotationNote = host?.openPdfAnnotationNote;
+			if (!openPdfAnnotationNote) {
+				new Notice("PDF 双窗模式暂不可用，请重载插件");
+				return;
+			}
+			void openPdfAnnotationNote.call(host, {
+				bookId,
+				filePath,
+				dualWindowMode: true,
+				openMode: "right-split",
+				focus: false,
+			}).catch(() => {
+				new Notice("PDF 双窗模式打开失败");
+			});
+		},
+		true
+	);
 }
 
 function requestAnnotationNoteFilterRefresh(root: HTMLElement): void {
@@ -549,6 +682,7 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 		return;
 	}
 	const scope = resolveAnnotationNoteScope(marker, root);
+	const isPdfNote = isPdfAnnotationNoteScope(marker, scope);
 	if (scope.querySelector(".weave-annotation-note-filter")) {
 		marker.dataset.filterMounted = "true";
 		return;
@@ -570,9 +704,9 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 	const chapterSelect = createAnnotationFilterSelect(
 		doc,
 		"weave-annotation-note-filter-chapter",
-		"章节筛选",
-		"全部章节",
-		collectAnnotationFilterOptions(lines, "chapterKey", "chapterTitle"),
+		isPdfNote ? "页面筛选" : "章节筛选",
+		isPdfNote ? "全部页面" : "全部章节",
+		collectAnnotationFilterOptions(lines, "chapterKey", "chapterTitle")
 	);
 	const semanticSelect = createAnnotationFilterSelect(
 		doc,
@@ -602,12 +736,8 @@ function mountAnnotationNoteFilter(root: HTMLElement, attempt = 0): void {
 		const currentLines = collectLines();
 		syncAnnotationFilterSelectOptions(
 			chapterSelect,
-			"全部章节",
-			collectAnnotationFilterOptions(
-				currentLines,
-				"chapterKey",
-				"chapterTitle",
-			),
+			isPdfNote ? "全部页面" : "全部章节",
+			collectAnnotationFilterOptions(currentLines, "chapterKey", "chapterTitle")
 		);
 		syncAnnotationFilterSelectOptions(
 			semanticSelect,
@@ -3434,6 +3564,7 @@ function bindEpubLocatorLink(
 export function createEpubLinkPostProcessor(app: App) {
 	const scheduledMigrationPaths = new Set<string>();
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
+		bindAnnotationNoteDocumentDualWindowControls(app, el.ownerDocument);
 		const sourcePath = String(ctx?.sourcePath || "").trim();
 		const isInsideAiReadingSourcePreview = Boolean(
 			el.closest(".weave-epub-ai-reading-note-source-preview"),
@@ -3442,6 +3573,7 @@ export function createEpubLinkPostProcessor(app: App) {
 		if (!isInsideAiReadingSourcePreview) {
 			mountAnnotationNoteFilter(el);
 			requestAnnotationNoteFilterRefresh(el);
+			bindPdfAnnotationNoteNavigationControls(app, el);
 			mountAiReadingNoteFilter(app, el, 0, sourcePath);
 			requestAiReadingNoteFilterRefresh(el);
 			bindAnnotationNoteDualWindowControls(app, el);

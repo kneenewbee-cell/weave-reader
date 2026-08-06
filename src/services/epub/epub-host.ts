@@ -142,6 +142,8 @@ export interface EpubHostCapabilities {
 	openEpubAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
 	openEpubAiReadingNote?: (input: EpubHostOpenAiReadingNoteInput) => Promise<void>;
 	refreshEpubAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
+	openPdfAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
+	refreshPdfAnnotationNote?: (input: EpubHostOpenAnnotationNoteInput) => Promise<void>;
 	markEpubResumePointFromReader?: (input: EpubHostResumePointInput) => Promise<void>;
 	openSelectedTextAISplitMenu?: (options: EpubHostSelectedTextAISplitMenuOptions) => void;
 	openAISplitConfigModal?: (input?: EpubHostAISplitConfigModalInput) => unknown;
@@ -215,6 +217,8 @@ const EPUB_HOST_CAPABILITY_KEYS: Array<keyof EpubHostCapabilities> = [
 	"openEpubAnnotationNote",
 	"openEpubAiReadingNote",
 	"refreshEpubAnnotationNote",
+	"openPdfAnnotationNote",
+	"refreshPdfAnnotationNote",
 	"markEpubResumePointFromReader",
 	"openSelectedTextAISplitMenu",
 	"openAISplitConfigModal",
@@ -241,7 +245,11 @@ type PluginHostApp = App & {
 
 function getRuntimePluginHost(app: App): EpubHostCapabilities | null {
 	const runtime = getEpubRuntime();
-	const pluginUnknown: unknown = (app as PluginHostApp).plugins.getPlugin(runtime.pluginId);
+	const pluginHost = (app as Partial<PluginHostApp>).plugins;
+	if (!pluginHost || typeof pluginHost.getPlugin !== "function") {
+		return null;
+	}
+	const pluginUnknown: unknown = pluginHost.getPlugin(runtime.pluginId);
 	if (!pluginUnknown || typeof pluginUnknown !== "object") {
 		return null;
 	}

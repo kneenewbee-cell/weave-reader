@@ -34,6 +34,12 @@ vi.mock("obsidian", () => ({
 			.replace(/\/$/, ""),
 }));
 
+const openBookForSourceNavigationMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../../utils/epub-leaf-utils', () => ({
+	openBookForSourceNavigation: openBookForSourceNavigationMock,
+}));
+
 import {
 	collectAiReadingSourceRanges,
 	createEpubLinkPostProcessor,
@@ -106,6 +112,7 @@ describe("EpubLinkPostProcessor", () => {
 
 	beforeEach(() => {
 		vi.restoreAllMocks();
+		openBookForSourceNavigationMock.mockReset();
 	});
 
 	it("applies derived EPUB callout color and style attributes for combined metadata", () => {
@@ -2226,7 +2233,39 @@ describe("EpubLinkPostProcessor", () => {
 		}
 	});
 
-	it("binds the annotation note dual-window button to the EPUB host", () => {
+	it('uses PDF page filters and opens the source PDF annotation when a PDF annotation note line is clicked', async () => {
+		openBookForSourceNavigationMock.mockResolvedValue({ id: 'pdf-leaf' });
+		const container = document.createElement('div');
+		container.className = 'markdown-rendered';
+		container.innerHTML = [
+			'<div class="weave-annotation-note-root weave-pdf-annotation-note-root" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf"></div>',
+			'<h2 class="weave-annotation-note-chapter weave-pdf-annotation-note-page" data-chapter-key="page-1" data-chapter-title="第 1 页">第 1 页</h2>',
+			'<div class="weave-annotation-note-line weave-pdf-annotation-note-line" data-source-file="Books/demo.pdf" data-annotation-id="pdf-anno-1" data-page-number="1" data-chapter-key="page-1" data-chapter-title="第 1 页" data-semantic-id="quote" data-semantic-label="引用" data-annotation-text="alpha pdf">alpha</div>',
+		].join('');
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+
+		const pageSelect = container.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-chapter');
+		expect(pageSelect?.getAttribute('aria-label')).toBe('页面筛选');
+		expect(pageSelect?.options[0]?.textContent).toBe('全部页面');
+		expect(pageSelect?.options[1]?.textContent).toBe('第 1 页');
+
+		container.querySelector<HTMLElement>('.weave-pdf-annotation-note-line')?.dispatchEvent(
+			new MouseEvent('click', { bubbles: true, cancelable: true })
+		);
+
+		await vi.waitFor(() => {
+			expect(openBookForSourceNavigationMock).toHaveBeenCalledWith(
+				expect.anything(),
+				'Books/demo.pdf',
+				{ annotationId: 'pdf-anno-1', pageNumber: 1 },
+				{ focus: true }
+			);
+		});
+	});
+
+	it('binds the annotation note dual-window button to the EPUB host', () => {
 		const openEpubAnnotationNote = vi.fn(async () => undefined);
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		registerEpubHost(app, { openEpubAnnotationNote });
@@ -2259,7 +2298,121 @@ describe("EpubLinkPostProcessor", () => {
 		}
 	});
 
-	it("keeps the annotation note dual-window button working when the button renders after the marker", () => {
+	it('binds the annotation note dual-window button to the PDF host for PDF notes', () => {
+		const openPdfAnnotationNote = vi.fn(async () => undefined);
+		const openEpubAnnotationNote = vi.fn(async () => undefined);
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		registerEpubHost(app, { openPdfAnnotationNote, openEpubAnnotationNote } as any);
+		try {
+			const container = document.createElement('div');
+			container.className = 'markdown-rendered';
+			container.innerHTML = [
+				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open">双窗模式</button>',
+				'<div class="weave-annotation-note-root weave-pdf-annotation-note-root" data-annotation-note-kind="pdf" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf" data-dual-window-mode="false"></div>',
+				'<div class="weave-annotation-note-line weave-pdf-annotation-note-line" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf" data-annotation-id="pdf-anno-1" data-page-number="2" data-semantic-id="quote" data-annotation-text="alpha pdf">alpha</div>',
+			].join('');
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+			container.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+
+			expect(openPdfAnnotationNote).toHaveBeenCalledWith({
+				bookId: 'pdf-book-1',
+				filePath: 'Books/demo.pdf',
+				dualWindowMode: true,
+				openMode: 'right-split',
+				focus: false,
+			});
+			expect(openEpubAnnotationNote).not.toHaveBeenCalled();
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('binds a chunked PDF annotation note dual-window button without a nearby marker', () => {
+		const openPdfAnnotationNote = vi.fn(async () => undefined);
+		const openEpubAnnotationNote = vi.fn(async () => undefined);
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		registerEpubHost(app, { openPdfAnnotationNote, openEpubAnnotationNote } as any);
+		try {
+			const buttonChunk = document.createElement('div');
+			buttonChunk.className = 'el-button';
+			buttonChunk.innerHTML =
+				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf">双窗模式</button>';
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(buttonChunk, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+			buttonChunk.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+
+			expect(openPdfAnnotationNote).toHaveBeenCalledWith({
+				bookId: 'pdf-book-1',
+				filePath: 'Books/demo.pdf',
+				dualWindowMode: true,
+				openMode: 'right-split',
+				focus: false,
+			});
+			expect(openEpubAnnotationNote).not.toHaveBeenCalled();
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('calls PDF dual-window host methods with the host as this', () => {
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		const host = {
+			calls: [] as string[],
+			async openPdfAnnotationNote(this: { calls: string[] }, input: { filePath: string }) {
+				this.calls.push(input.filePath);
+			},
+		};
+		registerEpubHost(app, host as any);
+		try {
+			const buttonChunk = document.createElement('div');
+			buttonChunk.innerHTML =
+				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf">双窗模式</button>';
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(buttonChunk, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+			buttonChunk.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+
+			expect(host.calls).toEqual(['Books/demo.pdf']);
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('captures PDF dual-window button clicks even when Obsidian renders the button outside the processed chunk', () => {
+		const openPdfAnnotationNote = vi.fn(async () => undefined);
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		registerEpubHost(app, { openPdfAnnotationNote } as any);
+		try {
+			const processedChunk = document.createElement('div');
+			processedChunk.className = 'markdown-rendered';
+			document.body.appendChild(processedChunk);
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(processedChunk, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+
+			const buttonChunk = document.createElement('div');
+			buttonChunk.innerHTML =
+				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf">双窗模式</button>';
+			document.body.appendChild(buttonChunk);
+			buttonChunk.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+
+			expect(openPdfAnnotationNote).toHaveBeenCalledWith({
+				bookId: 'pdf-book-1',
+				filePath: 'Books/demo.pdf',
+				dualWindowMode: true,
+				openMode: 'right-split',
+				focus: false,
+			});
+		} finally {
+			document.body.innerHTML = '';
+			unregisterEpubHost(app);
+		}
+	});
+
+	it('keeps the annotation note dual-window button working when the button renders after the marker', () => {
 		const openEpubAnnotationNote = vi.fn(async () => undefined);
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		registerEpubHost(app, { openEpubAnnotationNote });
@@ -2364,7 +2517,42 @@ describe("EpubLinkPostProcessor", () => {
 		}
 	});
 
-	it("dispatches dual-window annotation hover events for note lines rendered after the marker", () => {
+	it('dispatches PDF dual-window annotation click events instead of normal PDF navigation', () => {
+		openBookForSourceNavigationMock.mockResolvedValue({ id: 'pdf-leaf' });
+		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
+		const events: CustomEvent[] = [];
+		const listener = (event: Event) => events.push(event as CustomEvent);
+		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		try {
+			const container = document.createElement('div');
+			container.className = 'markdown-rendered';
+			container.innerHTML = [
+				'<div class="weave-annotation-note-root weave-pdf-annotation-note-root" data-annotation-note-kind="pdf" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf" data-dual-window-mode="true"></div>',
+				'<div class="weave-annotation-note-line weave-pdf-annotation-note-line" data-book-id="pdf-book-1" data-source-file="Books/demo.pdf" data-annotation-id="pdf-anno-1" data-page-number="2" data-semantic-id="quote" data-annotation-text="alpha pdf">alpha</div>',
+			].join('');
+
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: 'weave/pdf-data/books/pdf-book-1/annotations.md' } as any);
+			container.querySelector<HTMLElement>('.weave-pdf-annotation-note-line')?.dispatchEvent(
+				new MouseEvent('click', { bubbles: true, cancelable: true })
+			);
+
+			expect(openBookForSourceNavigationMock).not.toHaveBeenCalled();
+			expect(events.map((event) => event.detail.phase)).toEqual(['click']);
+			expect(events[0]?.detail).toMatchObject({
+				bookId: 'pdf-book-1',
+				filePath: 'Books/demo.pdf',
+				pageNumber: 2,
+				annotationId: 'pdf-anno-1',
+				semanticId: 'quote',
+				text: 'alpha pdf',
+			});
+		} finally {
+			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
+		}
+	});
+
+	it('dispatches dual-window annotation hover events for note lines rendered after the marker', () => {
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		const events: CustomEvent[] = [];
 		const listener = (event: Event) => events.push(event as CustomEvent);

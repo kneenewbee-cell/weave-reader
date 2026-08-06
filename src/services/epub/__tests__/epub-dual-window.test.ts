@@ -365,6 +365,29 @@ describe("epub-dual-window", () => {
 		expect(dispatchEvent).not.toHaveBeenCalled();
 	});
 
+	it("normalizes PDF annotation hover details using page numbers instead of CFIs", () => {
+		expect(
+			createEpubDualWindowAnnotationDetail({
+				phase: "enter",
+				bookId: " pdf-book-demo ",
+				filePath: " Books/demo.pdf ",
+				pageNumber: "2" as unknown as number,
+				annotationId: " pdf-anno-1 ",
+				semanticId: " quote ",
+				text: " PDF text ",
+			})
+		).toEqual({
+			mode: "book-annotation-note",
+			phase: "enter",
+			bookId: "pdf-book-demo",
+			filePath: "Books/demo.pdf",
+			pageNumber: 2,
+			annotationId: "pdf-anno-1",
+			semanticId: "quote",
+			text: "PDF text",
+		});
+	});
+
 	it("dispatches a CustomEvent for valid annotation details", () => {
 		const events: Event[] = [];
 		const targetWindow = {

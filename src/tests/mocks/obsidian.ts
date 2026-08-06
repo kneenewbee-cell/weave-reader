@@ -228,12 +228,15 @@ export class Plugin {
 
 // Mock Notice class
 export class Notice {
+  static messages: string[] = [];
+
   message: string;
   timeout: number;
 
   constructor(message: string, timeout?: number) {
     this.message = message;
     this.timeout = timeout || 5000;
+    Notice.messages.push(message);
     logger.debug(`Notice: ${message}`);
   }
 
@@ -659,6 +662,7 @@ export const MarkdownRenderer = {
 };
 
 export const requestUrl = vi.fn();
+export const loadPdfJs = vi.fn();
 
 // Mock constants
 export const Platform = {
@@ -699,6 +703,7 @@ export default {
   setIcon,
   MarkdownRenderer,
   requestUrl,
+  loadPdfJs,
   Platform,
   mockApp,
   abstractInputSuggestInstances

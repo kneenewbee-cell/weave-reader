@@ -1,13 +1,14 @@
 import { normalizePath, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import { getEpubStorageService } from "../services/epub";
 import { EPUB_RUNTIME } from "../services/epub/epub-runtime";
-import { isSupportedBookPath } from "../services/epub/book-format";
+import { isPdfBookFormat, isSupportedBookPath } from "../services/epub/book-format";
 import {
 	epubVaultPathsReferToSameBook,
 	resolveSupportedBookFilePath,
 } from "../services/epub/epub-vault-path";
 import { epubActiveDocumentStore } from "../stores/epub-active-document-store";
 import { VIEW_TYPE_EPUB } from "../views/EpubView";
+import { VIEW_TYPE_PDF } from "../views/PdfView";
 import type { AppWithViewRegistry, ViewRegistryExtension } from "../types/obsidian-extensions";
 import { focusWorkspaceLeaf } from "./obsidian-workspace-utils";
 import { getLeafLocation } from "./view-location-utils";
@@ -42,9 +43,13 @@ function hasMapLikeValue(
 const KNOWN_EPUB_VIEW_TYPES = Array.from(
 	new Set([
 		VIEW_TYPE_EPUB,
+		VIEW_TYPE_PDF,
 		EPUB_RUNTIME.viewTypes.reader,
+		EPUB_RUNTIME.viewTypes.pdfReader,
 		"weave-epub-reader",
 		"weave-epub-reader-standalone",
+		"weave-pdf-reader",
+		"weave-pdf-reader-standalone",
 	])
 );
 
@@ -113,6 +118,9 @@ export function resolveRegisteredEpubViewType(app: App, filePath?: string): stri
 		String(filePath || "")
 			.split(".")
 			.pop() || "";
+	if (isPdfBookFormat(extension) && isRegisteredViewType(app, VIEW_TYPE_PDF)) {
+		return VIEW_TYPE_PDF;
+	}
 	const mappedViewType = readRegisteredViewTypeForExtension(app, extension);
 	if (mappedViewType && KNOWN_EPUB_VIEW_TYPES.includes(mappedViewType)) {
 		return mappedViewType;
