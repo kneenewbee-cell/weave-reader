@@ -321,8 +321,6 @@ celebration-messages.json
 scripts/locale-work/
 src/utils/i18n/flat-locales/ja-JP.json
 src/utils/i18n/flat-locales/ko-KR.json
-src/components/epub/tutorial-locales/ja-JP.json
-src/components/epub/tutorial-locales/ko-KR.json
 
 # public 目录
 public/
