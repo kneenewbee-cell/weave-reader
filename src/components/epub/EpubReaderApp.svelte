@@ -450,9 +450,12 @@
 	const READER_STORE_SYNC_MS = 350;
 	const ANNOTATION_COMPARE_POSITION_SYNC_EVENT = 'weave-epub-annotation-compare-position-sync';
 	const ANNOTATION_COMPARE_SYNC_DEBOUNCE_MS = 160;
+	const AI_READING_REQUEST_DEDUPE_MS = 1200;
 	let annotationCompareSyncTimer: ReturnType<typeof setTimeout> | null = null;
 	let applyingAnnotationCompareSyncUntil = 0;
 	let lastAnnotationCompareBroadcastCfi = '';
+	let lastAiReadingRequestDedupeKey = '';
+	let lastAiReadingRequestAt = 0;
 	const annotationCompareVersionId = $derived(String(annotationCompare?.versionId || '').trim());
 	const annotationCompareReadOnly = $derived(Boolean(annotationCompare && annotationCompare.paneRole === 'readonly'));
 	const annotationPaneCapabilities = $derived(resolveEpubAnnotationPaneCapabilities({
@@ -5606,6 +5609,60 @@
 
 	type AiReadingOpenNoteOptions = Omit<EpubHostOpenAiReadingNoteInput, 'notePath' | 'sourceFile'>;
 
+	function normalizeAiReadingRequestScopeIds(scopeIds: string[]): string[] {
+		return scopeIds.map((value) => String(value || '').trim()).filter(Boolean);
+	}
+
+	function buildAiReadingRequestDedupeKey(
+		currentPath: string,
+		scopeIds: string[],
+		openNoteOptions?: AiReadingOpenNoteOptions
+	): string {
+		const normalizedPath = normalizePath(String(currentPath || '').trim());
+		const normalizedScopeIds = normalizeAiReadingRequestScopeIds(scopeIds);
+		const normalizedOpenNoteOptions = openNoteOptions
+			? {
+					bookId: String(openNoteOptions.bookId || '').trim(),
+					dualWindowMode: openNoteOptions.dualWindowMode === true,
+					focus:
+						openNoteOptions.focus === undefined
+							? ''
+							: openNoteOptions.focus === true
+								? 'true'
+								: 'false',
+					openMode: String(openNoteOptions.openMode || '').trim(),
+				}
+			: null;
+		return JSON.stringify({
+			currentPath: normalizedPath,
+			scopeIds: normalizedScopeIds,
+			openNoteOptions: normalizedOpenNoteOptions,
+		});
+	}
+
+	function shouldIgnoreDuplicateAiReadingRequest(
+		currentPath: string,
+		scopeIds: string[],
+		openNoteOptions?: AiReadingOpenNoteOptions
+	): boolean {
+		const dedupeKey = buildAiReadingRequestDedupeKey(
+			currentPath,
+			scopeIds,
+			openNoteOptions
+		);
+		const now = Date.now();
+		if (
+			dedupeKey &&
+			dedupeKey === lastAiReadingRequestDedupeKey &&
+			now - lastAiReadingRequestAt < AI_READING_REQUEST_DEDUPE_MS
+		) {
+			return true;
+		}
+		lastAiReadingRequestDedupeKey = dedupeKey;
+		lastAiReadingRequestAt = now;
+		return false;
+	}
+
 	async function openAiReading(options: {
 		initialScopeIds?: string[];
 		openNoteOptions?: AiReadingOpenNoteOptions;
@@ -5819,6 +5876,15 @@
 			!requestedPath ||
 			!currentPath ||
 			(requestedPath !== currentPath && !epubVaultPathsReferToSameBook(requestedPath, currentPath))
+		) {
+			return;
+		}
+		if (
+			shouldIgnoreDuplicateAiReadingRequest(
+				currentPath,
+				requestedScopeIds,
+				requestedOpenNoteOptions
+			)
 		) {
 			return;
 		}
@@ -6414,6 +6480,7 @@
 				const result = await annotationService.savePortableHighlightWithPolicy(bookId, highlight);
 				if (result.kind === 'create') {
 					annotationUndoStack.pushCreate(bookId, result.current);
+					addHighlightToCurrentView(result.current);
 					queueOpenAnnotationNoteRefresh(bookId);
 					return;
 				}

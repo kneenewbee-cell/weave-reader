@@ -93,4 +93,35 @@ describe("EpubReaderApp semantic presentation refresh", () => {
 			/closeReadingUnits:\s*unitSources\?\.sourceBlocks\.length[\s\S]*\?[\s\S]*unitSources\.closeReadingUnits[\s\S]*:[\s\S]*\[\]/
 		);
 	});
+
+	it("renders newly created portable semantic highlights in the current reader view", () => {
+		const source = readReaderAppSource();
+		const handlerBody = source.match(
+			/function handleAutoInsertSelection[\s\S]*?\n\t\}\n\n\tasync function handleConcealSelection/
+		)?.[0];
+		const createBranch = handlerBody?.match(
+			/if \(result\.kind === 'create'\) \{(?<body>[\s\S]*?)\n\t\t\t\t\treturn;/
+		)?.groups?.body;
+
+		expect(createBranch).toBeDefined();
+		expect(createBranch).toContain("annotationUndoStack.pushCreate(bookId, result.current);");
+		expect(createBranch).toContain("addHighlightToCurrentView(result.current);");
+		expect(createBranch).toMatch(
+			/annotationUndoStack\.pushCreate\(bookId, result\.current\);[\s\S]*addHighlightToCurrentView\(result\.current\);[\s\S]*queueOpenAnnotationNoteRefresh\(bookId\);/
+		);
+	});
+
+	it("dedupes repeated AI reading request events before opening the modal", () => {
+		const source = readReaderAppSource();
+		const handlerBody = source.match(
+			/function handleAiReadingRequestEvent\(event: Event\) \{(?<body>[\s\S]*?)\n\t\}\n\n\tasync function exportChapterMarkedDraftToMarkdown/
+		)?.groups?.body;
+
+		expect(source).toContain("AI_READING_REQUEST_DEDUPE_MS");
+		expect(source).toContain("buildAiReadingRequestDedupeKey");
+		expect(source).toContain("shouldIgnoreDuplicateAiReadingRequest");
+		expect(handlerBody).toMatch(
+			/shouldIgnoreDuplicateAiReadingRequest\([\s\S]*currentPath,[\s\S]*requestedScopeIds,[\s\S]*requestedOpenNoteOptions[\s\S]*\)/
+		);
+	});
 });

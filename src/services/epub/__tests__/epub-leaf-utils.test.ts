@@ -118,6 +118,54 @@ describe('epub-leaf-utils source navigation', () => {
 		});
 	});
 
+	it('directly locates an already mounted reader leaf without resetting view state', async () => {
+		resolveSupportedBookFilePathMock.mockReturnValue('Books/demo.mobi');
+		const navigateToBookLocate = vi.fn(() => true);
+		const existingLeaf = {
+			setViewState: vi.fn(async () => undefined),
+			view: {
+				getCurrentFilePath: () => 'Books/demo.mobi',
+				navigateToBookLocate,
+			},
+		};
+		const splitLeaf = {
+			setViewState: vi.fn(async () => undefined),
+		};
+		const app = {
+			workspace: {
+				getLeavesOfType: vi.fn(() => [existingLeaf]),
+				getLeaf: vi.fn(() => splitLeaf),
+				setActiveLeaf: vi.fn(),
+				revealLeaf: vi.fn(),
+			},
+			viewRegistry: {
+				typeByExtension: {
+					get: vi.fn(() => VIEW_TYPE_EPUB),
+				},
+			},
+		} as any;
+
+		const result = await openBookForSourceNavigation(app, 'Books/demo.mobi', {
+			pendingLocate: {
+				cfi: 'epubcfi(/6/2)',
+				text: 'Quote',
+				flashStyle: 'pulse',
+				showLocateOverlay: true,
+			},
+		});
+
+		expect(result).toBe(existingLeaf);
+		expect(navigateToBookLocate).toHaveBeenCalledWith({
+			cfi: 'epubcfi(/6/2)',
+			text: 'Quote',
+			flashStyle: 'pulse',
+			showLocateOverlay: true,
+		});
+		expect(existingLeaf.setViewState).not.toHaveBeenCalled();
+		expect(app.workspace.getLeaf).not.toHaveBeenCalled();
+		expect(app.workspace.setActiveLeaf).toHaveBeenCalledWith(existingLeaf, { focus: true });
+	});
+
 	it('opens source navigation in a right split when the book is not already open', async () => {
 		resolveSupportedBookFilePathMock.mockReturnValue('Books/new.mobi');
 		const splitLeaf = {

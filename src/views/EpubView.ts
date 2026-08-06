@@ -1506,6 +1506,37 @@ export class EpubView extends ItemView {
 		this.dualWindowSwapBtn.style.top = `${position.top}px`;
 	}
 
+	private isLeafSelectedInItsTabGroup(leaf: WorkspaceLeaf): boolean {
+		const tabHeaderEl = (leaf as WorkspaceLeaf & { tabHeaderEl?: HTMLElement }).tabHeaderEl;
+		if (!tabHeaderEl?.isConnected) {
+			return true;
+		}
+		return tabHeaderEl.classList.contains("is-active") || tabHeaderEl.classList.contains("mod-active");
+	}
+
+	private isLeafVisibleForDualWindowSwap(leaf: WorkspaceLeaf): boolean {
+		const containerEl = getEpubDualWindowLeafContainerEl(leaf);
+		if (!containerEl?.isConnected) {
+			return false;
+		}
+		if (!this.isLeafSelectedInItsTabGroup(leaf)) {
+			return false;
+		}
+		const rect = containerEl.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) {
+			return false;
+		}
+		const style = containerEl.ownerDocument.defaultView?.getComputedStyle?.(containerEl);
+		return !(style?.display === "none" || style?.visibility === "hidden");
+	}
+
+	private shouldShowDualWindowSwapForPanes(panes: EpubDualWindowSwapPanes): boolean {
+		return (
+			this.isLeafVisibleForDualWindowSwap(panes.mainLeaf) &&
+			this.isLeafVisibleForDualWindowSwap(panes.sideLeaf)
+		);
+	}
+
 	private updateDualWindowSwapBtn(): void {
 		if (this.dualWindowSwapBtnFrame !== null) {
 			return;
@@ -1521,9 +1552,9 @@ export class EpubView extends ItemView {
 			return;
 		}
 		const panes = this.resolveDualWindowSwapPanesForCurrentView();
-		const visible = Boolean(panes);
+		const visible = Boolean(panes && this.shouldShowDualWindowSwapForPanes(panes));
 		this.dualWindowSwapBtn.toggleClass("is-hidden", !visible);
-		if (panes) {
+		if (panes && visible) {
 			this.positionDualWindowSwapBtn(panes);
 		}
 	}
@@ -1882,6 +1913,33 @@ export class EpubView extends ItemView {
 		}
 	}
 
+	navigateToBookLocate(nav: BookLocateIntent): boolean {
+		const pending = pendingLocateFromLegacyState({
+			pendingLocate: nav,
+			pendingCfi: nav.cfi || nav.href || "",
+			pendingText: nav.text || "",
+		});
+		if (!pending) {
+			return false;
+		}
+		this.pendingLocate = null;
+		this.pendingCfi = "";
+		this.pendingText = "";
+		if (this.actionHandlers.navigateToBookLocate) {
+			this.actionHandlers.navigateToBookLocate(pending);
+			return true;
+		}
+		const cfi = pending.cfi || pending.href || "";
+		if (cfi && this.actionHandlers.navigateToCfi) {
+			this.actionHandlers.navigateToCfi(cfi, pending.text || "");
+			return true;
+		}
+		this.pendingLocate = pending;
+		this.pendingCfi = pending.cfi || "";
+		this.pendingText = pending.text || "";
+		return false;
+	}
+
 	private getAiReadingEnvPaths(): string[] {
 		const app = this.app || this.plugin.app;
 		const configDir = normalizePath(String(app?.vault?.configDir || ".obsidian").trim() || ".obsidian");
@@ -2178,6 +2236,7 @@ export class EpubView extends ItemView {
 			if (leaf && leaf.view instanceof MarkdownView) {
 				this.lastActiveMarkdownLeaf = leaf;
 			}
+			this.updateDualWindowSwapBtn();
 		};
 		this.app.workspace.on("active-leaf-change", this.leafChangeHandler);
 

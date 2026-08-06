@@ -697,6 +697,65 @@ describe("EpubLinkPostProcessor", () => {
 		);
 	});
 
+	it("reuses cached AI source maps for repeated range enrichment clicks", async () => {
+		vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+		const sourcePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteFile = Object.assign(new TFile(), {
+			path: sourcePath,
+			extension: "md",
+			stat: { mtime: 1234, size: 5678 },
+		});
+		const sourceMap = {
+			version: 1,
+			filePath: "Books/demo.epub",
+			blocks: Array.from({ length: 6 }, (_, index) => {
+				const paragraph = String(index + 1).padStart(3, "0");
+				return {
+					id: `U200.P${paragraph}`,
+					cfi: `readium:p${paragraph}`,
+					sourceLink: `[[Books/demo.epub#weave-cfi=readium:p${paragraph}&sid=epubsrc-demo&eid=ai-source-U200-P${paragraph}&flashStyle=pulse&flashColor=yellow|U200.P${paragraph}]]`,
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				};
+			}),
+			units: [],
+		};
+		const noteMarkdown = `<!-- weave-epub-ai-reading-source-map:${encodeURIComponent(
+			JSON.stringify(sourceMap),
+		)} -->`;
+		const cachedRead = vi.fn(async () => noteMarkdown);
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead,
+			},
+		};
+		const rangeTitle = encodeURIComponent("Source range: U200.P001-U200.P006");
+		const container = document.createElement("div");
+		container.innerHTML = [
+			`<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:p001&sid=epubsrc-demo&eid=ai-source-U200-P001&flashStyle=pulse&flashColor=yellow&sourceTitle=${rangeTitle}">Source</a>`,
+			`<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:p001&sid=epubsrc-demo&eid=ai-source-U200-P001&flashStyle=pulse&flashColor=yellow&sourceTitle=${rangeTitle}">Source again</a>`,
+		].join("");
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+
+		for (const link of Array.from(container.querySelectorAll("a"))) {
+			link.dispatchEvent(
+				new MouseEvent("click", { bubbles: true, cancelable: true }),
+			);
+			await Promise.resolve();
+			await Promise.resolve();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+
+		expect(cachedRead).toHaveBeenCalledTimes(1);
+	});
+
 	it("auto-flashes legacy AI reading unit paragraph locator links", async () => {
 		const navigateSpy = vi
 			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")

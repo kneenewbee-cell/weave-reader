@@ -203,6 +203,89 @@ describe('EpubView', () => {
 		expect((view as any).pendingLocate).toBeNull();
 	});
 
+	it('exposes direct book locate for an already mounted reader', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		const navigateToBookLocate = vi.fn();
+		(view as any).actionHandlers = {
+			navigateToBookLocate,
+		};
+
+		const handled = (view as any).navigateToBookLocate({
+			cfi: 'epubcfi(/6/2)',
+			text: 'direct quote',
+			flashStyle: 'pulse',
+		});
+
+		expect(handled).toBe(true);
+		expect(navigateToBookLocate).toHaveBeenCalledWith({
+			cfi: 'epubcfi(/6/2)',
+			text: 'direct quote',
+			flashStyle: 'pulse',
+		});
+		expect((view as any).pendingLocate).toBeNull();
+	});
+
+	it('hides the floating dual-window swap button when the owning EPUB tab is inactive', () => {
+		const hiddenTabHeader = document.createElement('div');
+		const visibleSideTabHeader = document.createElement('div');
+		visibleSideTabHeader.classList.add('is-active');
+		const hiddenContainer = document.createElement('div');
+		const sideContainer = document.createElement('div');
+		document.body.append(hiddenTabHeader, visibleSideTabHeader, hiddenContainer, sideContainer);
+		hiddenContainer.getBoundingClientRect = () => ({
+			left: 0,
+			right: 960,
+			top: 0,
+			bottom: 720,
+			width: 960,
+			height: 720,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect);
+		sideContainer.getBoundingClientRect = () => ({
+			left: 960,
+			right: 1600,
+			top: 0,
+			bottom: 720,
+			width: 640,
+			height: 720,
+			x: 960,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect);
+		const hiddenLeaf = {
+			tabHeaderEl: hiddenTabHeader,
+			view: { containerEl: hiddenContainer },
+		};
+		const sideLeaf = {
+			tabHeaderEl: visibleSideTabHeader,
+			view: { containerEl: sideContainer },
+		};
+		const app = { workspace: { activeLeaf: sideLeaf } };
+		const view = new EpubView(hiddenLeaf as any, { app } as any);
+		const button = document.createElement('button') as HTMLButtonElement & {
+			toggleClass: (name: string, force?: boolean) => void;
+		};
+		button.toggleClass = (name: string, force?: boolean) => {
+			button.classList.toggle(name, force);
+		};
+		const positionDualWindowSwapBtn = vi.fn();
+		(view as any).filePath = 'Books/hidden.epub';
+		(view as any).dualWindowSwapBtn = button;
+		(view as any).resolveDualWindowSwapPanesForCurrentView = vi.fn(() => ({
+			mode: 'book-ai-reading-note',
+			mainLeaf: hiddenLeaf,
+			sideLeaf,
+		}));
+		(view as any).positionDualWindowSwapBtn = positionDualWindowSwapBtn;
+
+		(view as any).refreshDualWindowSwapBtn();
+
+		expect(button.classList.contains('is-hidden')).toBe(true);
+		expect(positionDualWindowSwapBtn).not.toHaveBeenCalled();
+	});
+
 	it('shows canvas direction button via class toggle instead of inline display:none', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		(view as any).actionHandlers = {

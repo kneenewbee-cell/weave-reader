@@ -5,6 +5,7 @@ import {
 	MarkdownRenderer,
 	Notice,
 	TFile,
+	normalizePath,
 	setIcon,
 } from "obsidian";
 import {
@@ -1239,7 +1240,93 @@ function getAiReadingMarkdownFileStatKey(
 	}
 	const stat = (sourceFile as TFile & { stat?: { mtime?: number; size?: number } })
 		.stat;
-	return `${Number(stat?.mtime || 0)}:${Number(stat?.size || 0)}`;
+	const mtime = Number(stat?.mtime);
+	const size = Number(stat?.size);
+	if (!stat || !Number.isFinite(mtime) || !Number.isFinite(size)) {
+		return "";
+	}
+	return `${mtime}:${size}`;
+}
+
+type AiReadingMarkdownSourceCacheEntry = {
+	markdown?: Promise<string>;
+	cfisById?: Promise<Map<string, string>>;
+	sourceMapBlocksById?: Promise<Map<string, AiSourceMapBlockWithFile>>;
+};
+
+const AI_READING_MARKDOWN_SOURCE_CACHE_MAX_ENTRIES = 32;
+const aiReadingMarkdownSourceCacheByApp = new WeakMap<
+	App,
+	Map<string, AiReadingMarkdownSourceCacheEntry>
+>();
+
+function getAiReadingMarkdownSourceCacheKey(
+	app: App,
+	sourceMarkdownPath: string,
+): string {
+	const path = normalizePath(String(sourceMarkdownPath || "").trim());
+	const statKey = getAiReadingMarkdownFileStatKey(app, path);
+	return path && statKey ? `${path}\n${statKey}` : "";
+}
+
+function getAiReadingMarkdownSourceCache(
+	app: App,
+): Map<string, AiReadingMarkdownSourceCacheEntry> {
+	let cache = aiReadingMarkdownSourceCacheByApp.get(app);
+	if (!cache) {
+		cache = new Map();
+		aiReadingMarkdownSourceCacheByApp.set(app, cache);
+	}
+	return cache;
+}
+
+function getAiReadingMarkdownSourceCacheEntry(
+	app: App,
+	sourceMarkdownPath: string,
+): AiReadingMarkdownSourceCacheEntry | null {
+	const cacheKey = getAiReadingMarkdownSourceCacheKey(app, sourceMarkdownPath);
+	if (!cacheKey) {
+		return null;
+	}
+	const cache = getAiReadingMarkdownSourceCache(app);
+	let entry = cache.get(cacheKey);
+	if (!entry) {
+		if (cache.size >= AI_READING_MARKDOWN_SOURCE_CACHE_MAX_ENTRIES) {
+			const oldestKey = cache.keys().next().value;
+			if (oldestKey) {
+				cache.delete(oldestKey);
+			}
+		}
+		entry = {};
+		cache.set(cacheKey, entry);
+	}
+	return entry;
+}
+
+function deleteAiReadingMarkdownSourceCacheEntry(
+	app: App,
+	sourceMarkdownPath: string,
+): void {
+	const cacheKey = getAiReadingMarkdownSourceCacheKey(app, sourceMarkdownPath);
+	if (!cacheKey) {
+		return;
+	}
+	aiReadingMarkdownSourceCacheByApp.get(app)?.delete(cacheKey);
+}
+
+function readAiReadingMarkdownSourceFileCached(
+	app: App,
+	sourceMarkdownPath: string,
+	sourceFile: TFile,
+): Promise<string> {
+	const cacheEntry = getAiReadingMarkdownSourceCacheEntry(app, sourceMarkdownPath);
+	if (!cacheEntry) {
+		return app.vault.cachedRead(sourceFile);
+	}
+	if (!cacheEntry.markdown) {
+		cacheEntry.markdown = app.vault.cachedRead(sourceFile);
+	}
+	return cacheEntry.markdown;
 }
 
 function scoreAiReadingNoteFileCandidate(
@@ -1284,7 +1371,7 @@ async function readAiReadingNoteSourceMarkdown(
 	const seenPaths = new Set<string>();
 	const readFile = async (file: TFile): Promise<string> => {
 		seenPaths.add(file.path);
-		return app.vault.cachedRead(file);
+		return readAiReadingMarkdownSourceFileCached(app, file.path, file);
 	};
 	if (sourcePath) {
 		const sourceFile = app.vault.getAbstractFileByPath(sourcePath);
@@ -2127,6 +2214,9 @@ function mountAiReadingNoteFilter(
 		}
 		sourceRangesLoading = true;
 		try {
+			if (options.force) {
+				deleteAiReadingMarkdownSourceCacheEntry(app, sourcePath);
+			}
 			const markdown = await readAiReadingNoteSourceMarkdown(
 				app,
 				sourcePath,
@@ -2802,6 +2892,18 @@ async function collectAiSourceCfisByIdFromMarkdownFile(
 	if (!(sourceFile instanceof TFile)) {
 		return new Map();
 	}
+	const cacheEntry = getAiReadingMarkdownSourceCacheEntry(app, path);
+	if (cacheEntry) {
+		if (!cacheEntry.cfisById) {
+			cacheEntry.cfisById = readAiReadingMarkdownSourceFileCached(
+				app,
+				path,
+				sourceFile
+			)
+				.then((content) => collectAiSourceCfisByIdFromMarkdown(content));
+		}
+		return cacheEntry.cfisById;
+	}
 	const content = await app.vault.cachedRead(sourceFile);
 	return collectAiSourceCfisByIdFromMarkdown(content);
 }
@@ -2816,6 +2918,26 @@ async function collectAiSourceMapBlocksByIdFromMarkdownFile(
 		: null;
 	if (!(sourceFile instanceof TFile)) {
 		return new Map();
+	}
+	const cacheEntry = getAiReadingMarkdownSourceCacheEntry(app, path);
+	if (cacheEntry) {
+		if (!cacheEntry.sourceMapBlocksById) {
+			cacheEntry.sourceMapBlocksById = readAiReadingMarkdownSourceFileCached(
+				app,
+				path,
+				sourceFile
+			)
+				.then((content) => collectAiSourceMapBlocksByIdFromMarkdown(content))
+				.then((blocksById) => {
+					if (blocksById.size > 0 && !cacheEntry.cfisById) {
+						cacheEntry.cfisById = Promise.resolve(
+							collectAiSourceCfisByIdFromSourceMapBlocks(blocksById)
+						);
+					}
+					return blocksById;
+				});
+		}
+		return cacheEntry.sourceMapBlocksById;
 	}
 	const content = await app.vault.cachedRead(sourceFile);
 	return collectAiSourceMapBlocksByIdFromMarkdown(content);
@@ -3596,7 +3718,11 @@ export function createEpubLinkPostProcessor(app: App) {
 						) {
 							return;
 						}
-						const originalContent = await app.vault.cachedRead(sourceFile);
+						const originalContent = await readAiReadingMarkdownSourceFileCached(
+							app,
+							sourcePath,
+							sourceFile
+						);
 						await maybeMigrateEpubLinksInMarkdownFile(
 							app,
 							sourceFile,

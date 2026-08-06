@@ -12,6 +12,16 @@ import { VIEW_TYPE_PDF } from "../views/PdfView";
 import type { AppWithViewRegistry, ViewRegistryExtension } from "../types/obsidian-extensions";
 import { focusWorkspaceLeaf } from "./obsidian-workspace-utils";
 import { getLeafLocation } from "./view-location-utils";
+import {
+	bookLocateFromPending,
+	pendingLocateFromLegacyState,
+	type BookLocateIntent,
+	type PendingLocateState,
+} from "../services/navigation/navigation-intent";
+
+type EpubLeafViewWithDirectLocate = {
+	navigateToBookLocate?: (nav: BookLocateIntent) => boolean | void;
+};
 
 function getViewRegistry(app: App): ViewRegistryExtension | null {
 	return (app as App & AppWithViewRegistry).viewRegistry ?? null;
@@ -200,6 +210,31 @@ export function getPreferredEpubLeaf(app: App, filePath?: string): WorkspaceLeaf
 	return app.workspace.getLeaf("tab");
 }
 
+function resolveBookLocateIntentFromState(state: Record<string, unknown>): BookLocateIntent | null {
+	const pendingLocate =
+		state.pendingLocate && typeof state.pendingLocate === "object"
+			? state.pendingLocate as PendingLocateState
+			: undefined;
+	const pending = pendingLocateFromLegacyState({
+		pendingLocate,
+		pendingCfi: typeof state.pendingCfi === "string" ? state.pendingCfi : "",
+		pendingText: typeof state.pendingText === "string" ? state.pendingText : "",
+	});
+	return bookLocateFromPending(pending);
+}
+
+function tryDirectLocateInOpenEpubLeaf(
+	leaf: WorkspaceLeaf | null | undefined,
+	state: Record<string, unknown>
+): boolean {
+	const locate = resolveBookLocateIntentFromState(state);
+	const view = leaf?.view as EpubLeafViewWithDirectLocate | undefined;
+	if (!locate || typeof view?.navigateToBookLocate !== "function") {
+		return false;
+	}
+	return view.navigateToBookLocate(locate) !== false;
+}
+
 export async function openEpubInPreferredLeaf(
 	app: App,
 	filePath: string,
@@ -215,6 +250,10 @@ export async function openEpubInPreferredLeaf(
 	}
 
 	const canonicalPath = resolveSupportedBookFilePath(app, filePath) || normalizePath(filePath);
+	if (tryDirectLocateInOpenEpubLeaf(leaf, state)) {
+		void app.workspace.revealLeaf(leaf);
+		return leaf;
+	}
 
 	await leaf.setViewState({
 		type: viewType,
@@ -246,6 +285,14 @@ export async function openBookForSourceNavigation(
 
 	const canonicalPath = resolveSupportedBookFilePath(app, filePath) || normalizePath(filePath);
 	const existingLeaf = findOpenEpubLeaf(app, canonicalPath);
+	if (tryDirectLocateInOpenEpubLeaf(existingLeaf, state)) {
+		if (focus) {
+			focusWorkspaceLeaf(app, existingLeaf, focus);
+		} else {
+			void app.workspace.revealLeaf(existingLeaf);
+		}
+		return existingLeaf;
+	}
 	const leaf = existingLeaf ?? app.workspace.getLeaf("split", "vertical");
 
 	await leaf.setViewState({
