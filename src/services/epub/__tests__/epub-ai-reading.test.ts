@@ -13,6 +13,7 @@ import {
 	requestEpubAiReading,
 	resolveEpubAiReadingOutputPlan,
 	upsertEpubAiReadingNote,
+	validateEpubAiReadingUnitBatchContent,
 } from "../epub-ai-reading";
 import type { EpubAiReadingSourceBlock } from "../epub-ai-reading-source-blocks";
 
@@ -267,8 +268,14 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).toContain("核心结论：3-6 条");
 		expect(messages.user).toContain("关键知识点：4-8 条");
 		expect(messages.user).toContain("重要原文与解读：3-6 处");
-		expect(messages.user).toContain("容易误解的点：2-4 条");
-		expect(messages.user).toContain("与上下文关系：1-3 条");
+		expect(messages.user).toContain("选择性内容");
+		expect(messages.user).toContain("容易误解的点");
+		expect(messages.user).toContain("至少满足下面任一条件");
+		expect(messages.user).toContain("原文中存在两个容易混淆的概念、参数、命令、步骤或条件");
+		expect(messages.user).toContain("普通说明、顺序步骤、简单定义、重复标题、背景介绍");
+		expect(messages.user).toContain("每个 U 单元最多输出 1-3 条容易误解的点");
+		expect(messages.user).not.toContain("与上下文关系");
+		expect(messages.user).not.toContain("章节关系");
 		expect(messages.user).toContain("{{source:U001.P001}}");
 		expect(messages.user).toContain("{{source-range:U001.P001-U001.P003}}");
 		expect(messages.user).toContain("不要生成 Obsidian wikilink");
@@ -280,15 +287,21 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).not.toContain("always wrap individual source ids as [U001.P001]");
 	});
 
-	it("uses source placeholders in unit-detail batch prompts", () => {
+	it("does not request a duplicate global important-source section when close-reading units are required", () => {
 		const messages = buildEpubAiReadingMessages({
 			bookTitle: "LaTeX Cookbook",
 			filePath: "Books/latex-cookbook.epub",
 			chapterTitle: "第五章：图像处理",
 			chapterHref: "OEBPS/B21326_05.xhtml",
-			chapterText: "操作指南正文。",
+			chapterText: "操作指南正文。\n\n运行原理正文。",
 			tocItems,
-			requestPurpose: "unit-detail",
+			scope: {
+				label: "第五章：图像处理 > 全部",
+				pathLabels: ["第五章：图像处理", "全部"],
+				includeDescendants: true,
+				flatIndex: 0,
+				endFlatIndex: 2,
+			},
 			closeReadingUnits: [
 				{
 					id: "U016",
@@ -311,12 +324,77 @@ describe("epub-ai-reading", () => {
 			],
 		});
 
+		expect(messages.user).toContain("重要原文与解读：3-6 处");
+		expect(messages.user).not.toContain("\n## 重要原文与解读\n");
+		expect(messages.user).toContain("U 单元内已经输出重要原文与解读");
+	});
+
+	it("uses source placeholders in unit-detail batch prompts", () => {
+		const messages = buildEpubAiReadingMessages({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex-cookbook.epub",
+			chapterTitle: "第五章：图像处理",
+			chapterHref: "OEBPS/B21326_05.xhtml",
+			chapterText: "操作指南正文。",
+			tocItems,
+			requestPurpose: "unit-detail",
+			closeReadingUnits: [
+				{
+					id: "U016",
+					label: "操作指南",
+					href: "OEBPS/B21326_05.xhtml#how",
+					pathLabels: ["第五章：图像处理", "图像对齐", "操作指南"],
+					flatIndex: 16,
+					depth: 2,
+					sourceBlockIds: ["U016.P001", "U016.P002"],
+				},
+				{
+					id: "U017",
+					label: "运行原理",
+					href: "OEBPS/B21326_05.xhtml#why",
+					pathLabels: ["第五章：图像处理", "图像对齐", "运行原理"],
+					flatIndex: 17,
+					depth: 2,
+					sourceBlockIds: ["U017.P001"],
+				},
+			],
+			sourceBlocks: [
+				{
+					id: "U016.P001",
+					chapterHref: "OEBPS/B21326_05.xhtml",
+					headingPath: ["第五章：图像处理", "图像对齐", "操作指南"],
+					text: "操作指南正文。",
+					kind: "paragraph",
+				},
+				{
+					id: "U017.P001",
+					chapterHref: "OEBPS/B21326_05.xhtml",
+					headingPath: ["第五章：图像处理", "图像对齐", "运行原理"],
+					text: "运行原理正文。",
+					kind: "paragraph",
+				},
+			],
+		});
+
 		expect(messages.system).toContain("原文引用只能写来源占位符");
+		expect(messages.user).toContain("U016 第五章：图像处理 > 图像对齐 > 操作指南");
+		expect(messages.user).toContain("U017 第五章：图像处理 > 图像对齐 > 运行原理");
+		expect(messages.user).toContain("sourceBlocks=U016.P001-U016.P002");
+		expect(messages.user).toContain("sourceBlocks=U017.P001");
+		expect(messages.user).toContain("选择性内容判定规则");
+		expect(messages.user).toContain("至少满足下面任一条件");
+		expect(messages.user).toContain("不要为了格式完整而补写");
+		expect(messages.user).toContain("每个 U 单元最多输出 1-3 条容易误解的点");
+		expect(messages.user).not.toContain("与上下文关系");
+		expect(messages.user).not.toContain("章节关系");
 		expect(messages.user).toContain("{{source:U001.P001}}");
 		expect(messages.user).toContain("{{source-range:U001.P001-U001.P003}}");
 		expect(messages.user).toContain("不要生成 Obsidian wikilink");
 		expect(messages.user).toContain("裸露 Uxxx.Pyyy");
 		expect(messages.user).not.toContain("严格保留 Uxxx.Pyyy 来源编号");
+		expect(messages.user).toContain("原文/位置：短摘录或位置说明");
+		expect(messages.user).toContain("不要用反引号包住原文/位置整行或原文按钮");
+		expect(messages.user).not.toContain("`原文/位置：");
 	});
 
 	it("plans chapter-scale AI reading output without the legacy 4096 cap", () => {
@@ -413,7 +491,7 @@ describe("epub-ai-reading", () => {
 			"每个最低级小节都必须按最低级小节/精读范围的同一标准输出",
 		);
 		expect(prompt).toContain(
-			"高级范围只能额外增加总览、摘要、主线、关系和全局观",
+			"高级范围只能额外增加总览、摘要、主线和全局观",
 		);
 		expect(prompt).not.toContain(
 			"每个最低级小节可写摘要 1-3 句、重点 2-4 条、重要原文 1-3 处",
@@ -457,9 +535,11 @@ describe("epub-ai-reading", () => {
 
 		const prompt = messages.user;
 		expect(prompt).toContain("基础精析层");
-		expect(prompt).toContain(
-			"小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点",
-		);
+		expect(prompt).toContain("必有内容");
+		expect(prompt).toContain("选择性内容");
+		expect(prompt).toContain("小节摘要、核心结论、关键知识点、重要原文与解读");
+		expect(prompt).not.toContain("与上下文关系");
+		expect(prompt).not.toContain("章节关系");
 		expect(prompt).not.toContain(
 			"每个下级小节可写摘要 1-3 句、重点 2-4 条、重要原文 1-3 处",
 		);
@@ -482,14 +562,15 @@ describe("epub-ai-reading", () => {
 
 		expect(messages.user).toContain("## 按小节精读");
 		expect(messages.user).toContain(
-			"每个小节建议包含：小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点、与上下文关系",
+			"每个小节必须包含：小节摘要、核心结论、关键知识点、重要原文与解读",
 		);
-		expect(messages.user).toContain(
-			"范围摘要、核心结论、章节关系属于全局总结层",
-		);
+		expect(messages.user).toContain("容易误解的点");
+		expect(messages.user).toContain("有实质价值时才输出");
+		expect(messages.user).not.toContain("与上下文关系");
+		expect(messages.user).not.toContain("章节关系");
 	});
 
-	it("includes scope context as relationship guidance without replacing scoped body text", () => {
+	it("includes scope context as structure guidance without requesting relationship sections", () => {
 		const messages = buildEpubAiReadingMessages({
 			bookTitle: "Scoped Book",
 			filePath: "Books/scoped.epub",
@@ -512,11 +593,42 @@ describe("epub-ai-reading", () => {
 			"Selected path: Chapter 1 > Selected section",
 		);
 		expect(messages.user).toContain(
-			"\u5916\u90e8\u7ebf\u7d22\u53ea\u7528\u4e8e\u7406\u89e3\u7ae0\u8282\u5173\u7cfb",
+			"\u5916\u90e8\u7ebf\u7d22\u53ea\u7528\u4e8e\u7406\u89e3\u8303\u56f4\u4f4d\u7f6e",
 		);
+		expect(messages.user).not.toContain("章节关系");
+		expect(messages.user).not.toContain("与上下文关系");
 		expect(messages.user).toContain(
 			"Only this selected section body should be treated as the close reading source.",
 		);
+	});
+
+	it("does not require optional misunderstanding or context fields in unit validation", () => {
+		const issues = validateEpubAiReadingUnitBatchContent(
+			[
+				"## U001 Chapter > Unit",
+				"### 小节摘要",
+				"summary",
+				"### 核心结论",
+				"conclusion",
+				"### 关键知识点",
+				"points",
+				"### 重要原文与解读",
+				"{{source:U001.P001}}",
+			].join("\n"),
+			[
+				{
+					id: "U001",
+					label: "Unit",
+					href: "text/ch.xhtml#unit",
+					pathLabels: ["Chapter", "Unit"],
+					flatIndex: 0,
+					depth: 1,
+					sourceBlockIds: ["U001.P001"],
+				},
+			],
+		);
+
+		expect(issues).toEqual([]);
 	});
 
 	it("extracts assistant content from a Kimi chat completion response", () => {
@@ -974,7 +1086,7 @@ describe("epub-ai-reading", () => {
 			"[[Books/latex.epub#weave-cfi=readium:start&eid=ai-source-U016-P001&flashStyle=pulse&flashColor=yellow|原文]]",
 		);
 		expect(result.content).toContain("rangeEndCfi=readium%3Aend");
-		expect(result.content).toContain("rangeCfis=readium%3Astart%2Creadium%3Aend");
+		expect(result.content).toContain("rangeCfis=readium%3Astart,readium%3Aend");
 		expect(result.content.match(/\|原文\]\]/g)).toHaveLength(2);
 		expect(result.content).not.toContain("{{source");
 		expect(result.content).not.toContain("|U016.P001]]");
@@ -1046,6 +1158,50 @@ describe("epub-ai-reading", () => {
 		expect(result.content).not.toContain("|U016.P001]]");
 		expect(noteSection).toContain("> 来源：原文，共 1 段 · 共 1 个精读单元");
 		expect(noteSection).toContain("U016 操作指南");
+	});
+
+	it("removes duplicate global important-source sections from close-reading unit note sections", () => {
+		const noteSection = buildEpubAiReadingNoteSection({
+			bookTitle: "LaTeX Cookbook",
+			filePath: "Books/latex.epub",
+			chapterTitle: "第五章：图像处理",
+			chapterHref: "OEBPS/B21326_05.xhtml",
+			model: "k3",
+			generatedAt: "2026-08-04T08:00:00.000Z",
+			scope: {
+				label: "第五章：图像处理 > 全部",
+				pathLabels: ["第五章：图像处理", "全部"],
+				includeDescendants: true,
+			},
+			closeReadingUnits: [
+				{
+					id: "U016",
+					label: "操作指南",
+					href: "OEBPS/B21326_05.xhtml#how",
+					pathLabels: ["第五章：图像处理", "图像对齐", "操作指南"],
+					sourceBlockIds: ["U016.P001"],
+				},
+			],
+			sourceBlocks: [],
+			content: [
+				"## U016 操作指南",
+				"### 小节摘要",
+				"正文摘要。",
+				"**重要原文与解读**",
+				"- U 单元内的重要原文。",
+				"## 重要原文与解读",
+				"- 重复的外层重要原文。",
+				"## 概念/术语",
+				"- 保留的术语说明。",
+			].join("\n"),
+		});
+
+		expect(noteSection).toContain("**重要原文与解读**");
+		expect(noteSection).toContain("U 单元内的重要原文");
+		expect(noteSection).not.toContain("## 重要原文与解读");
+		expect(noteSection).not.toContain("重复的外层重要原文");
+		expect(noteSection).toContain("## 概念/术语");
+		expect(noteSection).toContain("保留的术语说明");
 	});
 
 	it("loads Kimi configuration from the plugin .env file at request time", async () => {
@@ -1348,6 +1504,42 @@ describe("epub-ai-reading", () => {
 		expect(note).toContain('data-source-file="Books/demo.epub"');
 	});
 
+	it("repairs duplicate global important-source sections when opening existing AI reading notes", async () => {
+		const targetPath = "AI阅读笔记/Demo - AI阅读.md";
+		const duplicatedSection = [
+			'<!-- weave-epub-ai-reading:start key="old-section" -->',
+			"## 第五章：图像处理",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="第五章：图像处理 &gt; 全部"></div>',
+			"## U016 操作指南",
+			'<div class="weave-epub-ai-reading-note-root" data-ai-unit-id="U016" data-scope-level="leaf"></div>',
+			"**重要原文与解读**",
+			"- U 单元内的重要原文。",
+			"## 重要原文与解读",
+			"- 重复的外层重要原文。",
+			"## 概念/术语",
+			"- 保留的术语说明。",
+			'<!-- weave-epub-ai-reading:end key="old-section" -->',
+		].join("\n");
+		const { app, files } = createMemoryApp({
+			[targetPath]: buildEpubAiReadingNoteMarkdown({
+				bookTitle: "Demo",
+				filePath: "Books/demo.epub",
+				sectionsMarkdown: duplicatedSection,
+			}),
+		});
+
+		await ensureEpubAiReadingNote(app, {
+			bookTitle: "Demo",
+			filePath: "Books/demo.epub",
+		});
+
+		const note = files.get(targetPath) || "";
+		expect(note).toContain("U 单元内的重要原文");
+		expect(note).not.toContain("重复的外层重要原文");
+		expect(note).toContain("## 概念/术语");
+		expect(note).toContain("保留的术语说明");
+	});
+
 	it("writes scoped range and source-block diagnostics into note sections", () => {
 		const markdown = buildEpubAiReadingNoteSection({
 			bookTitle: "LaTeX Guide",
@@ -1435,6 +1627,48 @@ describe("epub-ai-reading", () => {
 		expect(updated).toContain("新结果");
 		expect(updated).not.toContain("旧结果");
 		expect(updated.match(/weave-epub-ai-reading:start/g)).toHaveLength(1);
+	});
+
+	it("repairs duplicate global important-source sections in existing AI reading notes during upsert", async () => {
+		const duplicatedSection = [
+			'<!-- weave-epub-ai-reading:start key="old-section" -->',
+			"## 第五章：图像处理",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="第五章：图像处理 &gt; 全部"></div>',
+			"## U016 操作指南",
+			'<div class="weave-epub-ai-reading-note-root" data-ai-unit-id="U016" data-scope-level="leaf"></div>',
+			"**重要原文与解读**",
+			"- U 单元内的重要原文。",
+			"## 重要原文与解读",
+			"- 重复的外层重要原文。",
+			"## 概念/术语",
+			"- 保留的术语说明。",
+			'<!-- weave-epub-ai-reading:end key="old-section" -->',
+		].join("\n");
+		const existingNote = buildEpubAiReadingNoteMarkdown({
+			bookTitle: "认知之书",
+			filePath: "Books/demo.epub",
+			sectionsMarkdown: duplicatedSection,
+		});
+		const { app, files } = createMemoryApp({
+			"AI阅读笔记/认知之书 - AI阅读.md": existingNote,
+		});
+
+		await upsertEpubAiReadingNote(app, {
+			bookTitle: "认知之书",
+			filePath: "Books/demo.epub",
+			chapterTitle: "第一章 注意力",
+			chapterHref: "text/chapter1.xhtml",
+			content: "新结果",
+			model: "kimi-k3",
+			generatedAt: 1710000001000,
+		});
+
+		const updated = files.get("AI阅读笔记/认知之书 - AI阅读.md") || "";
+		expect(updated).toContain("U 单元内的重要原文");
+		expect(updated).not.toContain("重复的外层重要原文");
+		expect(updated).toContain("## 概念/术语");
+		expect(updated).toContain("保留的术语说明");
+		expect(updated).toContain("新结果");
 	});
 
 	it("removes the empty state when the first AI reading section is generated", async () => {

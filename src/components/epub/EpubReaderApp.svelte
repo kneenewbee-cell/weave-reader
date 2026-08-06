@@ -46,7 +46,7 @@
 		type WeaveEpubCanvasLayoutDirectionPayload,
 	} from '../../services/epub/canvas-excerpt-anchor';
 	import type { EpubVisibleFrameLike, ScreenshotRect } from '../../services/epub/EpubScreenshotService';
-	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderAnchorPoint, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderHighlightSegment, ReaderParagraph, ReaderViewportRect, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
+	import type { EpubAnnotationSemantic, EpubBook, EpubExcerptSettings, EpubFlowMode, EpubHighlightStyle, EpubHostCapabilities, EpubHostOpenAiReadingNoteInput, EpubLayoutMode, EpubParagraphModeReadingPosition, EpubParagraphModeTransitionStyle, EpubReaderEngine, EpubReaderSettings, EpubReaderUiMode, EpubReadingReferencePoint, EpubSemanticSettings, EpubWeaveExcerptRemovalMode, EpubWeaveOfficialAPI, EpubWeaveRemoveExcerptResult, FlashStyle, HighlightClickInfo, PaginationInfo, ReaderAnchorPoint, ReaderFootnotePreviewInfo, ReaderHighlight, ReaderHighlightSegment, ReaderParagraph, ReaderViewportRect, ReadingPosition, TocItem, EpubChapterReadingPointDraft } from '../../services/epub';
 	import { PremiumFeatureGuard, PREMIUM_FEATURES } from '../../services/premium/PremiumFeatureGuard';
 	import { getBookFormatDisplayLabel, isSupportedBookFile } from '../../services/epub/book-format';
 	import {
@@ -5604,7 +5604,12 @@
 		}
 	}
 
-	async function openAiReading(options: { initialScopeIds?: string[] } = {}) {
+	type AiReadingOpenNoteOptions = Omit<EpubHostOpenAiReadingNoteInput, 'notePath' | 'sourceFile'>;
+
+	async function openAiReading(options: {
+		initialScopeIds?: string[];
+		openNoteOptions?: AiReadingOpenNoteOptions;
+	} = {}) {
 		try {
 			if (!book) {
 				new Notice(t('epub.reader.bookNotReady'));
@@ -5628,6 +5633,7 @@
 				new EpubAiReadingModal(app, {
 					configHost: aiConfigHost,
 					envPathCandidates: aiReadingEnvPaths,
+					openNoteOptions: options.openNoteOptions,
 					input: {
 						filePath,
 						bookTitle: book.metadata.title,
@@ -5652,6 +5658,7 @@
 			new EpubAiReadingModal(app, {
 				configHost: aiConfigHost,
 				envPathCandidates: aiReadingEnvPaths,
+				openNoteOptions: options.openNoteOptions,
 				input: {
 					filePath,
 					bookTitle: book.metadata.title,
@@ -5752,12 +5759,12 @@
 			const host = resolveEpubHost(app);
 			const openMode = options.openMode || 'existing';
 			const focus = options.focus !== undefined ? options.focus : true;
-			if (options.dualWindowMode && host?.openEpubAiReadingNote) {
+			if (host?.openEpubAiReadingNote) {
 				await host.openEpubAiReadingNote({
 					bookId: annotationBookId || book.id,
 					notePath: noteFile.path,
 					sourceFile: filePath,
-					dualWindowMode: options.dualWindowMode,
+					...(options.dualWindowMode ? { dualWindowMode: true } : {}),
 					openMode,
 					focus,
 				});
@@ -5794,11 +5801,19 @@
 
 	function handleAiReadingRequestEvent(event: Event) {
 		const detail =
-			(event as CustomEvent<{ filePath?: unknown; scopeIds?: unknown }>).detail || {};
+			(event as CustomEvent<{
+				filePath?: unknown;
+				scopeIds?: unknown;
+				openNoteOptions?: unknown;
+			}>).detail || {};
 		const requestedPath = normalizePath(String(detail.filePath || '').trim());
 		const requestedScopeIds = Array.isArray(detail.scopeIds)
 			? detail.scopeIds.map((value) => String(value || '').trim()).filter(Boolean)
 			: [];
+		const requestedOpenNoteOptions =
+			detail.openNoteOptions && typeof detail.openNoteOptions === 'object'
+				? detail.openNoteOptions as AiReadingOpenNoteOptions
+				: undefined;
 		const currentPath = normalizePath(String(filePath || '').trim());
 		if (
 			!requestedPath ||
@@ -5807,7 +5822,10 @@
 		) {
 			return;
 		}
-		void openAiReading({ initialScopeIds: requestedScopeIds });
+		void openAiReading({
+			initialScopeIds: requestedScopeIds,
+			...(requestedOpenNoteOptions ? { openNoteOptions: requestedOpenNoteOptions } : {}),
+		});
 	}
 
 	async function exportChapterMarkedDraftToMarkdown(

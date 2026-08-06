@@ -352,6 +352,18 @@ export class EpubAiReadingNoteView extends ItemView {
 		const detail = {
 			filePath: this.sourceFile,
 			scopeIds: this.getAiReadingRequestScopeIds(),
+			...(this.dualWindowMode
+				? {
+						openNoteOptions: {
+							...(this.bookId ? { bookId: this.bookId } : {}),
+							dualWindowMode: true,
+							openMode: "right-split",
+							focus: false,
+						},
+					}
+				: this.bookId
+					? { openNoteOptions: { bookId: this.bookId } }
+					: {}),
 		};
 		const activeWindow = this.contentEl.ownerDocument.defaultView || window;
 		const dispatch = () => {

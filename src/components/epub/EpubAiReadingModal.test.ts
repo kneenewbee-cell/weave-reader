@@ -1150,12 +1150,73 @@ describe("EpubAiReadingModal", () => {
 
 		await waitFor(() => {
 			expect(mockedUpsertEpubAiReadingNote).toHaveBeenCalled();
-			expect(openEpubAiReadingNote).not.toHaveBeenCalled();
-			expect(mockedOpenFileWithExistingLeaf).toHaveBeenCalledWith(app, noteFile, {
-				openInNewTab: true,
+			expect(openEpubAiReadingNote).toHaveBeenCalledWith({
+				notePath: noteFile.path,
+				sourceFile: "Books/demo.epub",
+				openMode: "existing",
 				focus: true,
-				openState: { mode: "preview" },
 			});
+			expect(mockedOpenFileWithExistingLeaf).not.toHaveBeenCalled();
+			expect(closeSpy).toHaveBeenCalled();
+		});
+	});
+
+	it("opens the generated note back into AI reading dual-window mode when requested", async () => {
+		const noteFile = createMockFile("AI闃呰绗旇/Dual Book - AI闃呰.md");
+		const openEpubAiReadingNote = vi.fn(async () => undefined);
+		mockedResolveEpubHost.mockReturnValue({
+			openEpubAiReadingNote,
+		});
+		mockedUpsertEpubAiReadingNote.mockResolvedValue(noteFile);
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Dual Book",
+			filePath: "Books/dual.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "AI 闃呰缁撴灉",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const app = new App();
+		const modal = new EpubAiReadingModal(app, {
+			input: {
+				bookTitle: "Dual Book",
+				filePath: "Books/dual.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			openNoteOptions: {
+				bookId: "book-1",
+				dualWindowMode: true,
+				openMode: "right-split",
+				focus: false,
+			},
+		});
+		const closeSpy = vi.spyOn(modal, "close");
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		let createButton: HTMLButtonElement | undefined;
+		await waitFor(() => {
+			createButton = modal.contentEl.querySelector<HTMLButtonElement>(
+				"button.mod-cta",
+			) || undefined;
+			expect(createButton?.disabled).toBe(false);
+		});
+		createButton!.click();
+
+		await waitFor(() => {
+			expect(openEpubAiReadingNote).toHaveBeenCalledWith({
+				bookId: "book-1",
+				notePath: noteFile.path,
+				sourceFile: "Books/dual.epub",
+				dualWindowMode: true,
+				openMode: "right-split",
+				focus: false,
+			});
+			expect(mockedOpenFileWithExistingLeaf).not.toHaveBeenCalled();
 			expect(closeSpy).toHaveBeenCalled();
 		});
 	});

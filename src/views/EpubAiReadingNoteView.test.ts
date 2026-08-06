@@ -219,6 +219,47 @@ describe("EpubAiReadingNoteView empty ranges", () => {
 		unregisterEpubHost(app);
 	});
 
+	it("requests generation with dual-window open context from a dual-window empty range", async () => {
+		const { app } = createApp(
+			[
+				"# Demo - AI",
+				"",
+				'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-empty="true"></div>',
+			].join("\n"),
+		);
+		const view = new EpubAiReadingNoteView({ app } as any);
+		const listener = vi.fn();
+		window.addEventListener(EPUB_AI_READING_REQUEST_EVENT, listener);
+
+		await view.setState({
+			bookId: "book-1",
+			notePath: "AI-notes/demo - AI.md",
+			sourceFile: "Books/demo.epub",
+			dualWindowMode: true,
+		}, {});
+
+		view.contentEl
+			.querySelector<HTMLButtonElement>(".weave-epub-ai-reading-note-view__start-button")
+			?.click();
+
+		expect(listener).toHaveBeenCalledWith(
+			expect.objectContaining({
+				detail: expect.objectContaining({
+					filePath: "Books/demo.epub",
+					openNoteOptions: {
+						bookId: "book-1",
+						dualWindowMode: true,
+						openMode: "right-split",
+						focus: false,
+					},
+				}),
+			}),
+		);
+
+		window.removeEventListener(EPUB_AI_READING_REQUEST_EVENT, listener);
+		unregisterEpubHost(app);
+	});
+
 	it("shows a start action for a selected TOC range that has not been generated", async () => {
 		const { app } = createApp(
 			[

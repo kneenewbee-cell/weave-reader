@@ -578,6 +578,13 @@ function isInsideInlineCode(markdown: string, index: number): boolean {
 	return Boolean(ticks && ticks.length % 2 === 1);
 }
 
+function unwrapInlineCodeAroundGeneratedSourceLinks(markdown: string): string {
+	return String(markdown || "").replace(
+		/`([^`\n]*\[\[[^`\n]*#(?:weave-loc|weave-cfi)=[^`\n]*\|原文\]\][^`\n]*)`/g,
+		"$1",
+	);
+}
+
 function getAiReadingSourceIdFromWikilinkTarget(target: string): string {
 	const match = String(target || "").match(AI_SOURCE_EXCERPT_ID_PATTERN);
 	if (!match) {
@@ -841,10 +848,10 @@ export function decorateEpubAiReadingLegacyNoteBareSourceReferences(
 			return `${prefix}${formatAiReadingSourceLink(link, id)}`;
 		},
 	);
-	return collapseAdjacentConsecutiveAiSourceLinks(
+	return unwrapInlineCodeAroundGeneratedSourceLinks(collapseAdjacentConsecutiveAiSourceLinks(
 		bareDecoratedSource,
 		(id) => exactLinksById.get(id) || fallbackLink,
-	);
+	));
 }
 
 export function buildEpubAiReadingSourceBlocksFromParagraphs(
@@ -1007,6 +1014,6 @@ export function decorateEpubAiReadingSourceReferences(
 			return block?.sourceLink ? formatAiReadingSourceLink(block.sourceLink, block.id) : "";
 		},
 	);
-	return collapsedAdjacentLinks
+	return unwrapInlineCodeAroundGeneratedSourceLinks(collapsedAdjacentLinks)
 		.replace(/\]\]\s*(?=\[\[)/g, "]] ");
 }

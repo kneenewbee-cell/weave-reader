@@ -26,8 +26,17 @@ import {
 	resolveEpubAiReadingScopeSelection,
 	type EpubAiReadingScopeSelection,
 } from "../../services/epub/epub-ai-reading-scope";
+import {
+	resolveEpubHost,
+	type EpubHostOpenAiReadingNoteInput,
+} from "../../services/epub/epub-host";
 import type { TocItem } from "../../services/epub/types";
 import { logger } from "../../utils/logger";
+
+type EpubAiReadingModalOpenNoteOptions = Omit<
+	EpubHostOpenAiReadingNoteInput,
+	"notePath" | "sourceFile"
+>;
 
 interface EpubAiReadingModalOptions {
 	input: EpubAiReadingInput;
@@ -35,6 +44,7 @@ interface EpubAiReadingModalOptions {
 	envPathCandidates?: string[];
 	tocItems?: TocItem[];
 	initialScopeIds?: string[];
+	openNoteOptions?: EpubAiReadingModalOpenNoteOptions;
 	resolveScopedInput?: (
 		scope: EpubAiReadingScopeSelection,
 	) => Promise<EpubAiReadingInput | null>;
@@ -291,6 +301,7 @@ export class EpubAiReadingModal extends Modal {
 	private readonly envPathCandidates: string[];
 	private readonly tocItems: TocItem[];
 	private readonly resolveScopedInput: EpubAiReadingModalOptions["resolveScopedInput"];
+	private readonly openNoteOptions: EpubAiReadingModalOpenNoteOptions;
 	private readonly sessionKey: string;
 	private readonly sessionState: EpubAiReadingSessionState;
 	private selectedScopeIds: string[];
@@ -327,6 +338,7 @@ export class EpubAiReadingModal extends Modal {
 		this.envPathCandidates = options.envPathCandidates || [];
 		this.tocItems = options.tocItems || [];
 		this.resolveScopedInput = options.resolveScopedInput;
+		this.openNoteOptions = options.openNoteOptions || {};
 		this.selectedScopeIds =
 			options.initialScopeIds ||
 			resolveDefaultEpubAiReadingScopeIds(
@@ -1328,9 +1340,20 @@ export class EpubAiReadingModal extends Modal {
 	}
 
 	private async openAiReadingNoteFile(noteFile: TFile, sourceFile: string): Promise<void> {
+		const host = resolveEpubHost(this.app);
+		if (host?.openEpubAiReadingNote) {
+			await host.openEpubAiReadingNote({
+				...this.openNoteOptions,
+				notePath: noteFile.path,
+				sourceFile,
+				openMode: this.openNoteOptions.openMode || "existing",
+				focus: this.openNoteOptions.focus !== undefined ? this.openNoteOptions.focus : true,
+			});
+			return;
+		}
 		await openFileWithExistingLeaf(this.app, noteFile, {
 			openInNewTab: true,
-			focus: true,
+			focus: this.openNoteOptions.focus !== undefined ? this.openNoteOptions.focus : true,
 			openState: { mode: "preview" },
 		});
 	}

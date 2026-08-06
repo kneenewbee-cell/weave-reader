@@ -177,6 +177,50 @@ describe("epub-ai-reading-source-blocks", () => {
 		expect(decorated).toContain("Unknown marker. [段999]");
 	});
 
+	it("unwraps inline code that accidentally contains generated source links", () => {
+		const decorated = decorateEpubAiReadingSourceReferences(
+			"- `原文/位置：样式局部定义 {{source-range:U206.P003-U206.P005}}`\n- `普通代码不应被改动`",
+			[
+				{
+					id: "U206.P003",
+					chapterHref: "OEBPS/B21326_06.xhtml",
+					cfi: "epubcfi(/6/20!/4/2,/1:0,/1:1)",
+					text: "Style paragraph.",
+					headingPath: ["第六章", "工作原理"],
+					kind: "paragraph",
+					sourceLink:
+						"[[Book.epub#weave-cfi=epubcfi(/6/20!/4/2,/1:0,/1:1)&eid=ai-source-U206-P003|U206.P003]]",
+				},
+				{
+					id: "U206.P004",
+					chapterHref: "OEBPS/B21326_06.xhtml",
+					cfi: "epubcfi(/6/20!/4/4,/1:0,/1:1)",
+					text: "Middle paragraph.",
+					headingPath: ["第六章", "工作原理"],
+					kind: "paragraph",
+					sourceLink:
+						"[[Book.epub#weave-cfi=epubcfi(/6/20!/4/4,/1:0,/1:1)&eid=ai-source-U206-P004|U206.P004]]",
+				},
+				{
+					id: "U206.P005",
+					chapterHref: "OEBPS/B21326_06.xhtml",
+					cfi: "epubcfi(/6/20!/4/6,/1:0,/1:1)",
+					text: "End paragraph.",
+					headingPath: ["第六章", "工作原理"],
+					kind: "paragraph",
+					sourceLink:
+						"[[Book.epub#weave-cfi=epubcfi(/6/20!/4/6,/1:0,/1:1)&eid=ai-source-U206-P005|U206.P005]]",
+				},
+			],
+		);
+
+		expect(decorated).toContain("- 原文/位置：样式局部定义 [[Book.epub#weave-cfi=epubcfi");
+		expect(decorated).toContain("rangeEndCfi=epubcfi");
+		expect(decorated).toContain("rangeCfis=");
+		expect(decorated).not.toContain("`原文/位置：");
+		expect(decorated).toContain("- `普通代码不应被改动`");
+	});
+
 	it("decorates legacy P source markers with segment aliases", () => {
 		const markdown = "Legacy model marker [P001]";
 		const decorated = decorateEpubAiReadingSourceReferences(markdown, [

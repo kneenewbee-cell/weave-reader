@@ -369,14 +369,15 @@ function getEpubAiReadingOutputPromptLines(
 	];
 	const baseDetailContract = [
 		"- 基础精析层：无论用户选择最低级小节、中级目录、一级章节，最低级小节的精析标准必须一致。",
-		"- 每个最低级小节都必须按最低级小节/精读范围的同一标准输出：小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点。",
-		"- 不得因为选择的是高级范围就压缩、跳过或只概括下级小节；高级范围只能额外增加总览、摘要、主线、关系和全局观。",
+		"- 每个最低级小节都必须按最低级小节/精读范围的同一标准输出必有内容：小节摘要、核心结论、关键知识点、重要原文与解读。",
+		"- 选择性内容由 AI 按标准自行判断；只有满足“容易误解的点”判定规则时才输出，不满足时完全省略；不要为空而硬凑。",
+		"- 不得因为选择的是高级范围就压缩、跳过或只概括下级小节；高级范围只能额外增加总览、摘要、主线和全局观。",
 	];
 	if (level === "book") {
 		return [
 			"- 阅读层级：全书汇总。",
 			"- 全书功能仍是占位阶段；如收到全书内容，请按一级章节分批统筹，并保留每章关键位置。",
-			"- 高级层数量不包含下级小节数据；全书主线、跨章关系和章节地图要另行输出。",
+			"- 高级层数量不包含下级小节数据；全书主线和章节地图可另行输出。",
 			...common,
 		];
 	}
@@ -384,7 +385,7 @@ function getEpubAiReadingOutputPromptLines(
 		return [
 			"- 阅读层级：一级章节。",
 			"- 按最低级标题逐项精读，每个最低级小节都要保留摘要、重点和重要原文索引。",
-			"- 先理解最低级小节细节，再汇总一级章节的整体摘要、章节主线、知识结构和跨小节关系。",
+			"- 先理解最低级小节细节，再汇总一级章节的整体摘要、章节主线和知识结构。",
 			...baseDetailContract,
 			"- 高级层数量不包含下级小节数据。",
 			"- 全局总结层：章节总览 4-8 句，章节核心结论 8-15 条，章节级重要原文 10-25 处；这些数量只约束章节级总览，不约束每个小节的基础精析。",
@@ -394,7 +395,7 @@ function getEpubAiReadingOutputPromptLines(
 	if (level === "section") {
 		return [
 			"- 阅读层级：中级目录范围。",
-			"- 按下级标题逐项精读，保留下级小节的局部细节，再汇总当前范围的二级总览和小节关系。",
+			"- 按下级标题逐项精读，保留下级小节的局部细节，再汇总当前范围的二级总览和知识结构。",
 			...baseDetailContract,
 			"- 高级层数量不包含下级小节数据。",
 			"- 全局总结层：范围总览 3-5 句，范围核心结论 4-8 条，范围级重要原文 5-12 处；这些数量只约束范围级总览，不约束每个小节的基础精析。",
@@ -564,8 +565,6 @@ const EPUB_AI_READING_UNIT_DETAIL_FIELDS = [
 	"核心结论",
 	"关键知识点",
 	"重要原文与解读",
-	"容易误解的点",
-	"与上下文关系",
 ];
 
 function findEpubAiReadingUnitSection(content: string, unitId: string): string {
@@ -920,16 +919,34 @@ function findTocPath(
 	return null;
 }
 
+function formatOptionalMisunderstandingContract(): string {
+	return [
+		"选择性内容判定规则：",
+		"- 只有当本 U 单元至少满足下面任一条件时，才输出“容易误解的点”：",
+		"  1. 原文中存在两个容易混淆的概念、参数、命令、步骤或条件；",
+		"  2. 原文给出了例外、限制、默认行为、前提条件或反直觉结论；",
+		"  3. 错误使用会导致结果明显不同、无法编译、定位错误或理解偏差；",
+		"  4. 本节内容和日常直觉/常见写法相反，读者容易机械套用。",
+		"- 如果只是普通说明、顺序步骤、简单定义、重复标题、背景介绍，不要输出“容易误解的点”。",
+		"- 不要为了格式完整而补写“无”“不适用”“本节没有误解点”。",
+		"- 每个 U 单元最多输出 1-3 条容易误解的点。",
+	].join("\n");
+}
+
 function formatUnitDetailFieldContract(): string {
 	return [
-		"对每个 U 单元必须按以下固定标题输出，标题文字不要改：",
+		"对每个 U 单元必须按以下必有标题输出，标题文字不要改：",
 		"## Uxxx 标题路径",
+		"### 必有内容",
 		"### 小节摘要",
 		"### 核心结论",
 		"### 关键知识点",
 		"### 重要原文与解读",
+		"重要原文与解读请写成普通文本行：原文/位置：短摘录或位置说明 {{source:U001.P001}}；为什么重要：...；读法：...。",
+		"不要用反引号包住原文/位置整行或原文按钮；只有术语、命令、代码片段本身需要反引号。",
+		"### 选择性内容",
 		"### 容易误解的点",
-		"### 与上下文关系",
+		formatOptionalMisunderstandingContract(),
 		"不要输出范围摘要、章节总览或全局总结；本请求只负责这些 U 单元的基础精析。",
 	].join("\n");
 }
@@ -975,7 +992,7 @@ function buildEpubAiReadingUnitDetailMessages(input: EpubAiReadingInput): {
 		"请只精析本请求列出的 U 单元。即使一次请求包含多个 U，也必须保持每个 U 与单独选择该 U 时相同的精析密度。",
 		"不得合并 U，不得跳过 U，不得把多个 U 压缩成目录摘要。",
 		"本请求可能只是大范围阅读任务中的一个批次；未出现在本批的 U 单元不代表不存在，也不代表正文缺失。",
-		"不要写“某 U 未提供正文”“后续 U 未提供”这类批次缺失说明；只分析本批 U，并用目录/范围信息描述关系。",
+		"不要写“某 U 未提供正文”“后续 U 未提供”这类批次缺失说明；只分析本批 U，并用目录/范围信息说明当前位置和阅读范围。",
 		"",
 		"# 定位规则",
 		sourceReferenceRule,
@@ -1021,7 +1038,6 @@ function buildEpubAiReadingRangeSummaryMessages(input: EpubAiReadingInput): {
 		"## 范围摘要",
 		"## 核心结论",
 		"## 知识结构",
-		"## 章节关系",
 		"## 建议精读路径",
 		"",
 		"# 阅读范围",
@@ -1109,8 +1125,8 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 	].join("\n");
 	const user = [
 		"# 任务",
-		"请基于“精读范围正文”生成 EPUB AI 阅读笔记：总结范围内容，提取核心结论、关键知识点、重要原文与解读，并说明它和前后目录的关系。",
-		"摘要、核心结论、知识点和重要原文只能来自精读范围正文；范围外目录或线索只允许用于“章节关系”和“建议精读位置”。",
+		"请基于“精读范围正文”生成 EPUB AI 阅读笔记：总结范围内容，提取核心结论、关键知识点、重要原文与解读。",
+		"摘要、核心结论、知识点和重要原文只能来自精读范围正文；范围外目录或线索只允许用于理解范围位置和建议精读位置。",
 		"",
 		"# 阅读策略",
 		...outputPlan.promptLines,
@@ -1132,8 +1148,9 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		closeReadingUnitText
 			? "- 重要原文与解读：3-6 处，尽量带来源占位符；只有该栏目确实能帮助理解时才输出，不要为凑栏目重复正文。"
 			: "",
-		closeReadingUnitText ? "- 容易误解的点：2-4 条。" : "",
-		closeReadingUnitText ? "- 与上下文关系：1-3 条。" : "",
+		closeReadingUnitText
+			? `- 选择性内容：由 AI 自行判断是否输出“容易误解的点”。${formatOptionalMisunderstandingContract()}`
+			: "",
 		closeReadingUnitText,
 		closeReadingUnitText ? "" : "",
 		"# 输出格式",
@@ -1147,16 +1164,23 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		outputPlan.level === "leaf" ? "" : "## 按小节精读",
 		outputPlan.level === "leaf"
 			? ""
-			: "- 仅在选择了包含下级的范围时输出。这里是基础精析层，不是简短目录摘要；每个小节建议包含：小节摘要、核心结论、关键知识点、重要原文与解读、容易误解的点、与上下文关系。若提供了“必须精析单元”，必须按 U 单元逐项输出，并沿用上方“单个 U 单元标准精析模板”。每个 U 单元都不得省略、合并或压缩成目录摘要。范围摘要、核心结论、章节关系属于全局总结层，不得替代这里的 U 单元精析。",
-		"## 重要原文与解读",
-		`- 格式：\`原文/位置：短摘录或位置说明 ${sourceReferenceExample}\`；\`为什么重要：...\`；\`读法：...\`。`,
-		"- 不要整段搬运原文；优先选择对理解本范围最关键的 3-8 处。",
+			: "- 仅在选择了包含下级的范围时输出。这里是基础精析层，不是简短目录摘要；每个小节必须包含：小节摘要、核心结论、关键知识点、重要原文与解读。容易误解的点只有在有实质价值时才输出。若提供了“必须精析单元”，必须按 U 单元逐项输出，并沿用上方“单个 U 单元标准精析模板”。每个 U 单元都不得省略、合并或压缩成目录摘要。范围摘要、核心结论属于全局总结层，不得替代这里的 U 单元精析。",
+		closeReadingUnitText
+			? "- U 单元内已经输出重要原文与解读；不要再额外输出外层 `## 重要原文与解读`，避免同一内容重复。"
+			: "## 重要原文与解读",
+		closeReadingUnitText
+			? ""
+			: `- 格式：原文/位置：短摘录或位置说明 ${sourceReferenceExample}；为什么重要：...；读法：...。`,
+		closeReadingUnitText
+			? ""
+			: "- 不要用反引号包住原文/位置整行或原文按钮；只有术语、命令、代码片段本身需要反引号。",
+		closeReadingUnitText
+			? ""
+			: "- 不要整段搬运原文；优先选择对理解本范围最关键的 3-8 处。",
 		"## 概念/术语",
-		"- 解释本范围中的术语，并指出它和具体操作或后续章节的关系。",
+		"- 解释本范围中的术语，并说明它的使用条件、限制和对应的具体操作。",
 		"## 容易误解的点",
-		"- 写读者可能误解、跳过或机械照做的地方，并给出正确理解。",
-		"## 章节关系",
-		"- 区分“从正文可见”和“从目录推断”；范围外内容只能作为关系线索，不要当成本范围正文事实。",
+		`- 选择性输出。${formatOptionalMisunderstandingContract()}`,
 		"## 建议精读位置",
 		`- 给出建议回到 EPUB 精读的顺序；有来源时优先使用 ${sourceReferenceExample} 这种占位符。`,
 		"",
@@ -1180,7 +1204,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 			? "# \u9605\u8bfb\u8303\u56f4\u4e0e\u5916\u90e8\u7ed3\u6784\u7ebf\u7d22"
 			: "",
 		scopeContext
-			? "外部线索只用于理解章节关系、跨章引用和建议精读位置；摘要、核心结论、知识点和重要原文必须以下方“精读范围正文”为主。"
+			? "外部线索只用于理解范围位置和建议精读位置；摘要、核心结论、知识点和重要原文必须以下方“精读范围正文”为主。"
 			: "",
 		scopeContext,
 		sourceBlockText
@@ -2261,6 +2285,43 @@ function annotateCloseReadingUnitSections(
 	return markdown;
 }
 
+function removeDuplicateGlobalImportantSourceSections(
+	content: string,
+	result: EpubAiReadingResult,
+): string {
+	const hasCloseReadingUnits = (result.closeReadingUnits || []).some((unit) =>
+		normalizeConfigValue(unit.id),
+	);
+	if (!hasCloseReadingUnits) {
+		return content;
+	}
+	return content
+		.replace(
+			/(^|\r?\n)##\s+重要原文与解读\s*(?:\r?\n)([\s\S]*?)(?=\r?\n##\s+|\s*$)/g,
+			(_match, leading: string) => leading,
+		)
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+}
+
+function repairExistingAiReadingNoteSections(content: string): string {
+	return String(content || "").replace(
+		/<!-- weave-epub-ai-reading:start key="[^"]+" -->[\s\S]*?<!-- weave-epub-ai-reading:end key="[^"]+" -->/g,
+		(section) => {
+			if (!/\bdata-ai-unit-id=/.test(section)) {
+				return section;
+			}
+			return section
+				.replace(
+					/(^|\r?\n)##\s+重要原文与解读\s*(?:\r?\n)([\s\S]*?)(?=\r?\n##\s+|\r?\n<!-- weave-epub-ai-reading:end|\s*$)/g,
+					(_match, leading: string) => leading,
+				)
+				.replace(/\n{3,}/g, "\n\n")
+				.trim();
+		},
+	);
+}
+
 export function buildEpubAiReadingNoteSection(
 	result: EpubAiReadingResult,
 ): string {
@@ -2299,7 +2360,7 @@ export function buildEpubAiReadingNoteSection(
 		.filter(Boolean)
 		.join(" · ");
 	const content = annotateCloseReadingUnitSections(
-		result.content.trim(),
+		removeDuplicateGlobalImportantSourceSections(result.content.trim(), result),
 		result,
 		scopeLabel,
 	);
@@ -2450,7 +2511,9 @@ export async function upsertEpubAiReadingNote(
 	const existing = app.vault.getAbstractFileByPath(targetPath);
 	if (existing instanceof TFile) {
 		const current = await app.vault.read(existing);
-		const currentWithoutEmptyState = removeEpubAiReadingEmptyState(current);
+		const currentWithoutEmptyState = repairExistingAiReadingNoteSections(
+			removeEpubAiReadingEmptyState(current),
+		);
 		await app.vault.modify(
 			existing,
 			upsertSection(currentWithoutEmptyState, sectionMarkdown, key),
@@ -2479,6 +2542,11 @@ export async function ensureEpubAiReadingNote(
 		const current = await app.vault.read(existing);
 		if (!current.trim()) {
 			await app.vault.modify(existing, buildEpubAiReadingEmptyNoteMarkdown(book));
+		} else {
+			const repaired = repairExistingAiReadingNoteSections(current);
+			if (repaired !== current) {
+				await app.vault.modify(existing, repaired);
+			}
 		}
 		return existing;
 	}
