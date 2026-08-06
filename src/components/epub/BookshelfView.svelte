@@ -97,6 +97,16 @@
                 appendEpubImportDiagnostic,
                 summarizeEpubImportResult,
         } from '../../services/epub/epub-import-diagnostics';
+        import {
+                createReadingPackage,
+                downloadReadingPackage,
+                importReadingPackage,
+                pickReadingPackageArrayBuffer,
+                type ReadingPackageBookFormat,
+                type ReadingPackageModuleSelection,
+        } from '../../services/reading-package';
+        import { openReadingPackageExportModal } from '../modals/ReadingPackageExportModal';
+        import { showReadingPackageImportResultModal } from '../modals/ReadingPackageImportResultModal';
 
         interface EpubFileInfo {
                 path: string;
@@ -152,6 +162,13 @@
         interface ResolvedPortableBookDataContext {
                 targetPath: string;
                 location: EpubPortableBookDataLocation;
+        }
+
+        interface ResolvedReadingPackageBookContext {
+                bookFormat: ReadingPackageBookFormat;
+                bookId: string;
+                targetPath: string;
+                displayName: string;
         }
 
         interface BookNoteStats {
@@ -1621,6 +1638,60 @@
                 };
         }
 
+        async function resolveReadingPackageBookContext(
+                filePath: string
+        ): Promise<ResolvedReadingPackageBookContext | null> {
+                const normalizedOriginalPath = normalizePath(filePath || '');
+                if (!normalizedOriginalPath) {
+                        return null;
+                }
+                const resolvedPath = await resolveActiveBookPath(filePath);
+                const targetPath = normalizePath(resolvedPath || normalizedOriginalPath);
+                const file = app.vault.getAbstractFileByPath(targetPath);
+                if (!(file instanceof TFile) || !isSupportedBookFile(file)) {
+                        if (await storageService.isBookshelfSourceMissing(filePath)) {
+                                await removeMissingBookshelfEntry(filePath);
+                                new Notice(t('epub.bookshelf.notFoundRemoved'));
+                        }
+                        return null;
+                }
+
+                const storedBook = await storageService.findBookByFilePath(targetPath)
+                        || (targetPath !== normalizedOriginalPath
+                                ? await storageService.findBookByFilePath(normalizedOriginalPath)
+                                : null);
+                const bookFormat: ReadingPackageBookFormat = isPdfBookFormat(targetPath) ? 'pdf' : 'epub';
+                let bookId = String(storedBook?.id || '').trim();
+                if (bookFormat === 'epub') {
+                        const location = await resolvePortableBookDataLocationForBook(
+                                storedBook,
+                                targetPath,
+                                normalizedOriginalPath
+                        );
+                        if (!location) {
+                                new Notice(t('epub.bookshelf.dataLocationUnavailable'));
+                                return null;
+                        }
+                        bookId = location.bookId;
+                }
+
+                return {
+                        bookFormat,
+                        bookId,
+                        targetPath,
+                        displayName:
+                                String(storedBook?.metadata?.title || '').trim()
+                                || stripSupportedBookExtension(file.name)
+                                || file.basename,
+                };
+        }
+
+        function hasAnyReadingPackageSelection(
+                modules: ReadingPackageModuleSelection
+        ): boolean {
+                return Object.values(modules).some(Boolean);
+        }
+
         function getElectronShell(): {
                 openPath?: (path: string) => Promise<string>;
                 showItemInFolder?: (path: string) => void;
@@ -1765,6 +1836,62 @@
                                         : 'epub.bookshelf.annotationPackageExportFailed',
                                 { message: error instanceof Error ? error.message : String(error) }
                         ));
+                }
+        }
+
+        async function exportReadingPackageFromShelfBook(filePath: string): Promise<void> {
+                try {
+                        const context = await resolveReadingPackageBookContext(filePath);
+                        if (!context) {
+                                return;
+                        }
+                        const modules = await openReadingPackageExportModal(app, {
+                                bookFormat: context.bookFormat,
+                        });
+                        if (!modules) {
+                                return;
+                        }
+                        if (!hasAnyReadingPackageSelection(modules)) {
+                                new Notice('请选择至少一项导出内容');
+                                return;
+                        }
+                        const result = await createReadingPackage(app, {
+                                bookFormat: context.bookFormat,
+                                bookId: context.bookId,
+                                filePath: context.targetPath,
+                                displayName: context.displayName,
+                                modules,
+                        });
+                        downloadReadingPackage(result);
+                        new Notice(`阅读包已导出：${result.fileName}`);
+                } catch (error) {
+                        logger.error('Failed to export reading package:', error);
+                        new Notice(`阅读包导出失败：${error instanceof Error ? error.message : String(error)}`);
+                }
+        }
+
+        async function importReadingPackageToShelfBook(filePath: string): Promise<void> {
+                const arrayBuffer = await pickReadingPackageArrayBuffer();
+                if (!arrayBuffer) {
+                        return;
+                }
+                try {
+                        const context = await resolveReadingPackageBookContext(filePath);
+                        if (!context) {
+                                return;
+                        }
+                        const result = await importReadingPackage(app, arrayBuffer, {
+                                preferredBookId: context.bookId || undefined,
+                                targetBookPath: context.targetPath,
+                                defaultBookFolder: '/',
+                        });
+                        dispatchBookshelfDataChanged();
+                        await refreshBookshelf();
+                        showReadingPackageImportResultModal(app, result);
+                        new Notice('阅读包导入完成');
+                } catch (error) {
+                        logger.error('Failed to import reading package:', error);
+                        new Notice(`阅读包导入失败：${error instanceof Error ? error.message : String(error)}`);
                 }
         }
 
@@ -2326,6 +2453,20 @@
                                 .setIcon('clipboard-copy')
                                 .onClick(() => {
                                         void copyPortableBookAnnotationPath(filePath);
+                                });
+                });
+                menu.addItem((item) => {
+                        item.setTitle('导出阅读包')
+                                .setIcon('archive')
+                                .onClick(() => {
+                                        void exportReadingPackageFromShelfBook(filePath);
+                                });
+                });
+                menu.addItem((item) => {
+                        item.setTitle('导入阅读包到此书')
+                                .setIcon('upload-cloud')
+                                .onClick(() => {
+                                        void importReadingPackageToShelfBook(filePath);
                                 });
                 });
                 menu.addItem((item) => {
