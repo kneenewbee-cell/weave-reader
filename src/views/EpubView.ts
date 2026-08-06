@@ -24,7 +24,6 @@ import { canOpenEpubFile } from "../services/epub/epub-premium";
 import { stripSupportedBookExtension } from "../services/epub/book-format";
 import {
 	EPUB_DUAL_WINDOW_SESSION_EVENT,
-	EPUB_RUNTIME,
 	EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT,
 	dispatchEpubAnnotationCompareContextEvent,
 	dispatchEpubDualWindowReaderDisplayEvent,
@@ -42,12 +41,14 @@ import {
 	type EpubDualWindowSessionDetail,
 	type EpubDualWindowSwapPanes,
 } from "../services/epub";
+import { EPUB_RUNTIME } from "../services/epub/epub-runtime";
 import type { EpubCanvasService } from "../services/epub/EpubCanvasService";
 import { reportEpubError } from "../services/epub/epub-error";
 import type { CanvasLayoutDirection } from "../services/epub/canvas-types";
-import { resolveRecentEpubPath } from "../utils/epub-leaf-utils";
+import { pathsReferToSameOpenBook, resolveRecentEpubPath } from "../utils/epub-leaf-utils";
 import {
 	pendingLocateFromLegacyState,
+	type BookLocateIntent,
 	type PendingLocateState,
 } from "../services/navigation/navigation-intent";
 import type { CanvasViewLike, WorkspaceLeafWithGroup } from "../types/obsidian-extensions";
@@ -151,8 +152,12 @@ export class EpubView extends ItemView {
 		updateReaderSettings?: (patch: Partial<EpubReaderSettings>) => Promise<void>;
 		setScreenshotSaveMode?: (saveAsImage: boolean) => void;
 		navigateToCfi?: (cfi: string, linkTextHint?: string) => void;
+		navigateToBookLocate?: (nav: BookLocateIntent) => void;
 		toggleTutorial?: () => void;
 		openAnnotationVersions?: () => Promise<void>;
+		openAiReading?: () => Promise<void>;
+		openAiReadingNote?: () => Promise<void>;
+		openAiReadingDualWindow?: () => Promise<void>;
 		addBookmark?: () => Promise<void>;
 		canUseReadingProgress?: () => boolean;
 		canUseReadingReference?: () => boolean;
@@ -411,8 +416,8 @@ export class EpubView extends ItemView {
 		}
 
 		const registerExcerptHeaderActions = () => {
-			this.annotationNoteBtn = this.addAction("notebook-pen", this.t("views.epubView.label.annotationNote"), () => {
-				void this.actionHandlers.openAnnotationNote?.();
+			this.annotationNoteBtn = this.addAction("notebook-tabs", "笔记", (evt) => {
+				this.openNotesMenu(evt);
 			});
 			this.annotationVersionsBtn = this.addAction("layers-3", "标注版本", () => {
 				void this.actionHandlers.openAnnotationVersions?.();
@@ -517,6 +522,8 @@ export class EpubView extends ItemView {
 		const excerptSettings = this.actionHandlers.getExcerptSettings?.();
 		const readerSettings = this.actionHandlers.getReaderSettings?.();
 
+		this.appendNotesPaneMenu(menu);
+
 		this.appendDualWindowPaneMenu(menu);
 
 		if (readerSettings && this.actionHandlers.updateReaderSettings) {
@@ -567,6 +574,52 @@ export class EpubView extends ItemView {
 		}
 	}
 
+	private appendNotesMenuItems(menu: Menu): boolean {
+		let hasItems = false;
+		if (this.actionHandlers.openAnnotationNote) {
+			menu.addItem((item) => {
+				item.setTitle("打开标注笔记");
+				item.setIcon("notebook-pen");
+				item.onClick(() => {
+					void this.actionHandlers.openAnnotationNote?.();
+				});
+			});
+			hasItems = true;
+		}
+		if (this.actionHandlers.openAiReadingNote) {
+			menu.addItem((item) => {
+				item.setTitle("打开 AI 阅读笔记");
+				item.setIcon("sparkles");
+				item.onClick(() => {
+					void this.actionHandlers.openAiReadingNote?.();
+				});
+			});
+			hasItems = true;
+		}
+		return hasItems;
+	}
+
+	private appendNotesPaneMenu(menu: Menu): void {
+		if (!this.actionHandlers.openAnnotationNote && !this.actionHandlers.openAiReadingNote) {
+			return;
+		}
+		menu.addItem((item) => {
+			item.setTitle("笔记");
+			item.setIcon("notebook-tabs");
+			const notesMenu = this.resolveMenuSubmenu(item, menu);
+			this.appendNotesMenuItems(notesMenu);
+		});
+		menu.addSeparator();
+	}
+
+	private openNotesMenu(evt: MouseEvent | Event): void {
+		const menu = new Menu();
+		if (!this.appendNotesMenuItems(menu)) {
+			return;
+		}
+		menu.showAtMouseEvent(evt as MouseEvent);
+	}
+
 	private appendDualWindowPaneMenu(menu: Menu): void {
 		if (!this.filePath) {
 			return;
@@ -582,6 +635,15 @@ export class EpubView extends ItemView {
 					void this.actionHandlers.openAnnotationDualWindow?.();
 				});
 			});
+			if (this.actionHandlers.openAiReadingDualWindow) {
+				dualWindowMenu.addItem((subItem) => {
+					subItem.setTitle("原书与 AI 阅读笔记");
+					subItem.setIcon("book-open-check");
+					subItem.onClick(() => {
+						void this.actionHandlers.openAiReadingDualWindow?.();
+					});
+				});
+			}
 			dualWindowMenu.addItem((subItem) => {
 				subItem.setTitle("\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4");
 				subItem.setIcon("git-compare");
@@ -1331,10 +1393,10 @@ export class EpubView extends ItemView {
 			}
 		);
 		this.inlineAnnotationNoteBtn = this.appendInlineActionButton(
-			"notebook-pen",
-			this.t("views.epubView.label.annotationNote"),
-			() => {
-				void this.actionHandlers.openAnnotationNote?.();
+			"notebook-tabs",
+			"笔记",
+			(evt) => {
+				this.openNotesMenu(evt);
 			}
 		);
 		this.inlineAnnotationVersionsBtn = this.appendInlineActionButton(
@@ -1791,10 +1853,26 @@ export class EpubView extends ItemView {
 		if (!pending) {
 			return;
 		}
+		if (this.actionHandlers.navigateToBookLocate) {
+			this.actionHandlers.navigateToBookLocate(pending);
+			return;
+		}
 		const cfi = pending.cfi || pending.href || "";
 		if (cfi) {
 			this.actionHandlers.navigateToCfi?.(cfi, pending.text || "");
 		}
+	}
+
+	private getAiReadingEnvPaths(): string[] {
+		const app = this.app || this.plugin.app;
+		const configDir = normalizePath(String(app?.vault?.configDir || ".obsidian").trim() || ".obsidian");
+		const pluginId = String(
+			(this.plugin as { manifest?: { id?: string } }).manifest?.id || "weave-reader"
+		).trim();
+		return Array.from(new Set([
+			`${configDir}/plugins/${pluginId}/.env`,
+			`${configDir}/plugins/weave-reader/.env`,
+		].map((path) => normalizePath(path))));
 	}
 
 	private buildReaderAppProps(
@@ -1802,9 +1880,12 @@ export class EpubView extends ItemView {
 		initialPendingCfi: string,
 		initialPendingText: string
 	) {
+		const app = this.app || this.plugin.app;
 		return {
-			app: this.app,
+			app,
 			filePath: this.filePath,
+			aiConfigHost: this.plugin,
+			aiReadingEnvPaths: this.getAiReadingEnvPaths(),
 			annotationCompare: this.annotationCompare,
 			annotationCompareContextSourceId: this.readerDisplaySyncSourceId,
 			onTitleChange: (title: string) => {
@@ -1993,7 +2074,11 @@ export class EpubView extends ItemView {
 				const detail = (event as CustomEvent<EpubDualWindowSessionDetail>).detail || null;
 				const eventPath = normalizePath(String(detail?.filePath || "").trim());
 				const currentPath = normalizePath(String(this.filePath || "").trim());
-				if (!eventPath || !currentPath || eventPath !== currentPath) {
+				if (
+					!eventPath ||
+					!currentPath ||
+					(eventPath !== currentPath && !pathsReferToSameOpenBook(eventPath, currentPath))
+				) {
 					return;
 				}
 				this.updateDualWindowSwapBtn();
@@ -2436,8 +2521,11 @@ export class EpubView extends ItemView {
 	}
 
 	private updateAnnotationNoteBtn(): void {
-		const label = this.t("views.epubView.label.annotationNote");
-		const visible = Boolean(this.filePath && this.actionHandlers.openAnnotationNote);
+		const label = "笔记";
+		const visible = Boolean(
+			this.filePath &&
+				(this.actionHandlers.openAnnotationNote || this.actionHandlers.openAiReadingNote)
+		);
 		this.applyActionButtonState(this.annotationNoteBtn, {
 			label,
 			active: false,

@@ -69,7 +69,8 @@ vi.mock('../EpubStorageService', () => ({
 
 import { TFile } from 'obsidian';
 import { EpubStorageService } from '../EpubStorageService';
-import { openEpubReader } from '../epub-plugin-support';
+import { openEpubAiReadingNote, openEpubReader } from '../epub-plugin-support';
+import { getEpubDualWindowSession } from '../epub-dual-window-workspace';
 import { EPUB_RUNTIME } from '../epub-runtime';
 
 function createVaultFile(path: string): TFile {
@@ -141,5 +142,130 @@ describe('epub-plugin-support openEpubReader', () => {
       type: EPUB_RUNTIME.events.bookshelfDataChanged,
     }));
     expect(notices).toEqual([]);
+  });
+});
+
+describe('epub-plugin-support openEpubAiReadingNote', () => {
+  it('opens AI reading notes in the dedicated EPUB AI reading note view', async () => {
+    const noteFile = createVaultFile('AI阅读笔记/demo - AI阅读.md');
+    const leaf = {
+      setViewState: vi.fn(async () => undefined),
+    };
+    const app = {
+      workspace: {
+        getLeavesOfType: vi.fn(() => []),
+        getLeaf: vi.fn(() => leaf),
+        revealLeaf: vi.fn(),
+      },
+    } as any;
+
+    await openEpubAiReadingNote(app, noteFile, {
+      sourceFile: 'Books/demo.epub',
+      openMode: 'existing',
+      focus: true,
+    });
+
+    expect(leaf.setViewState).toHaveBeenCalledWith({
+      type: EPUB_RUNTIME.viewTypes.aiReadingNote,
+      active: true,
+      state: {
+        notePath: 'AI阅读笔记/demo - AI阅读.md',
+        sourceFile: 'Books/demo.epub',
+      },
+    });
+    expect(app.workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+  });
+
+  it('opens AI reading notes in a registered EPUB dual-window session', async () => {
+    const noteFile = createVaultFile('AI阅读笔记/demo - AI阅读.md');
+    const readerLeaf = {
+      containerEl: document.createElement('div'),
+      view: {
+        containerEl: document.createElement('div'),
+        contentEl: document.createElement('div'),
+        getCurrentFilePath: () => 'Books/demo.epub',
+      },
+      getViewState: vi.fn(() => ({
+        type: EPUB_RUNTIME.viewTypes.reader,
+        state: { filePath: 'Books/demo.epub' },
+      })),
+      setViewState: vi.fn(async () => undefined),
+    };
+    const noteLeaf = {
+      containerEl: document.createElement('div'),
+      view: {
+        containerEl: document.createElement('div'),
+        contentEl: document.createElement('div'),
+      },
+      getViewState: vi.fn(() => ({
+        type: EPUB_RUNTIME.viewTypes.aiReadingNote,
+        state: {
+          notePath: noteFile.path,
+          sourceFile: 'Books/demo.epub',
+          dualWindowMode: true,
+        },
+      })),
+      setViewState: vi.fn(async () => undefined),
+    };
+    const existingAiNoteLeaf = {
+      getViewState: vi.fn(() => ({
+        type: EPUB_RUNTIME.viewTypes.aiReadingNote,
+        state: {
+          notePath: noteFile.path,
+          sourceFile: 'Books/demo.epub',
+        },
+      })),
+      detach: vi.fn(async () => undefined),
+    };
+    const app = {
+      workspace: {
+        getLeavesOfType: vi.fn((viewType: string) => {
+          if (viewType === EPUB_RUNTIME.viewTypes.reader) {
+            return [readerLeaf];
+          }
+          if (viewType === EPUB_RUNTIME.viewTypes.aiReadingNote) {
+            return noteLeaf.setViewState.mock.calls.length > 0
+              ? [noteLeaf, existingAiNoteLeaf]
+              : [existingAiNoteLeaf];
+          }
+          return [];
+        }),
+        getLeaf: vi.fn(() => noteLeaf),
+        revealLeaf: vi.fn(),
+      },
+      vault: {
+        configDir: '.obsidian',
+        getAbstractFileByPath: vi.fn((path: string) =>
+          path === 'Books/demo.epub' ? createVaultFile(path) : null
+        ),
+      },
+    } as any;
+
+    await openEpubAiReadingNote(app, noteFile, {
+      bookId: 'book-1',
+      sourceFile: 'Books/demo.epub',
+      openMode: 'right-split',
+      dualWindowMode: true,
+      focus: false,
+    });
+
+    expect(noteLeaf.setViewState).toHaveBeenCalledWith({
+      type: EPUB_RUNTIME.viewTypes.aiReadingNote,
+      active: false,
+      state: {
+        bookId: 'book-1',
+        notePath: 'AI阅读笔记/demo - AI阅读.md',
+        sourceFile: 'Books/demo.epub',
+        dualWindowMode: true,
+      },
+    });
+    expect(getEpubDualWindowSession(app, 'Books/demo.epub')).toMatchObject({
+      mode: 'book-ai-reading-note',
+      bookId: 'book-1',
+      filePath: 'Books/demo.epub',
+      notePath: 'AI阅读笔记/demo - AI阅读.md',
+    });
+    expect(noteLeaf.containerEl.classList.contains('weave-epub-annotation-note-dual-window-view')).toBe(true);
+    expect(existingAiNoteLeaf.detach).toHaveBeenCalledOnce();
   });
 });

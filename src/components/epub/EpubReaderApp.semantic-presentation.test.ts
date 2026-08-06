@@ -82,4 +82,15 @@ describe("EpubReaderApp semantic presentation refresh", () => {
 		expect(refreshFunctionBody).toContain("readerRenderKey += 1;");
 		expect(refreshFunctionBody).toContain("queueOpenAnnotationNoteRefresh(annotationBookId, { force: true });");
 	});
+
+	it("returns close-reading units for scoped EPUB AI reading inputs", () => {
+		const source = readReaderAppSource();
+
+		expect(source).toContain("buildAiReadingCloseReadingUnitSources");
+		expect(source).toContain("buildEpubAiReadingCloseReadingUnits");
+		expect(source).toContain("formatEpubAiReadingUnitSourceBlockId(unit.id, index)");
+		expect(source).toMatch(
+			/closeReadingUnits:\s*unitSources\?\.sourceBlocks\.length[\s\S]*\?[\s\S]*unitSources\.closeReadingUnits[\s\S]*:[\s\S]*\[\]/
+		);
+	});
 });

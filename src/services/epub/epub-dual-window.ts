@@ -3,7 +3,11 @@ export const EPUB_DUAL_WINDOW_SESSION_EVENT = "weave-epub-dual-window-session";
 export const EPUB_DUAL_WINDOW_READER_DISPLAY_EVENT = "weave-epub-dual-window-reader-display";
 export const EPUB_ANNOTATION_COMPARE_CONTEXT_EVENT = "weave-epub-annotation-compare-context";
 
-export type EpubDualWindowMode = "book-annotation-note" | "annotation-compare" | "book-translation";
+export type EpubDualWindowMode =
+	| "book-annotation-note"
+	| "book-ai-reading-note"
+	| "annotation-compare"
+	| "book-translation";
 export type EpubAnnotationComparePaneRole = "editable" | "readonly";
 export type EpubDualWindowReaderFlowMode = "paginated" | "scrolled";
 export type EpubDualWindowReaderLayoutMode = "paginated" | "double";

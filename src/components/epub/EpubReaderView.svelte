@@ -89,6 +89,7 @@
 	let lastResize: { width: number; height: number } | null = null;
 	let highlightsReady = false;
 	let detachRelocatedHandler: (() => void) | null = null;
+	let detachPaginationHandler: (() => void) | null = null;
 	let skipNextAppearanceSync = false;
 	let renderSessionToken = 0;
 	let mobileStabilizationToken = 0;
@@ -590,6 +591,7 @@
 			setupResizeObserver();
 
 			registerRelocatedHandler();
+			registerPaginationHandler();
 
 			// Let the reader layout settle after settings/resize before navigating
 			await new Promise(r => window.setTimeout(r, 50));
@@ -693,6 +695,10 @@
 		if (detachRelocatedHandler) {
 			detachRelocatedHandler();
 			detachRelocatedHandler = null;
+		}
+		if (detachPaginationHandler) {
+			detachPaginationHandler();
+			detachPaginationHandler = null;
 		}
 		if (retryTimer) {
 			window.clearTimeout(retryTimer);
@@ -840,6 +846,13 @@
 		});
 	}
 
+	function registerPaginationHandler() {
+		if (detachPaginationHandler || typeof readerService.onPaginationChanged !== 'function') return;
+		detachPaginationHandler = readerService.onPaginationChanged((info) => {
+			notifyPaginationChange(info);
+		});
+	}
+
 	async function handleReaderModeChange() {
 		if (!rendered) return;
 		if (
@@ -954,6 +967,10 @@
 			if (detachRelocatedHandler) {
 				detachRelocatedHandler();
 				detachRelocatedHandler = null;
+			}
+			if (detachPaginationHandler) {
+				detachPaginationHandler();
+				detachPaginationHandler = null;
 			}
 			if (retryTimer) window.clearTimeout(retryTimer);
 			if (highlightReapplyTimer) window.clearTimeout(highlightReapplyTimer);

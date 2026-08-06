@@ -14,6 +14,7 @@ import {
 	type EpubDualWindowMode,
 	type EpubDualWindowSessionDetail,
 } from "./epub-dual-window";
+import { EPUB_RUNTIME } from "./epub-runtime";
 
 export interface EpubDualWindowSession {
 	mode: EpubDualWindowMode;
@@ -48,7 +49,7 @@ export interface EpubDualWindowPosition {
 	top: number;
 }
 
-export type EpubDualWindowSideKind = "markdown" | "epub" | "translation";
+export type EpubDualWindowSideKind = "markdown" | "ai-reading" | "epub" | "translation";
 
 export interface EpubOpenDualWindowSession {
 	mode: EpubDualWindowMode;
@@ -266,6 +267,43 @@ function findMarkdownLeafByPath(app: App, notePath: string): WorkspaceLeaf | nul
 	return null;
 }
 
+function findAiReadingNoteLeafByPath(app: App, notePath: string): WorkspaceLeaf | null {
+	const targetPath = cleanPath(notePath);
+	if (!targetPath) {
+		return null;
+	}
+	for (const leaf of app.workspace.getLeavesOfType(EPUB_RUNTIME.viewTypes.aiReadingNote)) {
+		try {
+			const state = leaf.getViewState?.()?.state as Record<string, unknown> | undefined;
+			if (cleanPath(state?.notePath) === targetPath) {
+				return leaf;
+			}
+		} catch {
+			continue;
+		}
+	}
+	return null;
+}
+
+function findDualWindowNoteLeafByPath(
+	app: App,
+	session: Pick<EpubDualWindowSession, "mode" | "notePath">
+): WorkspaceLeaf | null {
+	if (session.mode === "book-ai-reading-note") {
+		return findAiReadingNoteLeafByPath(app, session.notePath);
+	}
+	return findMarkdownLeafByPath(app, session.notePath);
+}
+
+function isAiReadingNoteLeafInDualWindowMode(leaf: WorkspaceLeaf | null): boolean {
+	try {
+		const state = leaf?.getViewState?.()?.state as Record<string, unknown> | undefined;
+		return state?.dualWindowMode === true;
+	} catch {
+		return false;
+	}
+}
+
 function toEventDetail(session: EpubDualWindowSession, active: boolean): EpubDualWindowSessionDetail {
 	return {
 		mode: session.mode,
@@ -332,13 +370,16 @@ export async function cleanupStaleEpubDualWindowSessions(
 	let clearedAnnotationComparePanes = 0;
 
 	for (const session of Array.from(getSessionMap(app).values())) {
-		if (session.mode !== "book-annotation-note") {
+		if (session.mode !== "book-annotation-note" && session.mode !== "book-ai-reading-note") {
 			continue;
 		}
 		const mainLeaf = findOpenEpubLeaf(app, session.filePath);
-		const sideLeaf = findMarkdownLeafByPath(app, session.notePath);
+		const sideLeaf = findDualWindowNoteLeafByPath(app, session);
 		const isDualWindowNote =
-			sideLeaf && (await readGeneratedAnnotationNoteDualWindowMode(app, session.notePath));
+			sideLeaf &&
+			(session.mode === "book-ai-reading-note"
+				? isAiReadingNoteLeafInDualWindowMode(sideLeaf)
+				: await readGeneratedAnnotationNoteDualWindowMode(app, session.notePath));
 		if (!mainLeaf || !sideLeaf || mainLeaf === sideLeaf || !isDualWindowNote) {
 			if (unregisterEpubDualWindowSession(app, session.filePath)) {
 				removedNoteSessions += 1;
@@ -446,6 +487,39 @@ export async function restoreEpubDualWindowSessionsFromWorkspace(app: App): Prom
 		markEpubDualWindowPaneRoles(epubLeaf, noteLeaf);
 		restoredCount += 1;
 	}
+	for (const noteLeaf of app.workspace.getLeavesOfType(EPUB_RUNTIME.viewTypes.aiReadingNote)) {
+		const state = noteLeaf.getViewState?.()?.state as Record<string, unknown> | undefined;
+		if (state?.dualWindowMode !== true) {
+			markEpubDualWindowNoteLeaf(noteLeaf, false);
+			continue;
+		}
+		const notePath = cleanPath(state.notePath);
+		const filePath = cleanPath(state.sourceFile);
+		if (!notePath || !filePath) {
+			markEpubDualWindowNoteLeaf(noteLeaf, false);
+			continue;
+		}
+		const epubLeaf = findOpenEpubLeaf(app, filePath);
+		if (!epubLeaf || epubLeaf === noteLeaf) {
+			continue;
+		}
+		const existingSession = getEpubDualWindowSession(app, filePath);
+		if (
+			existingSession?.mode === "book-ai-reading-note" &&
+			cleanPath(existingSession.notePath) === notePath
+		) {
+			markEpubDualWindowPaneRoles(epubLeaf, noteLeaf);
+			continue;
+		}
+		registerEpubDualWindowSession(app, {
+			mode: "book-ai-reading-note",
+			bookId: cleanBookId(state.bookId) || filePath,
+			filePath,
+			notePath,
+		});
+		markEpubDualWindowPaneRoles(epubLeaf, noteLeaf);
+		restoredCount += 1;
+	}
 	return restoredCount;
 }
 
@@ -466,7 +540,7 @@ export function listOpenEpubDualWindowSessions(
 		}
 		seenNoteKeys.add(key);
 		const mainLeaf = findOpenEpubLeaf(app, session.filePath);
-		const sideLeaf = findMarkdownLeafByPath(app, session.notePath);
+		const sideLeaf = findDualWindowNoteLeafByPath(app, session);
 		if (!mainLeaf || !sideLeaf || mainLeaf === sideLeaf) {
 			unregisterEpubDualWindowSession(app, session.filePath);
 			continue;
@@ -476,7 +550,7 @@ export function listOpenEpubDualWindowSessions(
 			bookId: session.bookId,
 			filePath: session.filePath,
 			notePath: session.notePath,
-			sideKind: "markdown",
+			sideKind: session.mode === "book-ai-reading-note" ? "ai-reading" : "markdown",
 			mainLeaf,
 			sideLeaf,
 			complete: true,
@@ -586,7 +660,7 @@ export function resolveEpubDualWindowPanes(app: App, filePath: string): EpubDual
 		return null;
 	}
 	const epubLeaf = findOpenEpubLeaf(app, session.filePath);
-	const noteLeaf = findMarkdownLeafByPath(app, session.notePath);
+	const noteLeaf = findDualWindowNoteLeafByPath(app, session);
 	if (!epubLeaf || !noteLeaf || epubLeaf === noteLeaf) {
 		return null;
 	}
@@ -667,7 +741,10 @@ export async function swapEpubDualWindowPanes(
 	const sideState = panes.sideLeaf.getViewState();
 	await panes.mainLeaf.setViewState(sideState);
 	await panes.sideLeaf.setViewState(mainState);
-	if (panes.mode === "book-annotation-note" && panes.session) {
+	if (
+		(panes.mode === "book-annotation-note" || panes.mode === "book-ai-reading-note") &&
+		panes.session
+	) {
 		markEpubDualWindowPaneRoles(panes.sideLeaf, panes.mainLeaf);
 		dispatchEpubDualWindowSessionEvent(window, toEventDetail(panes.session, true));
 	}

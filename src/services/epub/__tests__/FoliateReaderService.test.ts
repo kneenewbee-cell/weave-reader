@@ -88,6 +88,86 @@ async function createSampleEpubBuffer(): Promise<ArrayBuffer> {
 	return zip.generateAsync({ type: "arraybuffer" });
 }
 
+async function createRepeatedTocLeafSampleEpubBuffer(): Promise<ArrayBuffer> {
+	const zip = new JSZip();
+	zip.file("mimetype", "application/epub+zip");
+	zip.file(
+		"META-INF/container.xml",
+		`<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+	<rootfiles>
+		<rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml" />
+	</rootfiles>
+</container>`
+	);
+	zip.file(
+		"OPS/content.opf",
+		`<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" unique-identifier="BookId" xmlns="http://www.idpf.org/2007/opf">
+	<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+		<dc:title>Repeated TOC Leaf Sample</dc:title>
+		<dc:language>en</dc:language>
+	</metadata>
+	<manifest>
+		<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+		<item id="chapter-1" href="text/chapter1.xhtml" media-type="application/xhtml+xml" />
+	</manifest>
+	<spine>
+		<itemref idref="chapter-1" />
+	</spine>
+</package>`
+	);
+	zip.file(
+		"OPS/nav.xhtml",
+		`<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+	<body>
+		<nav epub:type="toc">
+			<ol>
+				<li>
+					<a href="text/chapter1.xhtml#chapter">Chapter</a>
+					<ol>
+						<li>
+							<a href="text/chapter1.xhtml#topic">Topic</a>
+							<ol>
+								<li><a href="text/chapter1.xhtml#leaf-a">How it works...</a></li>
+								<li><a href="text/chapter1.xhtml#leaf-b">How it works...</a></li>
+							</ol>
+						</li>
+						<li>
+							<a href="text/chapter1.xhtml#other">Other Topic</a>
+							<ol>
+								<li><a href="text/chapter1.xhtml#leaf-c">How it works...</a></li>
+							</ol>
+						</li>
+					</ol>
+				</li>
+			</ol>
+		</nav>
+	</body>
+</html>`
+	);
+	zip.file(
+		"OPS/text/chapter1.xhtml",
+		`<html xmlns="http://www.w3.org/1999/xhtml">
+	<head><title>Chapter</title></head>
+	<body>
+		<h1 id="chapter">Chapter</h1>
+		<h2 id="topic">Topic</h2>
+		<h3 id="leaf-a">How it works...</h3>
+		<p>Current unit paragraph one.</p>
+		<p>Current unit paragraph two.</p>
+		<h3 id="leaf-b">How it works...</h3>
+		<p>Next sibling paragraph must not appear.</p>
+		<h2 id="other">Other Topic</h2>
+		<h3 id="leaf-c">How it works...</h3>
+		<p>Next branch paragraph must not appear.</p>
+	</body>
+</html>`
+	);
+	return zip.generateAsync({ type: "arraybuffer" });
+}
+
 async function createMultiParagraphChapterSampleEpubBuffer(): Promise<ArrayBuffer> {
 	const zip = new JSZip();
 	zip.file("mimetype", "application/epub+zip");
@@ -1020,6 +1100,44 @@ describe("FoliateReaderService", () => {
 		expect(renderer.getAttribute("max-inline-size")).toBe("804px");
 	});
 
+	it("applies paginated fit width before rendering after source navigation", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any) as any;
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 900, 800));
+
+		const renderWidths: Array<string | null> = [];
+		const renderer = document.createElement("foliate-paginator") as HTMLElement & {
+			render: ReturnType<typeof vi.fn>;
+			getContents: () => Array<{ index: number; doc: Document }>;
+		};
+		renderer.setAttribute("max-inline-size", "120px");
+		renderer.render = vi.fn(() => {
+			renderWidths.push(renderer.getAttribute("max-inline-size"));
+		});
+		renderer.getContents = () => [];
+
+		service.renderContainer = container;
+		service.foliateView = {
+			renderer,
+			clientWidth: 0,
+			offsetWidth: 0,
+			goTo: vi.fn().mockResolvedValue(undefined),
+		} as any;
+		service.currentWidthMode = "fit";
+		service.currentLayoutMode = "paginated";
+		service.currentFlowMode = "paginated";
+		service.currentPageMargin = 48;
+
+		await service.goToAndStabilize(
+			"epubcfi(/6/2!/4/2/6)",
+			undefined,
+			(service as any).sessionGuard.currentViewSessionToken
+		);
+
+		expect(renderWidths[0]).toBe("804px");
+	});
+
 	it("navigates toc hrefs with raw href targets while still canonicalizing reader state", async () => {
 		const service = new FoliateReaderService(createMockApp(await createSampleEpubBuffer()) as any);
 		try {
@@ -1172,6 +1290,51 @@ describe("FoliateReaderService", () => {
 			await service.goToLocation(sourceParagraph!.cfiRange);
 			expect(goToSpy).not.toHaveBeenCalled();
 			expect(service.getCurrentPosition().cfi).toBeTruthy();
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("optimistically updates pagination after page-turn APIs before relocate arrives", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const view = {
+				next: vi.fn().mockResolvedValue(undefined),
+				removeEventListener: vi.fn(),
+				close: vi.fn(),
+				remove: vi.fn(),
+			};
+			(service as any).foliateView = view;
+			(service as any).currentFlowMode = "paginated";
+			(service as any).currentPosition = {
+				chapterIndex: 0,
+				cfi: "epubcfi(/6/2)",
+				percent: 9,
+			};
+			(service as any).currentPaginationInfo = {
+				currentPage: 10,
+				totalPages: 100,
+			};
+			vi.spyOn((service as any).parser, "getTotalPositions").mockReturnValue(100);
+			vi.spyOn((service as any).parser, "getMetadata").mockReturnValue({
+				chapterCount: 2,
+			});
+			const paginationChanged = vi.fn();
+			const detach = service.onPaginationChanged(paginationChanged);
+
+			await service.nextPage();
+
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 11,
+				totalPages: 100,
+			});
+			expect(view.next).toHaveBeenCalledTimes(1);
+			expect(paginationChanged).toHaveBeenCalledTimes(1);
+			expect(paginationChanged.mock.calls[0]?.[0]).toMatchObject({
+				currentPage: 11,
+				totalPages: 100,
+			});
+			detach();
 		} finally {
 			service.destroy();
 		}
@@ -2079,6 +2242,185 @@ describe("FoliateReaderService", () => {
 			await vi.advanceTimersByTimeAsync(READER_SOURCE_LOCATE_FOCUS_DURATION_MS);
 
 			expect((service as any).temporaryHighlightDataMap.size).toBe(0);
+		} finally {
+			vi.useRealTimers();
+			service.destroy();
+		}
+	});
+
+	it("preserves pulse flash style on temporary source-locate highlights", async () => {
+		vi.useFakeTimers();
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const cfiRange = "epubcfi(/6/2!/4/2,/1:0,/1:9)";
+			vi.spyOn((service as any).parser, "canonicalizeLocation").mockResolvedValue(cfiRange);
+			vi.spyOn(service as any, "resolveNavigationRequest").mockResolvedValue({
+				canonical: cfiRange,
+			});
+
+			await service.navigateAndHighlight({
+				cfi: cfiRange,
+				text: "Search result snippet",
+				flashStyle: "pulse",
+			});
+
+			const [temporaryHighlight] = Array.from(
+				(service as any).temporaryHighlightDataMap.values()
+			) as Array<{ flashStyle?: string }>;
+			expect(temporaryHighlight?.flashStyle).toBe("pulse");
+		} finally {
+			vi.useRealTimers();
+			service.destroy();
+		}
+	});
+
+	it("falls back to temporary highlight segments when an AI source range cannot be continuous", async () => {
+		vi.useFakeTimers();
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const startCfi = "epubcfi(/6/2!/4/2,/1:0,/1:9)";
+			const middleCfi = "epubcfi(/6/2!/4/4,/1:0,/1:9)";
+			const endCfi = "epubcfi(/6/4!/4/2,/1:0,/1:9)";
+			vi.spyOn((service as any).parser, "canonicalizeLocation").mockImplementation(
+				async (cfi: string) => cfi,
+			);
+			vi.spyOn(service as any, "resolveNavigationRequest").mockResolvedValue({
+				canonical: startCfi,
+			});
+
+			await service.navigateAndHighlight({
+				cfi: startCfi,
+				text: "Source range",
+				flashStyle: "pulse",
+				rangeEndCfi: endCfi,
+				rangeCfis: [startCfi, middleCfi, endCfi],
+			});
+
+			const [temporaryHighlight] = Array.from(
+				(service as any).temporaryHighlightDataMap.values()
+			) as Array<{ segments?: Array<{ cfiRange: string; text: string }> }>;
+			expect(temporaryHighlight?.segments).toEqual([
+				{ cfiRange: startCfi, text: "Source range" },
+				{ cfiRange: middleCfi, text: "Source range" },
+				{ cfiRange: endCfi, text: "Source range" },
+			]);
+			const renderHighlights = (service as any).getHighlightsForSegmentedRender(
+				temporaryHighlight
+			) as Array<{ cfiRange: string; flashStyle?: string; temporary?: boolean }>;
+			expect(renderHighlights.map((highlight) => highlight.cfiRange)).toEqual([
+				startCfi,
+				middleCfi,
+				endCfi,
+			]);
+			expect(renderHighlights.every((highlight) => highlight.flashStyle === "pulse")).toBe(true);
+		} finally {
+			vi.useRealTimers();
+			service.destroy();
+		}
+	});
+
+	it("uses segmented temporary highlights for same-section AI source ranges", async () => {
+		vi.useFakeTimers();
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const startCfi = "epubcfi(/6/2!/4/2,/1:0,/1:9)";
+			const middleCfi = "epubcfi(/6/2!/4/4,/1:0,/1:9)";
+			const endCfi = "epubcfi(/6/2!/4/6,/1:0,/1:9)";
+			vi.spyOn((service as any).parser, "canonicalizeLocation").mockImplementation(
+				async (cfi: string) => cfi,
+			);
+			vi.spyOn(service as any, "resolveNavigationRequest").mockResolvedValue({
+				canonical: startCfi,
+			});
+
+			await service.navigateAndHighlight({
+				cfi: startCfi,
+				text: "Source range",
+				flashStyle: "pulse",
+				rangeEndCfi: endCfi,
+				rangeCfis: [startCfi, middleCfi, endCfi],
+			});
+
+			const [temporaryHighlight] = Array.from(
+				(service as any).temporaryHighlightDataMap.values()
+			) as Array<{ cfiRange?: string; segments?: Array<{ cfiRange: string; text: string }> }>;
+			expect(temporaryHighlight?.cfiRange).toBe(startCfi);
+			expect(temporaryHighlight?.segments).toEqual([
+				{ cfiRange: startCfi, text: "Source range" },
+				{ cfiRange: middleCfi, text: "Source range" },
+				{ cfiRange: endCfi, text: "Source range" },
+			]);
+		} finally {
+			vi.useRealTimers();
+			service.destroy();
+		}
+	});
+
+	it("preserves pulse flash style on persistent source-locate focus", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const cfiRange = "epubcfi(/6/2!/4/2,/1:0,/1:9)";
+			vi.spyOn((service as any).parser, "canonicalizeLocation").mockResolvedValue(cfiRange);
+			vi.spyOn(service as any, "resolveNavigationRequest").mockResolvedValue({
+				canonical: cfiRange,
+			});
+			(service as any).highlightDataMap.set("saved", {
+				cfiRange,
+				color: "yellow",
+				text: "Saved source",
+				presentation: "highlight",
+			});
+
+			await service.navigateAndHighlight({
+				cfi: cfiRange,
+				text: "Saved source",
+				flashStyle: "pulse",
+			});
+
+			const [focus] = Array.from(
+				(service as any).sourceLocateFocusByCfiKey.values()
+			) as Array<{ flashStyle?: string }>;
+			expect(focus?.flashStyle).toBe("pulse");
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("coalesces temporary source-locate highlight refreshes during repeated navigation", async () => {
+		vi.useFakeTimers();
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const previousCfi = "epubcfi(/6/2!/4/2,/1:0,/1:4)";
+			const nextCfi = "epubcfi(/6/2!/4/4,/1:0,/1:4)";
+			vi.spyOn((service as any).parser, "canonicalizeLocation").mockResolvedValue(nextCfi);
+			vi.spyOn(service as any, "resolveNavigationRequest").mockResolvedValue({
+				canonical: nextCfi,
+			});
+			const previousHighlight = {
+				cfiRange: previousCfi,
+				color: "yellow",
+				text: "Previous source",
+				temporary: true,
+			};
+			(service as any).temporaryHighlightDataMap.set(
+				getReaderHighlightIdentityKey(previousHighlight),
+				previousHighlight
+			);
+			const refreshSpy = vi.spyOn(service, "refreshHighlights");
+
+			await service.navigateAndHighlight({
+				cfi: nextCfi,
+				text: "Next source",
+				flashStyle: "highlight",
+			});
+
+			expect(refreshSpy).toHaveBeenCalledTimes(1);
+			expect((service as any).temporaryHighlightDataMap.size).toBe(1);
+			expect(
+				Array.from((service as any).temporaryHighlightDataMap.values()).map(
+					(highlight: { cfiRange: string }) => highlight.cfiRange
+				)
+			).toEqual([nextCfi]);
 		} finally {
 			vi.useRealTimers();
 			service.destroy();
@@ -3111,6 +3453,43 @@ describe("FoliateReaderService", () => {
 			expect(paragraph?.html).toContain("weave-paragraph-annotation");
 			expect(paragraph?.html).toContain('data-color="green"');
 			expect(paragraph?.html).toContain("Selection text for testing");
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("extracts AI reading source paragraphs only until the next TOC reading boundary", async () => {
+		const service = new FoliateReaderService(
+			createMockApp(await createRepeatedTocLeafSampleEpubBuffer()) as any
+		);
+		try {
+			await service.loadEpub("Books/repeated-toc-leaf.epub", "repeated-toc-leaf");
+			const flatItems = [
+				{ id: "chapter", label: "Chapter", href: "OPS/text/chapter1.xhtml#chapter", depth: 0 },
+				{ id: "topic", label: "Topic", href: "OPS/text/chapter1.xhtml#topic", depth: 1 },
+				{ id: "leaf-a", label: "How it works...", href: "OPS/text/chapter1.xhtml#leaf-a", depth: 2 },
+				{ id: "leaf-b", label: "How it works...", href: "OPS/text/chapter1.xhtml#leaf-b", depth: 2 },
+				{ id: "other", label: "Other Topic", href: "OPS/text/chapter1.xhtml#other", depth: 1 },
+				{ id: "leaf-c", label: "How it works...", href: "OPS/text/chapter1.xhtml#leaf-c", depth: 2 },
+			];
+
+			const paragraphs = await service.getTocParagraphsForReadingPoint?.(
+				"OPS/text/chapter1.xhtml#leaf-a",
+				"How it works...",
+				flatItems,
+				2,
+				{ includeHtml: true }
+			);
+
+			expect(paragraphs?.map((paragraph) => paragraph.text)).toEqual([
+				"How it works...",
+				"Current unit paragraph one.",
+				"Current unit paragraph two.",
+			]);
+			expect(paragraphs?.map((paragraph) => paragraph.text).join("\n")).not.toContain(
+				"Next sibling paragraph"
+			);
+			expect(paragraphs?.every((paragraph) => paragraph.cfiRange)).toBe(true);
 		} finally {
 			service.destroy();
 		}

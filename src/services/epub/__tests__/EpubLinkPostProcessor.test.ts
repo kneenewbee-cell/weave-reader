@@ -1,4 +1,4 @@
-vi.mock('obsidian', () => ({
+vi.mock("obsidian", () => ({
 	App: class MockApp {},
 	TFile: class MockTFile {},
 	ItemView: class MockItemView {},
@@ -13,40 +13,61 @@ vi.mock('obsidian', () => ({
 	PluginSettingTab: class MockPluginSettingTab {},
 	Platform: { isMobile: false },
 	MarkdownPostProcessorContext: class MarkdownPostProcessorContext {},
+	MarkdownRenderer: {
+		render: vi.fn(
+			async (
+				_app: unknown,
+				markdown: string,
+				el: HTMLElement,
+				_sourcePath: string,
+			) => {
+				el.textContent = markdown;
+			},
+		),
+	},
+	Component: class MockComponent {},
 	setIcon: vi.fn(),
-	normalizePath: (value: string) => String(value || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, ''),
+	normalizePath: (value: string) =>
+		String(value || "")
+			.replace(/\\/g, "/")
+			.replace(/\/+/g, "/")
+			.replace(/\/$/, ""),
 }));
 
-import { createEpubLinkPostProcessor } from '../EpubLinkPostProcessor';
-import { EpubLinkService } from '../EpubLinkService';
 import {
-	EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
-} from '../epub-dual-window';
-import { registerEpubHost, unregisterEpubHost } from '../epub-host';
+	collectAiReadingSourceRanges,
+	createEpubLinkPostProcessor,
+	filterAiReadingSourceMarkdownByType,
+} from "../EpubLinkPostProcessor";
+import { EpubLinkService } from "../EpubLinkService";
+import { EPUB_DUAL_WINDOW_ANNOTATION_EVENT } from "../epub-dual-window";
+import { EPUB_AI_READING_ALL_SCOPE_ID } from "../epub-ai-reading-scope";
+import { registerEpubHost, unregisterEpubHost } from "../epub-host";
+import { MarkdownRenderer, TFile } from "obsidian";
 
 beforeAll(() => {
-	Object.defineProperty(HTMLElement.prototype, 'addClass', {
+	Object.defineProperty(HTMLElement.prototype, "addClass", {
 		configurable: true,
 		value(this: HTMLElement, className: string) {
 			this.classList.add(className);
 		},
 	});
-	Object.defineProperty(HTMLElement.prototype, 'removeClass', {
+	Object.defineProperty(HTMLElement.prototype, "removeClass", {
 		configurable: true,
 		value(this: HTMLElement, className: string) {
 			this.classList.remove(className);
 		},
 	});
-	Object.defineProperty(HTMLElement.prototype, 'empty', {
+	Object.defineProperty(HTMLElement.prototype, "empty", {
 		configurable: true,
 		value(this: HTMLElement) {
 			this.replaceChildren();
 		},
 	});
-	Object.defineProperty(HTMLElement.prototype, 'createSpan', {
+	Object.defineProperty(HTMLElement.prototype, "createSpan", {
 		configurable: true,
 		value(this: HTMLElement, options?: { cls?: string; text?: string }) {
-			const span = document.createElement('span');
+			const span = document.createElement("span");
 			if (options?.cls) {
 				span.className = options.cls;
 			}
@@ -59,195 +80,677 @@ beforeAll(() => {
 	});
 });
 
-describe('EpubLinkPostProcessor', () => {
+describe("EpubLinkPostProcessor", () => {
+	it("filters AI reading source markdown to core sections only", () => {
+		const markdown = [
+			"## U191 第五章：图像处理 > 图像对齐 > 操作指南...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="第五章：图像处理 &gt; 图像对齐 &gt; 操作指南..." data-scope-href="text/ch5.xhtml#steps"></div>',
+			"### 小节摘要",
+			"summary should be hidden",
+			"### 核心结论",
+			"core should be visible",
+			"### 关键知识点",
+			"knowledge should be hidden",
+		].join("\n");
+
+		const [range] = collectAiReadingSourceRanges(markdown);
+		const filtered = filterAiReadingSourceMarkdownByType(range.markdown, "core");
+
+		expect(filtered).toContain("核心结论");
+		expect(filtered).toContain("core should be visible");
+		expect(filtered).not.toContain("小节摘要");
+		expect(filtered).not.toContain("summary should be hidden");
+		expect(filtered).not.toContain("关键知识点");
+		expect(filtered).not.toContain("knowledge should be hidden");
+	});
+
 	beforeEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it('applies derived EPUB callout color and style attributes for combined metadata', () => {
-		const container = document.createElement('div');
+	it("applies derived EPUB callout color and style attributes for combined metadata", () => {
+		const container = document.createElement("div");
 		container.innerHTML = [
 			'<div class="callout" data-callout="epub" data-callout-metadata="purple+wavy"></div>',
 			'<div class="callout" data-callout="epub" data-callout-metadata="underline red"></div>',
 			'<div class="callout" data-callout="epub"></div>',
-		].join('');
+		].join("");
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 
-		const callouts = Array.from(container.querySelectorAll<HTMLElement>('.callout[data-callout="epub"]'));
-		expect(callouts[0]?.getAttribute('data-weave-epub-color')).toBe('purple');
-		expect(callouts[0]?.getAttribute('data-weave-epub-style')).toBe('wavy');
-		expect(callouts[1]?.getAttribute('data-weave-epub-color')).toBe('red');
-		expect(callouts[1]?.getAttribute('data-weave-epub-style')).toBe('underline');
-		expect(callouts[2]?.hasAttribute('data-weave-epub-color')).toBe(false);
-		expect(callouts[2]?.hasAttribute('data-weave-epub-style')).toBe(false);
+		const callouts = Array.from(
+			container.querySelectorAll<HTMLElement>('.callout[data-callout="epub"]'),
+		);
+		expect(callouts[0]?.getAttribute("data-weave-epub-color")).toBe("purple");
+		expect(callouts[0]?.getAttribute("data-weave-epub-style")).toBe("wavy");
+		expect(callouts[1]?.getAttribute("data-weave-epub-color")).toBe("red");
+		expect(callouts[1]?.getAttribute("data-weave-epub-style")).toBe(
+			"underline",
+		);
+		expect(callouts[2]?.hasAttribute("data-weave-epub-color")).toBe(false);
+		expect(callouts[2]?.hasAttribute("data-weave-epub-style")).toBe(false);
 	});
 
-	it('does not double-bind EPUB link click handlers when the same element is processed repeatedly', async () => {
+	it("does not double-bind EPUB link click handlers when the same element is processed repeatedly", async () => {
 		const navigateSpy = vi
-			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
 			.mockResolvedValue(undefined);
 
-		const container = document.createElement('div');
-		container.innerHTML = '<a class="internal-link" href="Books/demo.epub#weave-cfi=readium%3Aabc&text=Hello%20world">Demo</a>';
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium%3Aabc&text=Hello%20world">Demo</a>';
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 		processor(container, {} as any);
 
-		const link = container.querySelector('a');
+		const link = container.querySelector("a");
 		expect(link).not.toBeNull();
 
-		link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
 
 		expect(navigateSpy).toHaveBeenCalledTimes(1);
 		expect(navigateSpy).toHaveBeenCalledWith(
-			'Books/demo.epub',
-			'readium:abc',
-			'Hello world',
+			"Books/demo.epub",
+			"readium:abc",
+			"Hello world",
 			undefined,
-			undefined
+			undefined,
 		);
 	});
 
-	it('binds MOBI excerpt source links and routes clicks through navigateToEpubLocation', async () => {
+	it("binds MOBI excerpt source links and routes clicks through navigateToEpubLocation", async () => {
 		const navigateSpy = vi
-			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
 			.mockResolvedValue(undefined);
 
-		const container = document.createElement('div');
+		const container = document.createElement("div");
 		container.innerHTML = [
 			'<div class="callout" data-callout="epub" data-callout-metadata="red">',
 			'  <div class="callout-title">',
 			'    <a class="internal-link" href="附件/demo.mobi#weave-cfi=epubcfi(/6/62!/4/12,/1:0,/1:136)">Jobs</a>',
-			'  </div>',
+			"  </div>",
 			'  <div class="callout-content">',
-			'    <blockquote><p>七月，李·克劳接到史蒂夫·乔布斯的电话。</p></blockquote>',
-			'  </div>',
-			'</div>',
-		].join('');
+			"    <blockquote><p>七月，李·克劳接到史蒂夫·乔布斯的电话。</p></blockquote>",
+			"  </div>",
+			"</div>",
+		].join("");
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 
-		const link = container.querySelector('a');
+		const link = container.querySelector("a");
 		expect(link).not.toBeNull();
 
-		link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
 
 		expect(navigateSpy).toHaveBeenCalledTimes(1);
 		expect(navigateSpy).toHaveBeenCalledWith(
-			'附件/demo.mobi',
-			'epubcfi(/6/62!/4/12,/1:0,/1:136)',
-			'',
+			"附件/demo.mobi",
+			"epubcfi(/6/62!/4/12,/1:0,/1:136)",
+			"",
 			undefined,
-			undefined
+			undefined,
 		);
 	});
 
-	it('ignores edited callout quote text for weave-loc links and navigates by CFI only', async () => {
+	it("ignores edited callout quote text for weave-loc links and navigates by CFI only", async () => {
 		const navigateSpy = vi
-			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
 			.mockResolvedValue(undefined);
 
-		const container = document.createElement('div');
+		const container = document.createElement("div");
 		container.innerHTML = [
 			'<div class="callout" data-callout="epub" data-callout-metadata="blue">',
 			'  <div class="callout-title">',
 			'    <a class="internal-link" href="附件/demo.epub#weave-loc=compact-locator&eid=excerpt-fixed&sid=epubsrc-demo">Demo</a>',
-			'  </div>',
+			"  </div>",
 			'  <div class="callout-content">',
-			'    <blockquote><p>User edited excerpt body that no longer matches the book.</p></blockquote>',
-			'  </div>',
-			'</div>',
-		].join('');
+			"    <blockquote><p>User edited excerpt body that no longer matches the book.</p></blockquote>",
+			"  </div>",
+			"</div>",
+		].join("");
 
-		vi.spyOn(EpubLinkService, 'parseEpubLink').mockReturnValue({
-			filePath: '',
-			cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:9)',
-			text: '',
-			sourceId: 'epubsrc-demo',
-			excerptId: 'excerpt-fixed',
+		vi.spyOn(EpubLinkService, "parseEpubLink").mockReturnValue({
+			filePath: "",
+			cfi: "epubcfi(/6/2!/4/2,/1:0,/1:9)",
+			text: "",
+			sourceId: "epubsrc-demo",
+			excerptId: "excerpt-fixed",
 		});
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 
-		const link = container.querySelector('a');
+		const link = container.querySelector("a");
 		expect(link).not.toBeNull();
 
-		link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
 
 		expect(navigateSpy).toHaveBeenCalledTimes(1);
 		expect(navigateSpy).toHaveBeenCalledWith(
-			'附件/demo.epub',
-			'epubcfi(/6/2!/4/2,/1:0,/1:9)',
-			'',
-			'epubsrc-demo',
-			undefined
+			"附件/demo.epub",
+			"epubcfi(/6/2!/4/2,/1:0,/1:9)",
+			"",
+			"epubsrc-demo",
+			undefined,
 		);
 	});
 
-	it('rewrites protocol markdown links to internal locator hrefs before navigation', async () => {
+	it("rewrites protocol markdown links to internal locator hrefs before navigation", async () => {
 		const navigateSpy = vi
-			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
 			.mockResolvedValue(undefined);
 
-		const container = document.createElement('div');
+		const container = document.createElement("div");
 		container.innerHTML =
 			'<a class="external-link" href="obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi(/6/2)&chapter=3&sid=epubsrc-demo">Demo</a>';
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 
-		const link = container.querySelector('a');
+		const link = container.querySelector("a");
 		expect(link).not.toBeNull();
-		expect(link!.getAttribute('href')).toBe(
-			'Books/demo.epub#weave-cfi=epubcfi(/6/2)&chapter=3&sid=epubsrc-demo'
+		expect(link!.getAttribute("href")).toBe(
+			"Books/demo.epub#weave-cfi=epubcfi(/6/2)&chapter=3&sid=epubsrc-demo",
 		);
-		expect(link!.classList.contains('internal-link')).toBe(true);
+		expect(link!.classList.contains("internal-link")).toBe(true);
 
-		link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
 
 		expect(navigateSpy).toHaveBeenCalledTimes(1);
 		expect(navigateSpy).toHaveBeenCalledWith(
-			'Books/demo.epub',
-			'epubcfi(/6/2)',
-			'',
-			'epubsrc-demo',
-			undefined
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"",
+			"epubsrc-demo",
+			undefined,
 		);
 	});
 
-	it('preserves annotation note styled snippet links for native protocol handling', async () => {
+	it("shows the source locate overlay for flashing AI source links", async () => {
 		const navigateSpy = vi
-			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
 			.mockResolvedValue(undefined);
 
-		const container = document.createElement('div');
-		container.innerHTML = [
-			'<div class="weave-annotation-note-line">',
-			'  <a href="obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi(/6/2)&chapter=3&sid=epubsrc-demo">',
-			'    <mark style="background: rgba(255, 224, 102, 0.62);">Styled text</mark>',
-			'  </a>',
-			'</div>',
-		].join('');
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=epubcfi(/6/2)&sid=epubsrc-demo&eid=ai-source-U016-P003&flashStyle=pulse&flashColor=yellow">U016.P003</a>';
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 
-		const link = container.querySelector('a');
+		const link = container.querySelector("a");
 		expect(link).not.toBeNull();
-		expect(link!.getAttribute('href')).toContain('obsidian://weave-epub');
-		expect(link!.classList.contains('weave-epub-link')).toBe(false);
-		expect(container.querySelector('mark')?.textContent).toBe('Styled text');
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"",
+			"epubsrc-demo",
+			undefined,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+			},
+		);
+	});
+
+	it("routes AI source range links with reader-facing labels", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U143-P004&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart%2Creadium%3Amiddle%2Creadium%3Aend&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU143.P004-U143.P008">原文</a>';
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo.md" } as any);
+
+		const link = container.querySelector("a");
+		expect(link).not.toBeNull();
+		expect(link!.getAttribute("title")).toBe("原文范围：U143.P004-U143.P008");
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+	});
+
+	it("collapses rendered adjacent AI source endpoint links into a range link", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML = [
+			'<p>Range ',
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow">原文</a>',
+			'–',
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:end&sid=epubsrc-demo&eid=ai-source-U191-P008&flashStyle=pulse&flashColor=yellow">原文</a>',
+			".</p>",
+			'<p>Middle <a class="internal-link" href="Books/demo.epub#weave-cfi=readium:middle&sid=epubsrc-demo&eid=ai-source-U191-P007&flashStyle=pulse&flashColor=yellow">原文</a></p>',
+		].join("");
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		expect(container.querySelectorAll("p:first-child a")).toHaveLength(1);
+		expect(container.querySelector("p:first-child")?.textContent).toBe("Range 原文.");
+
+		container.querySelector("p:first-child a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+	});
+
+	it("enriches rendered single AI source range links from their tooltip title", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const rangeTitle = encodeURIComponent("原文范围：U191.P001-U191.P005");
+		const container = document.createElement("div");
+		container.innerHTML = [
+			'<p>Range ',
+			`<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U191-P001&flashStyle=pulse&flashColor=yellow&sourceTitle=${rangeTitle}">原文</a>`,
+			".</p>",
+			'<p>Middle <a class="internal-link" href="Books/demo.epub#weave-cfi=readium:middle&sid=epubsrc-demo&eid=ai-source-U191-P003&flashStyle=pulse&flashColor=yellow">原文</a></p>',
+			'<p>End <a class="internal-link" href="Books/demo.epub#weave-cfi=readium:end&sid=epubsrc-demo&eid=ai-source-U191-P005&flashStyle=pulse&flashColor=yellow">原文</a></p>',
+		].join("");
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		container.querySelector("p:first-child a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+	});
+
+	it("enriches single AI source range links from the full note when filtered DOM omits middle paragraphs", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const sourcePath = "AI闃呰绗旇/demo - AI闃呰.md";
+		const noteFile = new TFile();
+		const rangeTitle = encodeURIComponent("Source range: U192.P001-U192.P005");
+		const noteMarkdown = [
+			"hidden all source refs",
+			"[[Books/demo.epub#weave-cfi=readium:p001&sid=epubsrc-demo&eid=ai-source-U192-P001&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p002&sid=epubsrc-demo&eid=ai-source-U192-P002&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p003&sid=epubsrc-demo&eid=ai-source-U192-P003&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p004&sid=epubsrc-demo&eid=ai-source-U192-P004&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+			"[[Books/demo.epub#weave-cfi=readium:p005&sid=epubsrc-demo&eid=ai-source-U192-P005&flashStyle=pulse&flashColor=yellow|鍘熸枃]]",
+		].join("\n");
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		};
+
+		const container = document.createElement("div");
+		container.innerHTML = [
+			"<p>Visible filtered range ",
+			`<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:p001&sid=epubsrc-demo&eid=ai-source-U192-P001&flashStyle=pulse&flashColor=yellow&sourceTitle=${rangeTitle}">鍘熸枃</a>`,
+			".</p>",
+		].join("");
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+
+		container.querySelector("a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:p001",
+			"",
+			"epubsrc-demo",
+			sourcePath,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:p005",
+				rangeCfis: [
+					"readium:p001",
+					"readium:p002",
+					"readium:p003",
+					"readium:p004",
+					"readium:p005",
+				],
+			},
+		);
+	});
+
+	it("repairs raw AI source wikilink text that Obsidian did not parse", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.textContent =
+			"Source [[Books/demo.epub#weave-cfi=readium:start&sid=epubsrc-demo&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Aend&rangeCfis=readium%3Astart%2Creadium%3Aend&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU191.P006-U191.P008|原文]] end.";
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		expect(container.textContent).toBe("Source 原文 end.");
+		expect(container.querySelector("a")).not.toBeNull();
+
+		container.querySelector("a")!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:end"],
+			},
+		);
+	});
+
+	it("renders AI source placeholders from the persisted source map", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const sourcePath = "AI阅读笔记/demo - AI阅读.md";
+		const noteFile = new TFile();
+		const sourceMap = {
+			version: 1,
+			filePath: "Books/demo.epub",
+			blocks: [
+				{
+					id: "U191.P006",
+					cfi: "readium:p006",
+					sourceLink:
+						"[[Books/demo.epub#weave-cfi=readium:p006&sid=epubsrc-demo&eid=ai-source-U191-P006&flashStyle=pulse&flashColor=yellow|U191.P006]]",
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				},
+				{
+					id: "U191.P007",
+					cfi: "readium:p007",
+					sourceLink:
+						"[[Books/demo.epub#weave-cfi=readium:p007&sid=epubsrc-demo&eid=ai-source-U191-P007&flashStyle=pulse&flashColor=yellow|U191.P007]]",
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				},
+				{
+					id: "U191.P008",
+					cfi: "readium:p008",
+					sourceLink:
+						"[[Books/demo.epub#weave-cfi=readium:p008&sid=epubsrc-demo&eid=ai-source-U191-P008&flashStyle=pulse&flashColor=yellow|U191.P008]]",
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				},
+			],
+			units: [
+				{
+					id: "U191",
+					label: "Unit",
+					href: "text/ch5.xhtml#unit",
+					pathLabels: ["Chapter 5", "Unit"],
+					flatIndex: 191,
+					depth: 2,
+					sourceBlockIds: ["U191.P006", "U191.P007", "U191.P008"],
+				},
+			],
+		};
+		const noteMarkdown = `<!-- weave-epub-ai-reading-source-map:${encodeURIComponent(
+			JSON.stringify(sourceMap),
+		)} -->`;
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		};
+		const container = document.createElement("div");
+		container.textContent = "Claim {{source-range:U191.P006-U191.P008}}.";
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await Promise.resolve();
+
+		const link = container.querySelector("a");
+		expect(container.textContent).toBe("Claim 原文.");
+		expect(link?.getAttribute("title")).toBe("原文范围：U191.P006-U191.P008");
+		expect(link?.getAttribute("href")).toContain(
+			"rangeCfis=readium%3Ap006,readium%3Ap007,readium%3Ap008",
+		);
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:p006",
+			"",
+			"epubsrc-demo",
+			sourcePath,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:p008",
+				rangeCfis: ["readium:p006", "readium:p007", "readium:p008"],
+			},
+		);
+	});
+
+	it("fills missing middle source cfis for an existing AI source range link", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+		const sourcePath = "AI阅读笔记/demo - AI阅读.md";
+		const noteFile = new TFile();
+		const sourceMap = {
+			version: 1,
+			filePath: "Books/demo.epub",
+			blocks: Array.from({ length: 6 }, (_, index) => {
+				const paragraph = String(index + 2).padStart(3, "0");
+				return {
+					id: `U192.P${paragraph}`,
+					cfi: `readium:p${paragraph}`,
+					sourceLink: `[[Books/demo.epub#weave-cfi=readium:p${paragraph}&sid=epubsrc-demo&eid=ai-source-U192-P${paragraph}&flashStyle=pulse&flashColor=yellow|U192.P${paragraph}]]`,
+					chapterHref: "text/ch5.xhtml#unit",
+					kind: "paragraph",
+				};
+			}),
+			units: [],
+		};
+		const noteMarkdown = `<!-- weave-epub-ai-reading-source-map:${encodeURIComponent(
+			JSON.stringify(sourceMap),
+		)} -->`;
+		const app = {
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === sourcePath ? noteFile : null
+				),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		};
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=readium:p002&sid=epubsrc-demo&eid=ai-source-U192-P002&flashStyle=pulse&flashColor=yellow&rangeEndCfi=readium%3Ap007&rangeCfis=readium%3Ap002,readium%3Ap007&sourceTitle=%E5%8E%9F%E6%96%87%E8%8C%83%E5%9B%B4%EF%BC%9AU192.P002-U192.P007">原文</a>';
+
+		const processor = createEpubLinkPostProcessor(app as any);
+		processor(container, { sourcePath } as any);
+		const link = container.querySelector("a");
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"readium:p002",
+			"",
+			"epubsrc-demo",
+			sourcePath,
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+				rangeEndCfi: "readium:p007",
+				rangeCfis: [
+					"readium:p002",
+					"readium:p003",
+					"readium:p004",
+					"readium:p005",
+					"readium:p006",
+					"readium:p007",
+				],
+			},
+		);
+	});
+
+	it("auto-flashes legacy AI reading unit paragraph locator links", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a class="internal-link" href="Books/demo.epub#weave-cfi=epubcfi(/6/2)&sid=epubsrc-demo">U191.P006</a>';
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, { sourcePath: "AI阅读笔记/demo - AI阅读.md" } as any);
+
+		const link = container.querySelector("a");
+		expect(link).not.toBeNull();
+
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+
+		expect(navigateSpy).toHaveBeenCalledWith(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo - AI阅读.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				showLocateOverlay: true,
+			},
+		);
+	});
+
+	it("preserves annotation note styled snippet links for native protocol handling", async () => {
+		const navigateSpy = vi
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
+			.mockResolvedValue(undefined);
+
+		const container = document.createElement("div");
+		container.innerHTML = [
+			'<div class="weave-annotation-note-line">',
+			'  <a href="obsidian://weave-epub?file=Books%2Fdemo.epub&cfi=epubcfi(/6/2)&chapter=3&sid=epubsrc-demo">',
+			'    <mark style="background: rgba(255, 224, 102, 0.62);">Styled text</mark>',
+			"  </a>",
+			"</div>",
+		].join("");
+
+		const processor = createEpubLinkPostProcessor({} as any);
+		processor(container, {} as any);
+
+		const link = container.querySelector("a");
+		expect(link).not.toBeNull();
+		expect(link!.getAttribute("href")).toContain("obsidian://weave-epub");
+		expect(link!.classList.contains("weave-epub-link")).toBe(false);
+		expect(container.querySelector("mark")?.textContent).toBe("Styled text");
 		expect(navigateSpy).not.toHaveBeenCalled();
 	});
 
-	it('adds chapter and semantic filters to annotation notes', () => {
-		const container = document.createElement('div');
-		container.className = 'markdown-rendered';
+	it("adds chapter and semantic filters to annotation notes", () => {
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
 		container.innerHTML = [
 			'<div class="weave-annotation-note-root" data-book-id="book-1"></div>',
 			'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-0">第一章</h2>',
@@ -255,62 +758,1500 @@ describe('EpubLinkPostProcessor', () => {
 			'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="mistake" data-semantic-label="易错" data-annotation-text="beta mistake">beta</div>',
 			'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-1">第二章</h2>',
 			'<div class="weave-annotation-note-line" data-chapter-key="chapter-1" data-chapter-title="第二章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="gamma theorem">gamma</div>',
-		].join('');
+		].join("");
 
 		const processor = createEpubLinkPostProcessor({} as any);
-		processor(container, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+		processor(container, {
+			sourcePath: "weave/epub-data/books/book-1/annotations.md",
+		} as any);
 
-		const toolbar = container.querySelector<HTMLElement>('.weave-annotation-note-filter');
+		const toolbar = container.querySelector<HTMLElement>(
+			".weave-annotation-note-filter",
+		);
 		expect(toolbar).not.toBeNull();
-		expect(toolbar?.querySelector('.weave-annotation-note-filter-style')).toBeNull();
+		expect(
+			toolbar?.querySelector(".weave-annotation-note-filter-style"),
+		).toBeNull();
 
-		const chapterSelect = toolbar!.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-chapter');
-		const semanticSelect = toolbar!.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-semantic');
-		const searchInput = toolbar!.querySelector<HTMLInputElement>('.weave-annotation-note-filter-search');
-		const count = toolbar!.querySelector<HTMLElement>('.weave-annotation-note-filter-count');
+		const chapterSelect = toolbar!.querySelector<HTMLSelectElement>(
+			".weave-annotation-note-filter-chapter",
+		);
+		const semanticSelect = toolbar!.querySelector<HTMLSelectElement>(
+			".weave-annotation-note-filter-semantic",
+		);
+		const searchInput = toolbar!.querySelector<HTMLInputElement>(
+			".weave-annotation-note-filter-search",
+		);
+		const count = toolbar!.querySelector<HTMLElement>(
+			".weave-annotation-note-filter-count",
+		);
 		expect(chapterSelect?.options.length).toBe(3);
 		expect(semanticSelect?.options.length).toBe(3);
-		expect(count?.textContent).toBe('3 / 3');
+		expect(count?.textContent).toBe("3 / 3");
 
-		semanticSelect!.value = 'mistake';
-		semanticSelect!.dispatchEvent(new Event('change'));
-		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(1);
-		expect(count?.textContent).toBe('1 / 3');
+		semanticSelect!.value = "mistake";
+		semanticSelect!.dispatchEvent(new Event("change"));
+		expect(
+			container.querySelectorAll(".weave-annotation-note-line:not(.is-hidden)")
+				.length,
+		).toBe(1);
+		expect(count?.textContent).toBe("1 / 3");
 
-		semanticSelect!.value = '';
-		chapterSelect!.value = 'chapter-1';
-		chapterSelect!.dispatchEvent(new Event('change'));
-		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(1);
-		expect(container.querySelector<HTMLElement>('.weave-annotation-note-chapter[data-chapter-key="chapter-0"]')?.classList.contains('is-hidden')).toBe(true);
+		semanticSelect!.value = "";
+		chapterSelect!.value = "chapter-1";
+		chapterSelect!.dispatchEvent(new Event("change"));
+		expect(
+			container.querySelectorAll(".weave-annotation-note-line:not(.is-hidden)")
+				.length,
+		).toBe(1);
+		expect(
+			container
+				.querySelector<HTMLElement>(
+					'.weave-annotation-note-chapter[data-chapter-key="chapter-0"]',
+				)
+				?.classList.contains("is-hidden"),
+		).toBe(true);
 
-		searchInput!.value = 'alpha';
-		searchInput!.dispatchEvent(new Event('input'));
-		expect(container.querySelectorAll('.weave-annotation-note-line:not(.is-hidden)').length).toBe(0);
-		expect(count?.textContent).toBe('0 / 3');
+		searchInput!.value = "alpha";
+		searchInput!.dispatchEvent(new Event("input"));
+		expect(
+			container.querySelectorAll(".weave-annotation-note-line:not(.is-hidden)")
+				.length,
+		).toBe(0);
+		expect(count?.textContent).toBe("0 / 3");
 	});
 
-	it('binds the annotation note dual-window button to the EPUB host', () => {
+	it("uses the source markdown index when sourcePath is unavailable and a selected AI leaf range is not rendered", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Visual layout",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; All" data-scope-href="text/ch2.xhtml#layout"></div>',
+			"## Range summary",
+			"visual overview",
+			"## Unit reading",
+			"## U071 Chapter 2 > Visual layout > Steps...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; Steps..." data-scope-href="text/ch2.xhtml#steps" data-ai-unit-id="U071"></div>',
+			"steps detail",
+			"## U072 Chapter 2 > Visual layout > Principle...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; Principle..." data-scope-href="text/ch2.xhtml#principle" data-ai-unit-id="U072"></div>',
+			"### 核心结论",
+			"core detail from file",
+			"### 章节关系",
+			"relation detail from file",
+			"principle detail from file",
+			"## U073 Chapter 2 > Visual layout > More...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; More..." data-scope-href="text/ch2.xhtml#more" data-ai-unit-id="U073"></div>',
+			"more detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch2",
+				label: "Chapter 2",
+				href: "text/ch2.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "visual-layout",
+						label: "Visual layout",
+						href: "text/ch2.xhtml#layout",
+						level: 2,
+						subitems: [
+							{
+								id: "principle",
+								label: "Principle...",
+								href: "text/ch2.xhtml#principle",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Visual layout</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; All" data-scope-href="text/ch2.xhtml#layout"></div></div>',
+			'<div class="el-h2"><h2>Range summary</h2></div><div class="el-p"><p>visual overview</p></div>',
+		].join("");
+
+		const processor = createEpubLinkPostProcessor(app);
+		processor(container, {} as any);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		const toolbar = container.querySelector<HTMLElement>(
+			".weave-epub-ai-reading-note-filter",
+		);
+		const rangeSelects = () =>
+			Array.from(
+				toolbar!.querySelectorAll<HTMLSelectElement>(
+					".weave-epub-ai-reading-note-range-select",
+				),
+			);
+		rangeSelects()[0]!.value = "ch2";
+		rangeSelects()[0]!.dispatchEvent(new Event("change"));
+		rangeSelects()[1]!.value = "visual-layout";
+		rangeSelects()[1]!.dispatchEvent(new Event("change"));
+		rangeSelects()[2]!.value = "principle";
+		rangeSelects()[2]!.dispatchEvent(new Event("change"));
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		expect(
+			container
+				.querySelector<HTMLElement>(".weave-epub-ai-reading-note-missing")
+				?.classList.contains("is-hidden"),
+		).toBe(true);
+		expect(
+			container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-source-preview",
+			)?.textContent,
+		).toContain("principle detail from file");
+		expect(
+			container.querySelector<HTMLElement>(".el-p"),
+		).toBeNull();
+		expect(
+			container.querySelector<HTMLElement>(".el-h2"),
+		).toBeNull();
+		const originalRangeSummaryHeading = Array.from(
+			container.querySelectorAll<HTMLElement>(".el-h2"),
+		).find((element) => element.textContent?.includes("Range summary"));
+		expect(originalRangeSummaryHeading).toBeUndefined();
+		const typeSelect = toolbar!.querySelector<HTMLSelectElement>(
+			".weave-epub-ai-reading-note-filter-type",
+		);
+		typeSelect!.value = "relations";
+		typeSelect!.dispatchEvent(new Event("change"));
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		const filteredPreviewText = container.querySelector<HTMLElement>(
+			".weave-epub-ai-reading-note-source-preview",
+		)?.textContent;
+		expect(filteredPreviewText).toContain("relation detail from file");
+		expect(filteredPreviewText).not.toContain("core detail from file");
+		const lateHeading = document.createElement("div");
+		lateHeading.className = "el-h2";
+		lateHeading.innerHTML = "<h2>Range summary</h2>";
+		const lateParagraph = document.createElement("div");
+		lateParagraph.className = "el-p";
+		lateParagraph.innerHTML = "<p>late stale overview</p>";
+		const lateUnknownBlock = document.createElement("div");
+		lateUnknownBlock.className = "obsidian-lazy-rendered-block";
+		lateUnknownBlock.textContent = "late unknown stale overview";
+		container.append(lateHeading, lateParagraph, lateUnknownBlock);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(
+			container.classList.contains(
+				"weave-epub-ai-reading-note-source-active",
+			),
+		).toBe(true);
+		const modeEl = container.querySelector<HTMLElement>(
+			".weave-epub-ai-reading-note-render-mode",
+		);
+		expect(modeEl?.dataset.mode).toBe("source-detach");
+		expect(modeEl?.textContent).toContain("source-detach");
+		expect(modeEl?.textContent).toContain("scroll: isolated");
+		const sourceHost = container.querySelector<HTMLElement>(".el-div");
+		expect(
+			sourceHost?.classList.contains(
+				"weave-epub-ai-reading-note-source-host-active",
+			),
+		).toBe(true);
+		expect(container.contains(lateHeading)).toBe(false);
+		expect(container.contains(lateParagraph)).toBe(false);
+		expect(container.contains(lateUnknownBlock)).toBe(false);
+		unregisterEpubHost(app);
+	});
+
+	it("keeps the source preview DOM stable when filters refresh without changes", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Visual layout",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; All" data-scope-href="text/ch2.xhtml#layout"></div>',
+			"## Range summary",
+			"visual overview",
+			"## U072 Chapter 2 > Visual layout > Principle...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; Principle..." data-scope-href="text/ch2.xhtml#principle" data-ai-unit-id="U072"></div>',
+			"### 鏍稿績缁撹",
+			"core detail from file",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch2",
+				label: "Chapter 2",
+				href: "text/ch2.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "visual-layout",
+						label: "Visual layout",
+						href: "text/ch2.xhtml#layout",
+						level: 2,
+						subitems: [
+							{
+								id: "principle",
+								label: "Principle...",
+								href: "text/ch2.xhtml#principle",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const renderMock = vi.mocked(MarkdownRenderer.render);
+		renderMock.mockClear();
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Visual layout</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 2 &gt; Visual layout &gt; All" data-scope-href="text/ch2.xhtml#layout"></div></div>',
+			'<div class="el-h2"><h2>Range summary</h2></div>',
+			'<div class="el-p"><p>visual overview</p></div>',
+		].join("");
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch2";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "visual-layout";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "principle";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			const callsAfterFirstRender = renderMock.mock.calls.length;
+			const marker = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-root",
+			) as any;
+			marker.__weaveApplyAiReadingNoteFilters?.();
+			marker.__weaveApplyAiReadingNoteFilters?.();
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				container.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-source-preview",
+				)?.textContent,
+			).toContain("core detail from file");
+			expect(renderMock.mock.calls.length).toBe(callsAfterFirstRender);
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("renders the selected range from source markdown instead of the lazy note DOM", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Image alignment",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>',
+			"## Range summary",
+			"alignment overview from source",
+			"## U191 Chapter 5 > Image alignment > Steps...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div>',
+			"steps detail from source",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch5",
+				label: "Chapter 5",
+				href: "text/ch5.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "align",
+						label: "Image alignment",
+						href: "text/ch5.xhtml#align",
+						level: 2,
+						subitems: [
+							{
+								id: "all-leaf",
+								label: "All",
+								href: "text/ch5.xhtml#align",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Image alignment</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div></div>',
+			'<div class="el-h2"><h2>Range summary</h2></div>',
+			'<div class="el-p"><p>alignment overview from rendered DOM</p></div>',
+		].join("");
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch5";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "align";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = EPUB_AI_READING_ALL_SCOPE_ID;
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				container.classList.contains(
+					"weave-epub-ai-reading-note-source-active",
+				),
+			).toBe(true);
+			expect(
+				container
+					.querySelector<HTMLElement>(
+						".weave-epub-ai-reading-note-source-preview",
+					)
+					?.classList.contains("is-hidden"),
+			).toBe(false);
+			expect(
+				container
+					.querySelector<HTMLElement>(".el-p"),
+			).toBeNull();
+			const sourceHost = container.querySelector<HTMLElement>(".el-div");
+			const sourcePreview = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-source-preview",
+			);
+			expect(sourceHost?.contains(sourcePreview || null)).toBe(true);
+			expect(sourceHost?.classList.contains("is-hidden")).toBe(false);
+			expect(sourcePreview?.closest(".weave-epub-ai-reading-note-chrome")).not.toBeNull();
+			const sourceRangeBlocks = Array.from(
+				sourcePreview?.querySelectorAll<HTMLElement>(
+					".weave-epub-ai-reading-note-source-range",
+				) || [],
+			);
+			expect(sourceRangeBlocks.length).toBe(2);
+			expect(sourceRangeBlocks[0]?.dataset.rangeKey).toBe(
+				"Chapter 5 > Image alignment > All",
+			);
+			expect(sourceRangeBlocks[1]?.dataset.rangeKey).toBe(
+				"Chapter 5 > Image alignment > Steps",
+			);
+			const previewText = sourcePreview?.textContent;
+			expect(previewText).toContain("alignment overview from source");
+			expect(previewText).toContain("steps detail from source");
+			expect(previewText).not.toContain("alignment overview from rendered DOM");
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("keeps rendered note content visible until the source preview is ready", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Image alignment",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>',
+			"## Range summary",
+			"alignment overview from source",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch5",
+				label: "Chapter 5",
+				href: "text/ch5.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "align",
+						label: "Image alignment",
+						href: "text/ch5.xhtml#align",
+						level: 2,
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const renderMock = vi.mocked(MarkdownRenderer.render);
+		let finishRender: (() => void) | null = null;
+		renderMock.mockImplementationOnce(
+			(_app: unknown, markdown: string, el: HTMLElement) =>
+				new Promise<void>((resolve) => {
+					el.append(el.ownerDocument.createElement("div"));
+					finishRender = () => {
+						el.textContent = markdown;
+						resolve();
+					};
+				}),
+		);
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Image alignment</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div></div>',
+			'<div class="el-h2"><h2>Range summary</h2></div>',
+			'<div class="el-p"><p>alignment overview from rendered DOM</p></div>',
+		].join("");
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch5";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "align";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 120));
+
+			expect(
+				container.classList.contains(
+					"weave-epub-ai-reading-note-source-active",
+				),
+			).toBe(false);
+			expect(
+				container
+					.querySelector<HTMLElement>(".el-p")
+					?.classList.contains("is-hidden"),
+			).toBe(false);
+
+			finishRender?.();
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				container.classList.contains(
+					"weave-epub-ai-reading-note-source-active",
+				),
+			).toBe(true);
+			expect(
+				container
+					.querySelector<HTMLElement>(".el-p"),
+			).toBeNull();
+			expect(
+				container.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-source-preview",
+				)?.textContent,
+			).toContain("alignment overview from source");
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("classifies leaf subsection headings by their own content type", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Image alignment",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>',
+			"## U191 Chapter 5 > Image alignment > Steps...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div>',
+			"### 小节摘要",
+			"steps summary from source",
+			"### 核心结论",
+			"core detail from source",
+			"### 关键知识点",
+			"knowledge detail from source",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch5",
+				label: "Chapter 5",
+				href: "text/ch5.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "align",
+						label: "Image alignment",
+						href: "text/ch5.xhtml#align",
+						level: 2,
+						subitems: [
+							{
+								id: "steps",
+								label: "Steps...",
+								href: "text/ch5.xhtml#steps",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Image alignment</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div></div>',
+			'<div class="el-h2"><h2>U191 Chapter 5 &gt; Image alignment &gt; Steps...</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div></div>',
+			'<div class="el-h3"><h3>小节摘要</h3></div>',
+			'<div class="el-p"><p>steps summary from rendered DOM</p></div>',
+			'<div class="el-h3"><h3>核心结论</h3></div>',
+			'<div class="el-p"><p>core detail from rendered DOM</p></div>',
+			'<div class="el-h3"><h3>关键知识点</h3></div>',
+			'<div class="el-p"><p>knowledge detail from rendered DOM</p></div>',
+		].join("");
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch5";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "align";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "steps";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			const typeSelect = toolbar!.querySelector<HTMLSelectElement>(
+				".weave-epub-ai-reading-note-filter-type",
+			);
+			typeSelect!.value = "core";
+			typeSelect!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				container.classList.contains(
+					"weave-epub-ai-reading-note-source-active",
+				),
+			).toBe(true);
+			expect(
+				container.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-filter-count",
+				)?.textContent,
+			).not.toMatch(/^0\s*\//);
+			const previewText = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-source-preview",
+			)?.textContent;
+			expect(previewText).toContain("core detail from source");
+			expect(previewText).not.toContain("steps summary from source");
+			expect(previewText).not.toContain("knowledge detail from source");
+			expect(previewText).not.toContain("core detail from rendered DOM");
+			expect(
+				container
+					.querySelector<HTMLElement>(
+						".weave-epub-ai-reading-note-source-preview",
+					)
+					?.classList.contains("is-hidden"),
+			).toBe(false);
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("reapplies AI reading note filters when later markdown chunks are appended", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Metadata",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; All" data-scope-href="text/ch9.xhtml#metadata"></div>',
+			"## U281 Chapter 9 > Metadata > How to...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; How to..." data-scope-href="text/ch9.xhtml#how-to" data-ai-unit-id="U281"></div>',
+			"### 小节摘要",
+			"metadata how-to detail",
+			"## U282 Chapter 9 > Metadata > How it works...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; How it works..." data-scope-href="text/ch9.xhtml#works" data-ai-unit-id="U282"></div>',
+			"### 小节摘要",
+			"metadata principle detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch9",
+				label: "Chapter 9",
+				href: "text/ch9.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "metadata",
+						label: "Metadata",
+						href: "text/ch9.xhtml#metadata",
+						level: 2,
+						subitems: [
+							{
+								id: "how-to",
+								label: "How to...",
+								href: "text/ch9.xhtml#how-to",
+								level: 3,
+							},
+							{
+								id: "works",
+								label: "How it works...",
+								href: "text/ch9.xhtml#works",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Metadata</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; All" data-scope-href="text/ch9.xhtml#metadata"></div></div>',
+			'<div class="el-h2"><h2>U281 Chapter 9 &gt; Metadata &gt; How to...</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; How to..." data-scope-href="text/ch9.xhtml#how-to" data-ai-unit-id="U281"></div></div>',
+			'<div class="el-h3"><h3>小节摘要</h3></div>',
+			'<div class="el-p"><p>metadata how-to detail</p></div>',
+		].join("");
+		document.body.append(container);
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 650));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch9";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "metadata";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "how-to";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			const selectedPreviewText = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-source-preview",
+			)?.textContent;
+			expect(selectedPreviewText).toContain("metadata how-to detail");
+			expect(selectedPreviewText).not.toContain("metadata principle detail");
+
+			const lateHeading = document.createElement("div");
+			lateHeading.className = "el-h2";
+			lateHeading.innerHTML =
+				"<h2>U282 Chapter 9 &gt; Metadata &gt; How it works...</h2>";
+			const lateMarker = document.createElement("div");
+			lateMarker.className = "el-div";
+			lateMarker.innerHTML =
+				'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; How it works..." data-scope-href="text/ch9.xhtml#works" data-ai-unit-id="U282"></div>';
+			const lateSubheading = document.createElement("div");
+			lateSubheading.className = "el-h3";
+			lateSubheading.innerHTML = "<h3>小节摘要</h3>";
+			const lateParagraph = document.createElement("div");
+			lateParagraph.className = "el-p";
+			lateParagraph.innerHTML = "<p>metadata principle detail</p>";
+			container.append(lateHeading, lateMarker, lateSubheading, lateParagraph);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+
+			expect(container.textContent).toContain("metadata how-to detail");
+			expect(container.contains(lateHeading)).toBe(false);
+			expect(container.contains(lateMarker)).toBe(false);
+			expect(container.contains(lateSubheading)).toBe(false);
+			expect(container.contains(lateParagraph)).toBe(false);
+		} finally {
+			container.remove();
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("hides original AI reading note blocks outside the source host parent when source preview is active", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Metadata",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; All" data-scope-href="text/ch9.xhtml#metadata"></div>',
+			"## U281 Chapter 9 > Metadata > How to...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; How to..." data-scope-href="text/ch9.xhtml#how-to" data-ai-unit-id="U281"></div>',
+			"### 小节摘要",
+			"metadata how-to detail",
+			"## U282 Chapter 9 > Metadata > How it works...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; How it works..." data-scope-href="text/ch9.xhtml#works" data-ai-unit-id="U282"></div>',
+			"### 小节摘要",
+			"metadata principle detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch9",
+				label: "Chapter 9",
+				href: "text/ch9.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "metadata",
+						label: "Metadata",
+						href: "text/ch9.xhtml#metadata",
+						level: 2,
+						subitems: [
+							{
+								id: "how-to",
+								label: "How to...",
+								href: "text/ch9.xhtml#how-to",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-preview-view";
+		const sizer = document.createElement("div");
+		sizer.className = "markdown-preview-sizer";
+		sizer.innerHTML = [
+			'<div class="el-h2"><h2>Metadata</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Metadata &gt; All" data-scope-href="text/ch9.xhtml#metadata"></div></div>',
+		].join("");
+		const laterPreviewSection = document.createElement("div");
+		laterPreviewSection.className = "markdown-preview-section";
+		laterPreviewSection.textContent = "metadata principle detail";
+		container.append(sizer, laterPreviewSection);
+		document.body.append(container);
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 650));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch9";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "metadata";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "how-to";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				container.classList.contains(
+					"weave-epub-ai-reading-note-source-active",
+				),
+			).toBe(true);
+			expect(
+				container.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-source-preview",
+				)?.textContent,
+			).toContain("metadata how-to detail");
+			expect(container.contains(laterPreviewSection)).toBe(false);
+		} finally {
+			container.remove();
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("uses the outer markdown preview view as the AI reading note filter scope", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Chapter 5 topic",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Topic &gt; All" data-scope-href="text/ch5.xhtml#topic"></div>',
+			"## U191 Chapter 5 > Topic > Steps...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Topic &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div>',
+			"chapter five detail",
+			"## Chapter 9 topic",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 9 &gt; Other &gt; All" data-scope-href="text/ch9.xhtml#other"></div>',
+			"chapter nine detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch5",
+				label: "Chapter 5",
+				href: "text/ch5.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "topic",
+						label: "Topic",
+						href: "text/ch5.xhtml#topic",
+						level: 2,
+						subitems: [
+							{
+								id: "steps",
+								label: "Steps...",
+								href: "text/ch5.xhtml#steps",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const outer = document.createElement("div");
+		outer.className = "markdown-preview-view";
+		const innerRendered = document.createElement("div");
+		innerRendered.className = "markdown-rendered";
+		innerRendered.innerHTML = [
+			'<div class="el-h2"><h2>Chapter 5 topic</h2></div>',
+			'<div class="el-div"><div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Topic &gt; All" data-scope-href="text/ch5.xhtml#topic"></div></div>',
+		].join("");
+		const laterOuterSection = document.createElement("div");
+		laterOuterSection.className = "markdown-preview-section";
+		laterOuterSection.textContent = "chapter nine detail";
+		outer.append(innerRendered, laterOuterSection);
+		document.body.append(outer);
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(innerRendered, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 650));
+
+			const toolbar = outer.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch5";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "topic";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "steps";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				outer.classList.contains(
+					"weave-epub-ai-reading-note-source-active",
+				),
+			).toBe(true);
+			expect(
+				outer.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-source-preview",
+				)?.textContent,
+			).toContain("chapter five detail");
+			expect(outer.contains(laterOuterSection)).toBe(false);
+		} finally {
+			outer.remove();
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("reloads the source markdown index when a selected AI leaf range is added after the filter mounts", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		let noteMarkdown = [
+			"## Outline",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 3 &gt; Outline &gt; All" data-scope-href="text/ch3.xhtml#outline"></div>',
+			"## Range summary",
+			"stale overview",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch3",
+				label: "Chapter 3",
+				href: "text/ch3.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "outline",
+						label: "Outline",
+						href: "text/ch3.xhtml#outline",
+						level: 2,
+						subitems: [
+							{
+								id: "how-to",
+								label: "How to...",
+								href: "text/ch3.xhtml#how-to",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const cachedRead = vi.fn(async () => noteMarkdown);
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead,
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Outline</h2></div>',
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 3 &gt; Outline &gt; All" data-scope-href="text/ch3.xhtml#outline"></div>',
+			'<div class="el-h2"><h2>Range summary</h2></div>',
+			'<div class="el-p"><p>stale overview</p></div>',
+		].join("");
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			noteMarkdown = [
+				noteMarkdown,
+				"## U136 Chapter 3 > Outline > How to...",
+				'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 3 &gt; Outline &gt; How to..." data-scope-href="text/ch3.xhtml#how-to" data-ai-unit-id="U136"></div>',
+				"fresh outline detail",
+			].join("\n");
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch3";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "outline";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "how-to";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(cachedRead.mock.calls.length).toBeGreaterThan(1);
+			expect(
+				container.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-source-preview",
+				)?.textContent,
+			).toContain("fresh outline detail");
+			expect(
+				container
+					.querySelector<HTMLElement>(".weave-epub-ai-reading-note-missing")
+					?.classList.contains("is-hidden"),
+			).toBe(true);
+			expect(
+				container
+					.querySelector<HTMLElement>(".el-p"),
+			).toBeNull();
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("mounts the AI reading filter when Obsidian renders only the marker chunk first", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Image alignment",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>',
+			"## Range summary",
+			"alignment overview",
+			"## U191 Chapter 5 > Image alignment > Steps...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div>',
+			"steps detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch5",
+				label: "Chapter 5",
+				href: "text/ch5.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "align",
+						label: "Image alignment",
+						href: "text/ch5.xhtml#align",
+						level: 2,
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML =
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>';
+
+		try {
+			const processor = createEpubLinkPostProcessor(app);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 60));
+
+			expect(
+				container.querySelector(".weave-epub-ai-reading-note-filter"),
+			).not.toBeNull();
+			expect(
+				container.querySelector(".weave-epub-ai-reading-note-filter-type"),
+			).not.toBeNull();
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("splits source markdown by AI unit headings when leaf markers are missing", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Font tables",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 3 &gt; Font tables &gt; All" data-scope-href="text/ch3.xhtml#font-table"></div>',
+			"## Range summary",
+			"font table overview",
+			"## U109 Chapter 3 > Font tables > How to...",
+			"steps unit detail",
+			"## U110 Chapter 3 > Font tables > How it works...",
+			"principle unit detail",
+			"## U111 Chapter 3 > Font tables > More...",
+			"more unit detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch3",
+				label: "Chapter 3",
+				href: "text/ch3.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "font-table",
+						label: "Font tables",
+						href: "text/ch3.xhtml#font-table",
+						level: 2,
+						subitems: [
+							{
+								id: "principle",
+								label: "How it works...",
+								href: "text/ch3.xhtml#principle",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn(() => null),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="el-h2"><h2>Font tables</h2></div>',
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 3 &gt; Font tables &gt; All" data-scope-href="text/ch3.xhtml#font-table"></div>',
+			'<div class="el-h2"><h2>Range summary</h2></div>',
+			'<div class="el-p"><p>unrelated visible overview</p></div>',
+		].join("");
+
+		const processor = createEpubLinkPostProcessor(app);
+		processor(container, {} as any);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		const toolbar = container.querySelector<HTMLElement>(
+			".weave-epub-ai-reading-note-filter",
+		);
+		const rangeSelects = () =>
+			Array.from(
+				toolbar!.querySelectorAll<HTMLSelectElement>(
+					".weave-epub-ai-reading-note-range-select",
+				),
+			);
+		rangeSelects()[0]!.value = "ch3";
+		rangeSelects()[0]!.dispatchEvent(new Event("change"));
+		rangeSelects()[1]!.value = "font-table";
+		rangeSelects()[1]!.dispatchEvent(new Event("change"));
+		rangeSelects()[2]!.value = "principle";
+		rangeSelects()[2]!.dispatchEvent(new Event("change"));
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		const previewText = container.querySelector<HTMLElement>(
+			".weave-epub-ai-reading-note-source-preview",
+		)?.textContent;
+		expect(previewText).toContain("principle unit detail");
+		expect(previewText).not.toContain("steps unit detail");
+		expect(previewText).not.toContain("more unit detail");
+		expect(
+			container
+				.querySelector<HTMLElement>(".weave-epub-ai-reading-note-missing")
+				?.classList.contains("is-hidden"),
+		).toBe(true);
+		unregisterEpubHost(app);
+	});
+
+	it("does not mount AI reading filters inside a rendered source preview", async () => {
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			vault: {
+				getAbstractFileByPath: vi.fn(() => null),
+				getMarkdownFiles: vi.fn(() => []),
+				cachedRead: vi.fn(async () => ""),
+			},
+		} as any;
+		const container = document.createElement("div");
+		container.className = "markdown-rendered";
+		container.innerHTML = [
+			'<div class="weave-epub-ai-reading-note-source-preview">',
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div>',
+			"<h2>小节摘要</h2>",
+			"<p>source preview detail</p>",
+			"</div>",
+		].join("");
+
+		const processor = createEpubLinkPostProcessor(app);
+		processor(
+			container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-source-preview",
+			)!,
+			{} as any,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		expect(
+			container.querySelector(".weave-epub-ai-reading-note-filter"),
+		).toBeNull();
+		expect(
+			container.querySelector(".weave-epub-ai-reading-note-missing"),
+		).toBeNull();
+	});
+
+	it("waits for the full markdown container before mounting the AI reading note filter", async () => {
+		const notePath = "AI Reading Notes/demo - AI Reading.md";
+		const noteMarkdown = [
+			"## Image alignment",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>',
+			"## Range summary",
+			"alignment overview",
+			"## U191 Chapter 5 > Image alignment > Steps...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Steps..." data-scope-href="text/ch5.xhtml#steps" data-ai-unit-id="U191"></div>',
+			"steps detail",
+			"## U192 Chapter 5 > Image alignment > Principle...",
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; Principle..." data-scope-href="text/ch5.xhtml#principle" data-ai-unit-id="U192"></div>',
+			"principle detail",
+		].join("\n");
+		const loadPublicationTocItems = vi.fn(async () => [
+			{
+				id: "ch5",
+				label: "Chapter 5",
+				href: "text/ch5.xhtml",
+				level: 1,
+				subitems: [
+					{
+						id: "align",
+						label: "Image alignment",
+						href: "text/ch5.xhtml#align",
+						level: 2,
+						subitems: [
+							{
+								id: "principle",
+								label: "Principle...",
+								href: "text/ch5.xhtml#principle",
+								level: 3,
+							},
+						],
+					},
+				],
+			},
+		]);
+		const noteFile = Object.assign(new TFile(), {
+			path: notePath,
+			extension: "md",
+		});
+		const app = {
+			plugins: { getPlugin: vi.fn(() => null) },
+			loadPublicationTocItems,
+			vault: {
+				getAbstractFileByPath: vi.fn((path: string) =>
+					path === notePath ? noteFile : null,
+				),
+				getMarkdownFiles: vi.fn(() => [noteFile]),
+				cachedRead: vi.fn(async () => noteMarkdown),
+			},
+		} as any;
+		registerEpubHost(app, {
+			loadPublicationTocItems,
+		});
+		const processor = createEpubLinkPostProcessor(app);
+		const markerBlock = document.createElement("div");
+		markerBlock.className = "el-div";
+		markerBlock.innerHTML =
+			'<div class="weave-epub-ai-reading-note-root" data-source-file="Books/demo.epub" data-scope-label="Chapter 5 &gt; Image alignment &gt; All" data-scope-href="text/ch5.xhtml#align"></div>';
+
+		try {
+			processor(markerBlock, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				markerBlock.querySelector(".weave-epub-ai-reading-note-filter"),
+			).toBeNull();
+
+			const container = document.createElement("div");
+			container.className = "markdown-rendered";
+			container.append(markerBlock);
+			const staleHeading = document.createElement("div");
+			staleHeading.className = "el-h2";
+			staleHeading.innerHTML = "<h2>Range summary</h2>";
+			const staleParagraph = document.createElement("div");
+			staleParagraph.className = "el-p";
+			staleParagraph.innerHTML = "<p>stale whole note overview</p>";
+			container.append(staleHeading, staleParagraph);
+			processor(container, { sourcePath: notePath } as any);
+			await new Promise((resolve) => setTimeout(resolve, 60));
+
+			const toolbar = container.querySelector<HTMLElement>(
+				".weave-epub-ai-reading-note-filter",
+			);
+			const rangeSelects = () =>
+				Array.from(
+					toolbar!.querySelectorAll<HTMLSelectElement>(
+						".weave-epub-ai-reading-note-range-select",
+					),
+				);
+			rangeSelects()[0]!.value = "ch5";
+			rangeSelects()[0]!.dispatchEvent(new Event("change"));
+			rangeSelects()[1]!.value = "align";
+			rangeSelects()[1]!.dispatchEvent(new Event("change"));
+			rangeSelects()[2]!.value = "principle";
+			rangeSelects()[2]!.dispatchEvent(new Event("change"));
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			expect(
+				container.querySelectorAll(".weave-epub-ai-reading-note-filter")
+					.length,
+			).toBe(1);
+			expect(
+				container.querySelector<HTMLElement>(
+					".weave-epub-ai-reading-note-source-preview",
+				)?.textContent,
+			).toContain("principle detail");
+			expect(staleHeading.classList.contains("is-hidden")).toBe(true);
+			expect(staleParagraph.classList.contains("is-hidden")).toBe(true);
+		} finally {
+			unregisterEpubHost(app);
+		}
+	});
+
+	it("binds the annotation note dual-window button to the EPUB host", () => {
 		const openEpubAnnotationNote = vi.fn(async () => undefined);
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		registerEpubHost(app, { openEpubAnnotationNote });
 		try {
-			const container = document.createElement('div');
-			container.className = 'markdown-rendered';
+			const container = document.createElement("div");
+			container.className = "markdown-rendered";
 			container.innerHTML = [
 				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open">双窗模式</button>',
 				'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>',
 				'<div class="weave-annotation-note-line" data-cfi-range="epubcfi(/6/2)" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
-			].join('');
+			].join("");
 
 			const processor = createEpubLinkPostProcessor(app);
-			processor(container, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
-			container.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+			processor(container, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
+			container
+				.querySelector<HTMLButtonElement>(".weave-annotation-note-dual-window")
+				?.click();
 
 			expect(openEpubAnnotationNote).toHaveBeenCalledWith({
-				bookId: 'book-1',
-				filePath: 'Books/demo.epub',
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
 				dualWindowMode: true,
-				openMode: 'right-split',
+				openMode: "right-split",
 				focus: false,
 			});
 		} finally {
@@ -318,31 +2259,34 @@ describe('EpubLinkPostProcessor', () => {
 		}
 	});
 
-	it('keeps the annotation note dual-window button working when the button renders after the marker', () => {
+	it("keeps the annotation note dual-window button working when the button renders after the marker", () => {
 		const openEpubAnnotationNote = vi.fn(async () => undefined);
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		registerEpubHost(app, { openEpubAnnotationNote });
 		try {
-			const page = document.createElement('div');
-			page.className = 'markdown-rendered';
-			page.innerHTML = '<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>';
+			const page = document.createElement("div");
+			page.className = "markdown-rendered";
+			page.innerHTML =
+				'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="false"></div>';
 
 			const processor = createEpubLinkPostProcessor(app);
-			processor(page, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			processor(page, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
 
-			const lateButton = document.createElement('button');
-			lateButton.className = 'weave-annotation-note-dual-window';
-			lateButton.type = 'button';
-			lateButton.dataset.weaveDualWindowAction = 'open';
-			lateButton.textContent = '双窗模式';
+			const lateButton = document.createElement("button");
+			lateButton.className = "weave-annotation-note-dual-window";
+			lateButton.type = "button";
+			lateButton.dataset.weaveDualWindowAction = "open";
+			lateButton.textContent = "双窗模式";
 			page.appendChild(lateButton);
 			lateButton.click();
 
 			expect(openEpubAnnotationNote).toHaveBeenCalledWith({
-				bookId: 'book-1',
-				filePath: 'Books/demo.epub',
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
 				dualWindowMode: true,
-				openMode: 'right-split',
+				openMode: "right-split",
 				focus: false,
 			});
 		} finally {
@@ -350,25 +2294,29 @@ describe('EpubLinkPostProcessor', () => {
 		}
 	});
 
-	it('binds a chunked annotation note dual-window button without a nearby marker', () => {
+	it("binds a chunked annotation note dual-window button without a nearby marker", () => {
 		const openEpubAnnotationNote = vi.fn(async () => undefined);
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		registerEpubHost(app, { openEpubAnnotationNote });
 		try {
-			const buttonChunk = document.createElement('div');
-			buttonChunk.className = 'el-button';
+			const buttonChunk = document.createElement("div");
+			buttonChunk.className = "el-button";
 			buttonChunk.innerHTML =
 				'<button class="weave-annotation-note-dual-window" type="button" data-weave-dual-window-action="open" data-book-id="book-1" data-source-file="Books/demo.epub">双窗模式</button>';
 
 			const processor = createEpubLinkPostProcessor(app);
-			processor(buttonChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
-			buttonChunk.querySelector<HTMLButtonElement>('.weave-annotation-note-dual-window')?.click();
+			processor(buttonChunk, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
+			buttonChunk
+				.querySelector<HTMLButtonElement>(".weave-annotation-note-dual-window")
+				?.click();
 
 			expect(openEpubAnnotationNote).toHaveBeenCalledWith({
-				bookId: 'book-1',
-				filePath: 'Books/demo.epub',
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
 				dualWindowMode: true,
-				openMode: 'right-split',
+				openMode: "right-split",
 				focus: false,
 			});
 		} finally {
@@ -376,205 +2324,242 @@ describe('EpubLinkPostProcessor', () => {
 		}
 	});
 
-	it('dispatches dual-window annotation hover events from annotation note lines', () => {
+	it("dispatches dual-window annotation hover events from annotation note lines", () => {
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		const events: CustomEvent[] = [];
 		const listener = (event: Event) => events.push(event as CustomEvent);
 		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
 		try {
-			const container = document.createElement('div');
-			container.className = 'markdown-rendered';
+			const container = document.createElement("div");
+			container.className = "markdown-rendered";
 			container.innerHTML = [
 				'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="true"></div>',
 				'<div class="weave-annotation-note-line" data-annotation-id="anno-1" data-cfi-range="epubcfi(/6/2)" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
-			].join('');
+			].join("");
 
 			const processor = createEpubLinkPostProcessor(app);
-			processor(container, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
-			const line = container.querySelector<HTMLElement>('.weave-annotation-note-line');
-			line?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-			line?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+			processor(container, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
+			const line = container.querySelector<HTMLElement>(
+				".weave-annotation-note-line",
+			);
+			line?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+			line?.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
 
-			expect(events.map((event) => event.detail.phase)).toEqual(['enter', 'leave']);
+			expect(events.map((event) => event.detail.phase)).toEqual([
+				"enter",
+				"leave",
+			]);
 			expect(events[0]?.detail).toMatchObject({
-				bookId: 'book-1',
-				filePath: 'Books/demo.epub',
-				cfiRange: 'epubcfi(/6/2)',
-				annotationId: 'anno-1',
-				semanticId: 'theorem',
-				text: 'alpha theorem',
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
+				cfiRange: "epubcfi(/6/2)",
+				annotationId: "anno-1",
+				semanticId: "theorem",
+				text: "alpha theorem",
 			});
 		} finally {
 			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
 		}
 	});
 
-	it('dispatches dual-window annotation hover events for note lines rendered after the marker', () => {
+	it("dispatches dual-window annotation hover events for note lines rendered after the marker", () => {
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		const events: CustomEvent[] = [];
 		const listener = (event: Event) => events.push(event as CustomEvent);
 		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
 		try {
-			const page = document.createElement('div');
-			page.className = 'markdown-rendered';
-			page.innerHTML = '<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="true"></div>';
+			const page = document.createElement("div");
+			page.className = "markdown-rendered";
+			page.innerHTML =
+				'<div class="weave-annotation-note-root" data-book-id="book-1" data-source-file="Books/demo.epub" data-dual-window-mode="true"></div>';
 
 			const processor = createEpubLinkPostProcessor(app);
-			processor(page, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			processor(page, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
 
-			const lateLine = document.createElement('div');
-			lateLine.className = 'weave-annotation-note-line';
-			lateLine.dataset.annotationId = 'anno-late';
-			lateLine.dataset.cfiRange = 'epubcfi(/6/4)';
-			lateLine.dataset.chapterIndex = '3';
-			lateLine.dataset.semanticId = 'method';
-			lateLine.dataset.annotationText = 'late annotation';
-			lateLine.textContent = 'late';
+			const lateLine = document.createElement("div");
+			lateLine.className = "weave-annotation-note-line";
+			lateLine.dataset.annotationId = "anno-late";
+			lateLine.dataset.cfiRange = "epubcfi(/6/4)";
+			lateLine.dataset.chapterIndex = "3";
+			lateLine.dataset.semanticId = "method";
+			lateLine.dataset.annotationText = "late annotation";
+			lateLine.textContent = "late";
 			page.appendChild(lateLine);
-			lateLine.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-			lateLine.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+			lateLine.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+			lateLine.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
 
-			expect(events.map((event) => event.detail.phase)).toEqual(['enter', 'leave']);
+			expect(events.map((event) => event.detail.phase)).toEqual([
+				"enter",
+				"leave",
+			]);
 			expect(events[0]?.detail).toMatchObject({
-				bookId: 'book-1',
-				filePath: 'Books/demo.epub',
-				cfiRange: 'epubcfi(/6/4)',
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
+				cfiRange: "epubcfi(/6/4)",
 				chapterIndex: 3,
-				annotationId: 'anno-late',
-				semanticId: 'method',
-				text: 'late annotation',
+				annotationId: "anno-late",
+				semanticId: "method",
+				text: "late annotation",
 			});
 		} finally {
 			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
 		}
 	});
 
-	it('dispatches dual-window annotation hover events from a chunked line without a nearby marker', () => {
+	it("dispatches dual-window annotation hover events from a chunked line without a nearby marker", () => {
 		const app = { plugins: { getPlugin: vi.fn(() => null) } } as any;
 		const events: CustomEvent[] = [];
 		const listener = (event: Event) => events.push(event as CustomEvent);
 		window.addEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
 		try {
-			const lineChunk = document.createElement('div');
-			lineChunk.className = 'el-div';
+			const lineChunk = document.createElement("div");
+			lineChunk.className = "el-div";
 			lineChunk.innerHTML =
 				'<div class="weave-annotation-note-line" data-book-id="book-1" data-source-file="Books/demo.epub" data-annotation-id="anno-1" data-cfi-range="epubcfi(/6/2)" data-semantic-id="theorem" data-annotation-text="alpha theorem">alpha</div>';
 
 			const processor = createEpubLinkPostProcessor(app);
-			processor(lineChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
-			const line = lineChunk.querySelector<HTMLElement>('.weave-annotation-note-line');
-			line?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-			line?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+			processor(lineChunk, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
+			const line = lineChunk.querySelector<HTMLElement>(
+				".weave-annotation-note-line",
+			);
+			line?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+			line?.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
 
-			expect(events.map((event) => event.detail.phase)).toEqual(['enter', 'leave']);
+			expect(events.map((event) => event.detail.phase)).toEqual([
+				"enter",
+				"leave",
+			]);
 			expect(events[0]?.detail).toMatchObject({
-				bookId: 'book-1',
-				filePath: 'Books/demo.epub',
-				cfiRange: 'epubcfi(/6/2)',
-				annotationId: 'anno-1',
-				semanticId: 'theorem',
-				text: 'alpha theorem',
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
+				cfiRange: "epubcfi(/6/2)",
+				annotationId: "anno-1",
+				semanticId: "theorem",
+				text: "alpha theorem",
 			});
 		} finally {
 			window.removeEventListener(EPUB_DUAL_WINDOW_ANNOTATION_EVENT, listener);
 		}
 	});
 
-	it('mounts annotation note filters after Obsidian renders note chunks separately', async () => {
+	it("mounts annotation note filters after Obsidian renders note chunks separately", async () => {
 		vi.useFakeTimers();
 		try {
-			const page = document.createElement('div');
-			page.className = 'markdown-rendered';
+			const page = document.createElement("div");
+			page.className = "markdown-rendered";
 			document.body.appendChild(page);
 
-			const markerChunk = document.createElement('div');
-			markerChunk.innerHTML = '<div class="weave-annotation-note-root" data-book-id="book-1"></div>';
+			const markerChunk = document.createElement("div");
+			markerChunk.innerHTML =
+				'<div class="weave-annotation-note-root" data-book-id="book-1"></div>';
 			page.appendChild(markerChunk);
 
 			const processor = createEpubLinkPostProcessor({} as any);
-			processor(markerChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
-			expect(page.querySelector('.weave-annotation-note-filter')).toBeNull();
+			processor(markerChunk, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
+			expect(page.querySelector(".weave-annotation-note-filter")).toBeNull();
 
-			const linesChunk = document.createElement('div');
+			const linesChunk = document.createElement("div");
 			linesChunk.innerHTML = [
 				'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-0">第一章</h2>',
 				'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha theorem">alpha</div>',
-			].join('');
+			].join("");
 			page.appendChild(linesChunk);
 
 			await vi.advanceTimersByTimeAsync(400);
-			expect(page.querySelector('.weave-annotation-note-filter')).not.toBeNull();
+			expect(
+				page.querySelector(".weave-annotation-note-filter"),
+			).not.toBeNull();
 		} finally {
-			document.body.innerHTML = '';
+			document.body.innerHTML = "";
 			vi.useRealTimers();
 		}
 	});
 
-	it('refreshes annotation note filter options when later rendered chunks add chapters', async () => {
-		const page = document.createElement('div');
-		page.className = 'markdown-rendered';
+	it("refreshes annotation note filter options when later rendered chunks add chapters", async () => {
+		const page = document.createElement("div");
+		page.className = "markdown-rendered";
 		document.body.appendChild(page);
 		try {
-			const firstChunk = document.createElement('div');
+			const firstChunk = document.createElement("div");
 			firstChunk.innerHTML = [
 				'<div class="weave-annotation-note-root" data-book-id="book-1"></div>',
 				'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-0">第一章</h2>',
 				'<div class="weave-annotation-note-line" data-chapter-key="chapter-0" data-chapter-title="第一章" data-semantic-id="theorem" data-semantic-label="定理" data-annotation-text="alpha">alpha</div>',
-			].join('');
+			].join("");
 			page.appendChild(firstChunk);
 
 			const processor = createEpubLinkPostProcessor({} as any);
-			processor(firstChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			processor(firstChunk, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
 
-			const chapterSelect = page.querySelector<HTMLSelectElement>('.weave-annotation-note-filter-chapter');
-			expect(Array.from(chapterSelect?.options || []).map((option) => option.textContent)).toEqual([
-				'全部章节',
-				'第一章',
-			]);
+			const chapterSelect = page.querySelector<HTMLSelectElement>(
+				".weave-annotation-note-filter-chapter",
+			);
+			expect(
+				Array.from(chapterSelect?.options || []).map(
+					(option) => option.textContent,
+				),
+			).toEqual(["全部章节", "第一章"]);
 
-			const secondChunk = document.createElement('div');
+			const secondChunk = document.createElement("div");
 			secondChunk.innerHTML = [
 				'<h2 class="weave-annotation-note-chapter" data-chapter-key="chapter-1">第二章</h2>',
 				'<div class="weave-annotation-note-line" data-chapter-key="chapter-1" data-chapter-title="第二章" data-semantic-id="mistake" data-semantic-label="易错" data-annotation-text="beta">beta</div>',
-			].join('');
+			].join("");
 			page.appendChild(secondChunk);
-			processor(secondChunk, { sourcePath: 'weave/epub-data/books/book-1/annotations.md' } as any);
+			processor(secondChunk, {
+				sourcePath: "weave/epub-data/books/book-1/annotations.md",
+			} as any);
 			await Promise.resolve();
 
-			expect(Array.from(chapterSelect?.options || []).map((option) => option.textContent)).toEqual([
-				'全部章节',
-				'第一章',
-				'第二章',
-			]);
-			expect(page.querySelector('.weave-annotation-note-filter-count')?.textContent).toBe('2 / 2');
+			expect(
+				Array.from(chapterSelect?.options || []).map(
+					(option) => option.textContent,
+				),
+			).toEqual(["全部章节", "第一章", "第二章"]);
+			expect(
+				page.querySelector(".weave-annotation-note-filter-count")?.textContent,
+			).toBe("2 / 2");
 		} finally {
-			document.body.innerHTML = '';
+			document.body.innerHTML = "";
 		}
 	});
 
-	it('supports legacy tuanki-cfi equals links even when the anchor is not marked as an internal link', async () => {
+	it("supports legacy tuanki-cfi equals links even when the anchor is not marked as an internal link", async () => {
 		const navigateSpy = vi
-			.spyOn(EpubLinkService.prototype, 'navigateToEpubLocation')
+			.spyOn(EpubLinkService.prototype, "navigateToEpubLocation")
 			.mockResolvedValue(undefined);
 
-		const container = document.createElement('div');
-		container.innerHTML = '<a href="Books/demo.epub#tuanki-cfi=epubcfi(/6/2[chapter-1]!/4/4)">Legacy</a>';
+		const container = document.createElement("div");
+		container.innerHTML =
+			'<a href="Books/demo.epub#tuanki-cfi=epubcfi(/6/2[chapter-1]!/4/4)">Legacy</a>';
 
 		const processor = createEpubLinkPostProcessor({} as any);
 		processor(container, {} as any);
 
-		const link = container.querySelector('a');
+		const link = container.querySelector("a");
 		expect(link).not.toBeNull();
 
-		link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+		link!.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
 
 		expect(navigateSpy).toHaveBeenCalledTimes(1);
 		expect(navigateSpy).toHaveBeenCalledWith(
-			'Books/demo.epub',
-			'epubcfi(/6/2[chapter-1]!/4/4)',
-			'',
+			"Books/demo.epub",
+			"epubcfi(/6/2[chapter-1]!/4/4)",
+			"",
 			undefined,
-			undefined
+			undefined,
 		);
 	});
 });

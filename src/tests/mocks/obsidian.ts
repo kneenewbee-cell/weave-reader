@@ -42,6 +42,7 @@ function createObsidianElement<K extends keyof HTMLElementTagNameMap>(
   removeClass: (...classNames: string[]) => void;
   toggleClass: (className: string, force?: boolean) => void;
   createDiv: (childOptions?: MockDomOptions) => HTMLDivElement;
+  createSpan: (childOptions?: MockDomOptions) => HTMLSpanElement;
   createEl: <T extends keyof HTMLElementTagNameMap>(
     childTagName: T,
     childOptions?: MockDomOptions
@@ -54,6 +55,7 @@ function createObsidianElement<K extends keyof HTMLElementTagNameMap>(
     removeClass: (...classNames: string[]) => void;
     toggleClass: (className: string, force?: boolean) => void;
     createDiv: (childOptions?: MockDomOptions) => HTMLDivElement;
+    createSpan: (childOptions?: MockDomOptions) => HTMLSpanElement;
     createEl: <T extends keyof HTMLElementTagNameMap>(
       childTagName: T,
       childOptions?: MockDomOptions
@@ -84,6 +86,11 @@ function createObsidianElement<K extends keyof HTMLElementTagNameMap>(
   };
   element.createDiv = (childOptions) => {
     const child = createObsidianElement('div', childOptions);
+    element.appendChild(child);
+    return child;
+  };
+  element.createSpan = (childOptions) => {
+    const child = createObsidianElement('span', childOptions);
     element.appendChild(child);
     return child;
   };
@@ -237,14 +244,18 @@ export class Notice {
 export class Modal {
   app: App;
   containerEl: HTMLElement;
+  modalEl: HTMLElement;
   contentEl: HTMLElement;
   titleEl: HTMLElement;
 
   constructor(app: App) {
     this.app = app;
-    this.containerEl = document.createElement('div');
-    this.contentEl = document.createElement('div');
-    this.titleEl = document.createElement('div');
+    this.containerEl = createObsidianElement('div');
+    this.modalEl = createObsidianElement('div');
+    this.contentEl = createObsidianElement('div');
+    this.titleEl = createObsidianElement('div');
+    this.modalEl.append(this.titleEl, this.contentEl);
+    this.containerEl.appendChild(this.modalEl);
   }
 
   open = vi.fn();
@@ -630,6 +641,23 @@ export const setIcon = vi.fn((element: HTMLElement, iconName: string) => {
   element.setAttribute('data-icon', iconName);
 });
 
+export const MarkdownRenderer = {
+  render: vi.fn(
+    async (
+      _app: App,
+      markdown: string,
+      containerEl: HTMLElement,
+      _sourcePath: string,
+      component: { addChild?: unknown }
+    ) => {
+      if (typeof component?.addChild !== 'function') {
+        throw new TypeError('r.addChild is not a function');
+      }
+      containerEl.textContent = markdown;
+    }
+  )
+};
+
 export const requestUrl = vi.fn();
 
 // Mock constants
@@ -669,6 +697,7 @@ export default {
   debounce,
   sanitizeHTMLToDom,
   setIcon,
+  MarkdownRenderer,
   requestUrl,
   Platform,
   mockApp,

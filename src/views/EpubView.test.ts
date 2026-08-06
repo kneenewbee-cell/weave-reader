@@ -10,6 +10,7 @@ function enhanceDiv<T extends HTMLDivElement>(div: T) {
 	const el = div as T & {
 		empty: () => void;
 		addClass: (...classes: string[]) => void;
+		toggleClass: (name: string, force?: boolean) => void;
 		createDiv: (options?: string | { cls?: string | string[]; text?: string | DocumentFragment }) => HTMLDivElement;
 	};
 	el.empty = () => {
@@ -17,6 +18,9 @@ function enhanceDiv<T extends HTMLDivElement>(div: T) {
 	};
 	el.addClass = (...classes: string[]) => {
 		el.classList.add(...classes);
+	};
+	el.toggleClass = (name: string, force?: boolean) => {
+		el.classList.toggle(name, force);
 	};
 	el.createDiv = (options) => {
 		const child = enhanceDiv(document.createElement('div'));
@@ -127,6 +131,7 @@ vi.mock('obsidian', () => {
 		Platform: { isMobile: true },
 		TFile: class {},
 		WorkspaceLeaf: class {},
+		normalizePath: (path: string) => path.replace(/\\/g, '/'),
 		setIcon: vi.fn(),
 	};
 });
@@ -169,6 +174,35 @@ describe('EpubView', () => {
 		expect(navigateToCfi).not.toHaveBeenCalled();
 	});
 
+	it('forwards pending locate metadata to an already mounted reader', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		(view as any).pendingLocate = {
+			cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:9)',
+			text: 'demo excerpt',
+			flashStyle: 'highlight',
+			flashColor: 'yellow',
+			showLocateOverlay: true,
+		};
+		const navigateToBookLocate = vi.fn();
+		const navigateToCfi = vi.fn();
+		(view as any).actionHandlers = {
+			navigateToBookLocate,
+			navigateToCfi,
+		};
+
+		(view as any).flushPendingLocateToReader();
+
+		expect(navigateToBookLocate).toHaveBeenCalledWith({
+			cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:9)',
+			text: 'demo excerpt',
+			flashStyle: 'highlight',
+			flashColor: 'yellow',
+			showLocateOverlay: true,
+		});
+		expect(navigateToCfi).not.toHaveBeenCalled();
+		expect((view as any).pendingLocate).toBeNull();
+	});
+
 	it('shows canvas direction button via class toggle instead of inline display:none', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		(view as any).actionHandlers = {
@@ -188,7 +222,7 @@ describe('EpubView', () => {
 		expect(button.classList.contains('epub-view-action-hidden')).toBe(false);
 	});
 
-	it('hides canvas actions when canvas excerpt premium capability is unavailable', () => {
+	it('keeps canvas preview actions visible when canvas excerpt capability is unavailable', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		const applyActionButtonState = vi.spyOn(view as any, 'applyActionButtonState');
 
@@ -199,14 +233,14 @@ describe('EpubView', () => {
 		(view as any).updateCanvasBtn();
 
 		expect(applyActionButtonState).toHaveBeenCalledWith((view as any).canvasBtn, expect.objectContaining({
-			visible: false,
+			visible: true,
 		}));
 		expect(applyActionButtonState).toHaveBeenCalledWith((view as any).inlineCanvasBtn, expect.objectContaining({
-			visible: false,
+			visible: true,
 		}));
 	});
 
-	it('shows paragraph mode as a premium preview action when capability is unavailable', () => {
+	it('shows paragraph mode preview action without a locked suffix when capability is unavailable', () => {
 		const view = new EpubView({} as any, { app: {} } as any);
 		const applyActionButtonState = vi.spyOn(view as any, 'applyActionButtonState');
 
@@ -222,7 +256,7 @@ describe('EpubView', () => {
 			expect.objectContaining({
 				active: false,
 				visible: true,
-				label: expect.stringContaining('🔒'),
+				label: 'views.epubView.label.paragraphModeOn',
 			})
 		);
 		expect(applyActionButtonState).toHaveBeenCalledWith(
@@ -230,7 +264,7 @@ describe('EpubView', () => {
 			expect.objectContaining({
 				active: false,
 				visible: true,
-				label: expect.stringContaining('🔒'),
+				label: 'views.epubView.label.paragraphModeOn',
 			})
 		);
 	});
@@ -286,5 +320,202 @@ describe('EpubView', () => {
 		expect(showPremiumFeaturePreview).toHaveBeenCalledWith(PREMIUM_FEATURES.EPUB_PARAGRAPH_MODE);
 		expect(toggleParagraphMode).not.toHaveBeenCalled();
 		expect((view as any).paragraphModeEnabled).toBe(false);
+	});
+
+	it('adds annotation and AI reading notes to the notes pane menu', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		const openAnnotationNote = vi.fn();
+		const openAiReadingNote = vi.fn();
+		const openAiReadingDualWindow = vi.fn();
+		const items: Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+			subItems?: unknown[];
+			setTitle: (title: string) => unknown;
+			setIcon: (icon: string) => unknown;
+			setChecked: (checked: boolean) => unknown;
+			onClick: (callback: () => void) => unknown;
+			setSubmenu?: () => unknown;
+		}> = [];
+		const createMenu = () => ({
+			addSeparator: vi.fn(),
+			addItem: vi.fn((callback: (item: any) => void) => {
+				const item = {
+					setTitle(title: string) {
+						this.title = title;
+						return this;
+					},
+					setIcon(icon: string) {
+						this.icon = icon;
+						return this;
+					},
+					setChecked() {
+						return this;
+					},
+					onClick(click: () => void) {
+						this.click = click;
+						return this;
+					},
+					setSubmenu() {
+						const subItems: unknown[] = [];
+						this.subItems = subItems;
+						return {
+							addItem: (subCallback: (subItem: any) => void) => {
+								const subItem = {
+									setTitle(title: string) {
+										this.title = title;
+										return this;
+									},
+									setIcon(icon: string) {
+										this.icon = icon;
+										return this;
+									},
+									setChecked() {
+										return this;
+									},
+									onClick(click: () => void) {
+										this.click = click;
+										return this;
+									},
+								};
+								subItems.push(subItem);
+								subCallback(subItem);
+							},
+						};
+					},
+				};
+				items.push(item);
+				callback(item);
+			}),
+		});
+		const menu = createMenu();
+		(view as any).actionHandlers = {
+			openAnnotationNote,
+			openAiReadingNote,
+			openAiReadingDualWindow,
+		};
+
+		(view as any).appendNotesPaneMenu(menu);
+
+		const notesMenuItem = items.find((item) => item.icon === 'notebook-tabs');
+		expect(notesMenuItem?.icon).toBe('notebook-tabs');
+		expect(menu.addSeparator).toHaveBeenCalled();
+		const subItems = (notesMenuItem?.subItems || []) as Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+		}>;
+		expect(subItems.map((item) => item.title)).toEqual([
+			'\u6253\u5f00\u6807\u6ce8\u7b14\u8bb0',
+			'\u6253\u5f00 AI \u9605\u8bfb\u7b14\u8bb0',
+		]);
+		expect(subItems.map((item) => item.icon)).toEqual([
+			'notebook-pen',
+			'sparkles',
+		]);
+		subItems[0]?.click?.();
+		subItems[1]?.click?.();
+		expect(openAnnotationNote).toHaveBeenCalledOnce();
+		expect(openAiReadingNote).toHaveBeenCalledOnce();
+		expect(openAiReadingDualWindow).not.toHaveBeenCalled();
+	});
+
+	it('adds AI reading dual window to the dual-window pane menu', () => {
+		const view = new EpubView({} as any, { app: {} } as any);
+		const openAnnotationDualWindow = vi.fn();
+		const openAiReadingDualWindow = vi.fn();
+		const openAnnotationCompareDualWindow = vi.fn();
+		const items: Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+			subItems?: unknown[];
+			setTitle: (title: string) => unknown;
+			setIcon: (icon: string) => unknown;
+			onClick: (callback: () => void) => unknown;
+			setSubmenu?: () => unknown;
+		}> = [];
+		const menu = {
+			addItem: vi.fn((callback: (item: any) => void) => {
+				const item = {
+					setTitle(title: string) {
+						this.title = title;
+						return this;
+					},
+					setIcon(icon: string) {
+						this.icon = icon;
+						return this;
+					},
+					onClick(click: () => void) {
+						this.click = click;
+						return this;
+					},
+					setSubmenu() {
+						const subItems: unknown[] = [];
+						this.subItems = subItems;
+						return {
+							addItem: (subCallback: (subItem: any) => void) => {
+								const subItem = {
+									setTitle(title: string) {
+										this.title = title;
+										return this;
+									},
+									setIcon(icon: string) {
+										this.icon = icon;
+										return this;
+									},
+									onClick(click: () => void) {
+										this.click = click;
+										return this;
+									},
+									setDisabled(disabled: boolean) {
+										this.disabled = disabled;
+										return this;
+									},
+								};
+								subItems.push(subItem);
+								subCallback(subItem);
+							},
+						};
+					},
+				};
+				items.push(item);
+				callback(item);
+			}),
+		};
+		(view as any).filePath = 'Books/demo.epub';
+		(view as any).actionHandlers = {
+			openAnnotationDualWindow,
+			openAiReadingDualWindow,
+			openAnnotationCompareDualWindow,
+		};
+
+		(view as any).appendDualWindowPaneMenu(menu);
+
+		const dualWindowMenuItem = items.find((item) => item.icon === 'columns-2');
+		const subItems = (dualWindowMenuItem?.subItems || []) as Array<{
+			title?: string;
+			icon?: string;
+			click?: () => void;
+		}>;
+		expect(subItems.map((item) => item.title)).toEqual([
+			'\u539f\u4e66\u4e0e\u6807\u6ce8\u7b14\u8bb0',
+			'\u539f\u4e66\u4e0e AI \u9605\u8bfb\u7b14\u8bb0',
+			'\u4e24\u79cd\u6807\u6ce8\u5bf9\u6bd4',
+			'\u539f\u4e66\u4e0e\u7ffb\u8bd1\uff08\u6682\u672a\u5f00\u653e\uff09',
+		]);
+		expect(subItems.map((item) => item.icon)).toEqual([
+			'notebook-pen',
+			'book-open-check',
+			'git-compare',
+			'languages',
+		]);
+		subItems[0]?.click?.();
+		subItems[1]?.click?.();
+		subItems[2]?.click?.();
+		expect(openAnnotationDualWindow).toHaveBeenCalledOnce();
+		expect(openAiReadingDualWindow).toHaveBeenCalledOnce();
+		expect(openAnnotationCompareDualWindow).toHaveBeenCalledOnce();
 	});
 });

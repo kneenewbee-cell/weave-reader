@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile, type App, type WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFile, normalizePath, type App, type WorkspaceLeaf } from "obsidian";
 import type { EpubViewHost } from "../../views/epub-view-host";
 import { readMapLikeRegistryValue, type AppWithViewRegistry } from "../../types/obsidian-extensions";
 import { getNavigationHub } from "../navigation/navigation-hub-access";
@@ -7,6 +7,10 @@ import {
 	EpubBookshelfSidebarView,
 	VIEW_TYPE_EPUB_BOOKSHELF_SIDEBAR,
 } from "../../views/EpubBookshelfSidebarView";
+import {
+	EpubAiReadingNoteView,
+	VIEW_TYPE_EPUB_AI_READING_NOTE,
+} from "../../views/EpubAiReadingNoteView";
 import { EpubSidebarView, VIEW_TYPE_EPUB_SIDEBAR } from "../../views/EpubSidebarView";
 import { EpubView, VIEW_TYPE_EPUB } from "../../views/EpubView";
 import { createEpubLinkPostProcessor } from "./EpubLinkPostProcessor";
@@ -14,8 +18,31 @@ import { EpubLinkService } from "./EpubLinkService";
 import { isSupportedBookFile, SUPPORTED_BOOK_EXTENSIONS } from "./book-format";
 import { EPUB_RUNTIME } from "./epub-runtime";
 import { ensureEpubFileAccess } from "./epub-premium";
+import { findOpenEpubLeaf } from "../../utils/epub-leaf-utils";
+import {
+	markEpubDualWindowPaneRoles,
+	registerEpubDualWindowSession,
+} from "./epub-dual-window-workspace";
 
 type EpubPluginHost = EpubViewHost & Plugin;
+
+function findOpenAiReadingNoteLeaf(app: App, notePath: string): WorkspaceLeaf | null {
+	const targetPath = normalizePath(String(notePath || "").trim());
+	if (!targetPath) {
+		return null;
+	}
+	for (const leaf of app.workspace.getLeavesOfType(VIEW_TYPE_EPUB_AI_READING_NOTE)) {
+		try {
+			const state = leaf.getViewState?.()?.state as Record<string, unknown> | undefined;
+			if (normalizePath(String(state?.notePath || "").trim()) === targetPath) {
+				return leaf;
+			}
+		} catch {
+			continue;
+		}
+	}
+	return null;
+}
 
 export function getRegisteredViewTypeForExtension(app: App, extension: string): string | null {
 	const normalizedExtension = extension.trim().toLowerCase();
@@ -79,6 +106,7 @@ export function registerEpubWorkspaceViews(
 	ownerName: string
 ): void {
 	host.registerView(VIEW_TYPE_EPUB, (leaf) => new EpubView(leaf, host));
+	host.registerView(VIEW_TYPE_EPUB_AI_READING_NOTE, (leaf) => new EpubAiReadingNoteView(leaf));
 	host.registerView(
 		VIEW_TYPE_EPUB_BOOKSHELF_SIDEBAR,
 		(leaf) => new EpubBookshelfSidebarView(leaf, host)
@@ -149,6 +177,78 @@ export async function openEpubBookshelf(
 		logger.error(`${logPrefix} openEpubBookshelf failed:`, error);
 		new Notice(failureNotice);
 	}
+}
+
+export async function openEpubAiReadingNote(
+	app: App,
+	noteFile: TFile,
+	options: {
+		bookId?: string;
+		sourceFile?: string;
+		dualWindowMode?: boolean;
+		openMode?: "existing" | "right-split";
+		focus?: boolean;
+	} = {},
+): Promise<WorkspaceLeaf | null> {
+	const { openMode = "existing", focus = true } = options;
+	const notePath = String(noteFile.path || "").trim();
+	const sourceFile = String(options.sourceFile || "").trim();
+	const isDualWindowMode =
+		options.dualWindowMode === true && openMode === "right-split" && Boolean(sourceFile);
+	const existingLeaf =
+		openMode === "existing"
+			? app.workspace.getLeavesOfType(VIEW_TYPE_EPUB_AI_READING_NOTE).find((leaf) => {
+					const state = leaf.getViewState?.()?.state as
+						| { notePath?: unknown }
+						| undefined;
+					return String(state?.notePath || "").trim() === notePath;
+				}) ?? null
+			: null;
+	const previousDualModeSourceLeaf =
+		isDualWindowMode ? findOpenAiReadingNoteLeaf(app, notePath) : null;
+	const leaf =
+		existingLeaf ||
+		(openMode === "right-split"
+			? app.workspace.getLeaf("split", "vertical")
+			: app.workspace.getLeaf(false));
+	if (!leaf) {
+		return null;
+	}
+
+	await leaf.setViewState({
+		type: VIEW_TYPE_EPUB_AI_READING_NOTE,
+		active: focus,
+		state: {
+			...(options.bookId ? { bookId: String(options.bookId).trim() } : {}),
+			notePath,
+			sourceFile,
+			...(isDualWindowMode ? { dualWindowMode: true } : {}),
+		},
+	});
+	if (isDualWindowMode) {
+		const readerLeaf = findOpenEpubLeaf(app, sourceFile);
+		registerEpubDualWindowSession(app, {
+			mode: "book-ai-reading-note",
+			bookId: String(options.bookId || sourceFile).trim(),
+			filePath: sourceFile,
+			notePath,
+		});
+		markEpubDualWindowPaneRoles(readerLeaf, leaf);
+		if (
+			previousDualModeSourceLeaf &&
+			previousDualModeSourceLeaf !== leaf &&
+			previousDualModeSourceLeaf !== readerLeaf
+		) {
+			await previousDualModeSourceLeaf.detach();
+		}
+		if (readerLeaf) {
+			void app.workspace.revealLeaf(readerLeaf);
+		}
+	}
+	if (focus) {
+		void app.workspace.revealLeaf(leaf);
+	}
+	return leaf;
 }
 
 export async function openEpubReader(

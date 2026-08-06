@@ -9,6 +9,8 @@ export interface BookLocateIntent {
 	text?: string;
 	flashStyle?: FlashStyle;
 	flashColor?: string;
+	rangeEndCfi?: string;
+	rangeCfis?: string[];
 	showLocateOverlay?: boolean;
 }
 
@@ -18,6 +20,8 @@ export interface PendingLocateState {
 	text?: string;
 	flashStyle?: FlashStyle;
 	flashColor?: string;
+	rangeEndCfi?: string;
+	rangeCfis?: string[];
 	showLocateOverlay?: boolean;
 }
 
@@ -61,9 +65,9 @@ export function pendingLocateFromLegacyState(state: {
 	pendingText?: string;
 }): PendingLocateState | null {
 	if (state.pendingLocate) {
-		const { cfi, href, text, flashStyle, flashColor, showLocateOverlay } = state.pendingLocate;
+		const { cfi, href, text, flashStyle, flashColor, rangeEndCfi, rangeCfis, showLocateOverlay } = state.pendingLocate;
 		if (cfi || href || text) {
-			return { cfi, href, text, flashStyle, flashColor, showLocateOverlay };
+			return { cfi, href, text, flashStyle, flashColor, rangeEndCfi, rangeCfis, showLocateOverlay };
 		}
 	}
 	const cfi = String(state.pendingCfi || "").trim();
@@ -98,6 +102,8 @@ export function bookLocateFromPending(pending: PendingLocateState | null): BookL
 		text: pending.text,
 		flashStyle: pending.flashStyle,
 		flashColor: pending.flashColor,
+		rangeEndCfi: pending.rangeEndCfi,
+		rangeCfis: pending.rangeCfis,
 		showLocateOverlay: pending.showLocateOverlay,
 	};
 }

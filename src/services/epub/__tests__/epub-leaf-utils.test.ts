@@ -112,15 +112,15 @@ describe('epub-leaf-utils source navigation', () => {
 		});
 	});
 
-	it('opens source navigation in a new tab when the book is not already open', async () => {
+	it('opens source navigation in a right split when the book is not already open', async () => {
 		resolveSupportedBookFilePathMock.mockReturnValue('Books/new.mobi');
-		const newTabLeaf = {
+		const splitLeaf = {
 			setViewState: vi.fn(async () => undefined),
 		};
 		const app = {
 			workspace: {
 				getLeavesOfType: vi.fn(() => []),
-				getLeaf: vi.fn(() => newTabLeaf),
+				getLeaf: vi.fn(() => splitLeaf),
 				setActiveLeaf: vi.fn(),
 				revealLeaf: vi.fn(),
 			},
@@ -135,8 +135,8 @@ describe('epub-leaf-utils source navigation', () => {
 			pendingCfi: 'epubcfi(/6/4)',
 		});
 
-		expect(result).toBe(newTabLeaf);
-		expect(app.workspace.getLeaf).toHaveBeenCalledWith('tab');
-		expect(newTabLeaf.setViewState).toHaveBeenCalled();
+		expect(result).toBe(splitLeaf);
+		expect(app.workspace.getLeaf).toHaveBeenCalledWith('split', 'vertical');
+		expect(splitLeaf.setViewState).toHaveBeenCalled();
 	});
 });

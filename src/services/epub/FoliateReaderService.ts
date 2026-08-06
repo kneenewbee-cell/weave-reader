@@ -3,6 +3,7 @@ import type {
 	EpubBookFootnotesDraft,
 	EpubChapterReadingPointDraft,
 	EpubReaderEngine,
+	FlashStyle,
 	HighlightSourceLocator,
 	HighlightClickInfo,
 	ReaderAppearanceApplyOptions,
@@ -141,6 +142,8 @@ import {
 	resolvedRangeCoversHighlightText,
 } from "./highlight/highlight-identity";
 import { EpubLinkService } from "./EpubLinkService";
+import * as EpubCfi from "./epub-cfi";
+import type { ParsedCfiPart, ParsedCfiPath } from "./epub-cfi";
 
 function logFootnoteDiag(message: string): void {
 	logger.debugWithTag("FootnoteDiag", message);
@@ -220,6 +223,89 @@ const PARAGRAPH_EXTRACTION_SOURCE_PRIORITY: Record<ParagraphExtractionCandidateS
 	embedded: 1,
 	visible: 0,
 };
+
+function escapeEpubCfiText(value: string): string {
+	return value.replace(/[\^[\](),;=]/g, "^$&");
+}
+
+function stringifyEpubCfiPart(part: ParsedCfiPart): string {
+	const param = part.side ? `;s=${part.side}` : "";
+	return (
+		`/${part.index}` +
+		(part.id ? `[${escapeEpubCfiText(part.id)}${param}]` : "") +
+		(part.offset != null && part.index % 2 ? `:${part.offset}` : "") +
+		(part.temporal ? `~${part.temporal}` : "") +
+		(part.spatial ? `@${part.spatial.join(":")}` : "") +
+		(part.text || (!part.id && part.side)
+			? `[${part.text?.map(escapeEpubCfiText)?.join(",") ?? ""}${param}]`
+			: "")
+	);
+}
+
+function stringifyEpubCfiPath(path: ParsedCfiPath): string {
+	return path
+		.map((segment) => segment.map((part) => stringifyEpubCfiPart(part)).join(""))
+		.join("!");
+}
+
+function cfiPathsEqual(left: ParsedCfiPath, right: ParsedCfiPath): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function buildContinuousEpubCfiRange(startCfi: string, endCfi: string): string | null {
+	try {
+		const collapsedStart = EpubCfi.collapse(EpubCfi.parse(startCfi)) as ParsedCfiPath;
+		const collapsedEnd = EpubCfi.collapse(EpubCfi.parse(endCfi), true) as ParsedCfiPath;
+		if (!Array.isArray(collapsedStart) || !Array.isArray(collapsedEnd)) {
+			return null;
+		}
+		if (EpubCfi.compare(startCfi, endCfi) > 0) {
+			return null;
+		}
+		const startPrefix = collapsedStart.slice(0, -1);
+		const endPrefix = collapsedEnd.slice(0, -1);
+		if (!cfiPathsEqual(startPrefix, endPrefix)) {
+			return null;
+		}
+		const localStart = collapsedStart[collapsedStart.length - 1] || [];
+		const localEnd = collapsedEnd[collapsedEnd.length - 1] || [];
+		const localParent: ParsedCfiPart[] = [];
+		const rangeStart: ParsedCfiPart[] = [];
+		const rangeEnd: ParsedCfiPart[] = [];
+		let pushToParent = true;
+		const length = Math.max(localStart.length, localEnd.length);
+		for (let index = 0; index < length; index += 1) {
+			const startPart = localStart[index];
+			const endPart = localEnd[index];
+			pushToParent =
+				pushToParent &&
+				startPart?.index === endPart?.index &&
+				!startPart?.offset &&
+				!endPart?.offset;
+			if (pushToParent) {
+				if (startPart) {
+					localParent.push(startPart);
+				}
+				continue;
+			}
+			if (startPart) {
+				rangeStart.push(startPart);
+			}
+			if (endPart) {
+				rangeEnd.push(endPart);
+			}
+		}
+		if (rangeStart.length === 0 || rangeEnd.length === 0) {
+			return null;
+		}
+		const parent = [...startPrefix, localParent];
+		return `epubcfi(${stringifyEpubCfiPath(parent)},${stringifyEpubCfiPath([
+			rangeStart,
+		])},${stringifyEpubCfiPath([rangeEnd])})`;
+	} catch {
+		return null;
+	}
+}
 
 const PARAGRAPH_TAG_NAMES = new Set([
 	"P",
@@ -345,6 +431,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private paragraphFootnotePreviewSession = 0;
 	private paragraphAnchorSyncDepth = 0;
 	private relocatedCallbacks = new Set<(position: ReadingPosition) => void>();
+	private paginationCallbacks = new Set<(info: PaginationInfo) => void>();
 	private scrolledChapterEndCallbacks = new Set<(atEnd: boolean) => void>();
 	private scrolledChapterEndMonitorCleanup: (() => void) | null = null;
 	private scrolledChapterEndSyncFrame = 0;
@@ -360,7 +447,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private renderedAnnotations = new Map<string, RenderedFoliateAnnotation>();
 	private appliedFoliateAnnotations = new Map<string, FoliateAnnotation>();
 	private temporaryHighlightTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
-	private sourceLocateFocusByCfiKey = new Map<string, { color: string; cfiRange: string }>();
+	private sourceLocateFocusByCfiKey = new Map<string, { color: string; cfiRange: string; flashStyle?: FlashStyle }>();
 	private sourceLocateFocusTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 	private sourceLocateFocusEpoch = 0;
 	private temporarilyRevealedConcealmentTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
@@ -842,6 +929,13 @@ export class FoliateReaderService implements EpubReaderEngine {
 		};
 	}
 
+	onPaginationChanged(callback: (info: PaginationInfo) => void): () => void {
+		this.paginationCallbacks.add(callback);
+		return () => {
+			this.paginationCallbacks.delete(callback);
+		};
+	}
+
 	onScrolledChapterEndChange(callback: (atEnd: boolean) => void): () => void {
 		this.scrolledChapterEndCallbacks.add(callback);
 		callback(this.resolveScrolledChapterEndState());
@@ -927,11 +1021,57 @@ export class FoliateReaderService implements EpubReaderEngine {
 		await this.enqueueNavigation(async (positionOperationToken) => {
 			const { canonical } = await this.resolveNavigationRequest(options, positionOperationToken);
 			if (canonical && options.flashStyle !== "none") {
-				await this.clearActiveTemporaryHighlights();
+				await this.clearActiveTemporaryHighlights({ refresh: false });
 				this.clearSourceLocateFocus();
 				const flashColor = options.flashColor || "yellow";
+				const flashStyle = options.flashStyle || "highlight";
+				const rangeEndCanonical = options.rangeEndCfi
+					? (await this.parser.canonicalizeLocation(options.rangeEndCfi, options.text)) ||
+						options.rangeEndCfi
+					: "";
+				const rangeSegments = this.buildSourceLocateRangeSegments(
+					canonical,
+					options,
+					rangeEndCanonical,
+				);
+				if (rangeSegments.length > 1) {
+					await this.addResolvedHighlight(
+						{
+							cfiRange: canonical,
+							color: flashColor,
+							text: options.text,
+							segments: rangeSegments,
+							sourceFile: options.sourceFile,
+							sourceRef: options.sourceRef,
+							createdTime: options.createdTime,
+							temporary: true,
+							flashStyle,
+						},
+						READER_SOURCE_LOCATE_FOCUS_DURATION_MS
+					);
+					return;
+				}
+				const continuousRangeCfi = rangeEndCanonical
+					? buildContinuousEpubCfiRange(canonical, rangeEndCanonical)
+					: null;
+				if (continuousRangeCfi) {
+					await this.addResolvedHighlight(
+						{
+							cfiRange: continuousRangeCfi,
+							color: flashColor,
+							text: options.text,
+							sourceFile: options.sourceFile,
+							sourceRef: options.sourceRef,
+							createdTime: options.createdTime,
+							temporary: true,
+							flashStyle,
+						},
+						READER_SOURCE_LOCATE_FOCUS_DURATION_MS
+					);
+					return;
+				}
 				if (this.hasPersistentHighlightAtCfi(canonical)) {
-					this.setSourceLocateFocus(canonical, flashColor);
+					this.setSourceLocateFocus(canonical, flashColor, undefined, flashStyle);
 					await this.refreshHighlights();
 					return;
 				}
@@ -944,11 +1084,36 @@ export class FoliateReaderService implements EpubReaderEngine {
 						sourceRef: options.sourceRef,
 						createdTime: options.createdTime,
 						temporary: true,
+						flashStyle,
 					},
 					READER_SOURCE_LOCATE_FOCUS_DURATION_MS
 				);
 			}
 		}, "navigateAndHighlight");
+	}
+
+	private buildSourceLocateRangeSegments(
+		canonicalStartCfi: string,
+		options: NavigateAndHighlightOptions,
+		canonicalEndCfi = ""
+	): ReaderHighlightSegment[] {
+		const cfiValues = [
+			canonicalStartCfi,
+			...(options.rangeCfis || []),
+			canonicalEndCfi || options.rangeEndCfi || "",
+		];
+		const seen = new Set<string>();
+		const text = String(options.text || "").trim() || "Source range";
+		return cfiValues
+			.map((cfi) => String(cfi || "").trim())
+			.filter((cfi) => {
+				if (!cfi || seen.has(cfi)) {
+					return false;
+				}
+				seen.add(cfi);
+				return true;
+			})
+			.map((cfiRange) => ({ cfiRange, text }));
 	}
 
 	getNavigationTargetRect(options: ReaderNavigationRectOptions): DOMRect | null {
@@ -1052,6 +1217,41 @@ export class FoliateReaderService implements EpubReaderEngine {
 		const includeHtml = options?.includeHtml !== false;
 		return Promise.all(
 			(await this.getParagraphRecordsForChapter(chapterIndex)).map((paragraph) =>
+				this.toReaderParagraph(paragraph, { includeHtml })
+			)
+		);
+	}
+
+	async getTocParagraphsForReadingPoint(
+		href: string,
+		titleHint: string | undefined,
+		flatTocItems: FlatTocExportItem[],
+		itemIndex: number,
+		options?: { includeHtml?: boolean }
+	): Promise<ReaderParagraph[]> {
+		const includeHtml = options?.includeHtml !== false;
+		const source = await this.parser.getTocReadingPointSourceRange(
+			href,
+			titleHint,
+			flatTocItems,
+			itemIndex
+		);
+		if (!source) {
+			return [];
+		}
+		const paragraphRecords = this.extractParagraphRecordsFromElementRange(
+			source.doc,
+			source.startElement,
+			source.endElement,
+			source.chapterIndex,
+			source.href,
+			source.title
+		);
+		for (const paragraph of paragraphRecords) {
+			this.paragraphRecordById.set(paragraph.id, paragraph);
+		}
+		return Promise.all(
+			paragraphRecords.map((paragraph) =>
 				this.toReaderParagraph(paragraph, { includeHtml })
 			)
 		);
@@ -1580,9 +1780,11 @@ export class FoliateReaderService implements EpubReaderEngine {
 			}
 			if (typeof this.foliateView.goLeft === "function") {
 				await this.foliateView.goLeft();
+				this.syncPaginationAfterPageTurn("prev");
 				return;
 			}
 			await this.foliateView.prev();
+			this.syncPaginationAfterPageTurn("prev");
 		}, "prevPage");
 	}
 
@@ -1597,10 +1799,46 @@ export class FoliateReaderService implements EpubReaderEngine {
 			}
 			if (typeof this.foliateView.goRight === "function") {
 				await this.foliateView.goRight();
+				this.syncPaginationAfterPageTurn("next");
 				return;
 			}
 			await this.foliateView.next();
+			this.syncPaginationAfterPageTurn("next");
 		}, "nextPage");
+	}
+
+	private syncPaginationAfterPageTurn(direction: "next" | "prev"): void {
+		const totalPages =
+			this.currentPaginationInfo.totalPages || this.parser.getTotalPositions();
+		if (totalPages <= 0) {
+			return;
+		}
+		const currentPage = this.normalizeCurrentPage(totalPages);
+		const delta = direction === "next" ? 1 : -1;
+		const nextPage = Math.round(this.clamp(currentPage + delta, 1, totalPages));
+		if (nextPage === this.currentPaginationInfo.currentPage) {
+			return;
+		}
+		this.currentPaginationInfo = {
+			currentPage: nextPage,
+			totalPages,
+		};
+		if (totalPages > 1) {
+			this.currentPosition = {
+				...this.currentPosition,
+				percent: this.clamp(((nextPage - 1) / (totalPages - 1)) * 100, 0, 100),
+			};
+			if (this.currentBook) {
+				this.currentBook.currentPosition = { ...this.currentPosition };
+			}
+		}
+		for (const callback of this.paginationCallbacks) {
+			try {
+				callback(this.currentPaginationInfo);
+			} catch (error) {
+				logger.warn("[FoliateReaderService] Pagination listener failed:", error);
+			}
+		}
 	}
 
 	async goToPage(pageNumber: number): Promise<void> {
@@ -2742,6 +2980,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			return;
 		}
 		const view = this.foliateView;
+		this.applyRendererLayout();
 		await view.goTo(target);
 		if (
 			!this.sessionGuard.canApplyPositionOperation(
@@ -2753,6 +2992,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		) {
 			return;
 		}
+		this.applyRendererLayout();
 		const normalizedTarget = String(target || "").trim();
 		await this.stabilizeViewAfterNavigation(
 			normalizedTarget,
@@ -3404,6 +3644,110 @@ export class FoliateReaderService implements EpubReaderEngine {
 			chapterHref,
 			chapterTitle
 		);
+	}
+
+	private extractParagraphRecordsFromElementRange(
+		doc: Document,
+		startElement: Element,
+		endElement: Element | null,
+		chapterIndex: number,
+		chapterHref: string,
+		chapterTitle: string
+	): ReaderParagraphRecord[] {
+		const root = doc.body || doc.documentElement;
+		if (!root || !root.contains(startElement)) {
+			return [];
+		}
+		const range = this.createParagraphExtractionElementRange(root, startElement, endElement);
+		if (!range) {
+			return [];
+		}
+		const inRange = (element: HTMLElement) =>
+			this.isParagraphElementInsideExtractionRange(range, element);
+		const primaryCandidates = this.collectParagraphCandidateElements(root).filter(inRange);
+		let resolved = this.filterParagraphBoilerplateRecords(
+			this.buildParagraphRecordsForElements(
+				doc,
+				root,
+				primaryCandidates,
+				chapterIndex,
+				chapterHref,
+				chapterTitle
+			),
+			root
+		);
+
+		const granularCandidates = this.collectGranularExplicitParagraphElements(root).filter(inRange);
+		if (granularCandidates.length > primaryCandidates.length) {
+			const granular = this.filterParagraphBoilerplateRecords(
+				this.buildParagraphRecordsForElements(
+					doc,
+					root,
+					granularCandidates,
+					chapterIndex,
+					chapterHref,
+					chapterTitle
+				),
+				root
+			);
+			if (granular.length > resolved.length) {
+				resolved = granular;
+			}
+		}
+
+		if (resolved.length > 0) {
+			return resolved;
+		}
+
+		const fallbackCandidates = this.collectBlockFallbackElements(root).filter(inRange);
+		return this.filterParagraphBoilerplateRecords(
+			this.buildParagraphRecordsForElements(
+				doc,
+				root,
+				fallbackCandidates,
+				chapterIndex,
+				chapterHref,
+				chapterTitle
+			),
+			root
+		);
+	}
+
+	private createParagraphExtractionElementRange(
+		root: Element,
+		startElement: Element,
+		endElement: Element | null
+	): Range | null {
+		const doc = root.ownerDocument;
+		if (!doc) {
+			return null;
+		}
+		const range = doc.createRange();
+		if (startElement === root) {
+			range.setStart(root, 0);
+		} else {
+			range.setStartBefore(startElement);
+		}
+		if (endElement && endElement !== startElement && root.contains(endElement)) {
+			const position = startElement.compareDocumentPosition(endElement);
+			if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+				range.setEndBefore(endElement);
+				return range;
+			}
+		}
+		range.setEnd(root, root.childNodes.length);
+		return range;
+	}
+
+	private isParagraphElementInsideExtractionRange(range: Range, element: HTMLElement): boolean {
+		try {
+			if (typeof range.intersectsNode === "function") {
+				return range.intersectsNode(element);
+			}
+		} catch {
+			return false;
+		}
+		return false;
 	}
 
 	private buildParagraphRecordsForElements(
@@ -6186,9 +6530,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 				visibleHighlight,
 			}) => {
 				const resolvedHighlight = await this.resolveHighlightAnchorForRender(visibleHighlight);
-				const sourceLocateFocusColor =
+				const sourceLocateFocus =
 					!temporaryHighlight && persistentHighlight
-						? this.getSourceLocateFocusColor(resolvedHighlight.cfiRange)
+						? this.getSourceLocateFocus(resolvedHighlight.cfiRange)
 						: undefined;
 				const renderHighlights = this.getHighlightsForSegmentedRender(resolvedHighlight);
 				renderHighlights.forEach((renderHighlight, segmentIndex) => {
@@ -6201,7 +6545,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 								? persistentHighlight
 								: renderHighlight,
 							temporaryHighlight: temporaryHighlight ? renderHighlight : temporaryHighlight,
-							sourceLocateFocusColor,
+							sourceLocateFocusColor: sourceLocateFocus?.color,
+							sourceLocateFocusFlashStyle: sourceLocateFocus?.flashStyle,
 						})
 					);
 				});
@@ -6276,9 +6621,10 @@ export class FoliateReaderService implements EpubReaderEngine {
 		if (segments.length <= 1) {
 			return [highlight];
 		}
+		const { segments: _segments, ...baseHighlight } = highlight;
 		return segments.map((segment) =>
 			this.normalizeHighlightSources({
-				...highlight,
+				...baseHighlight,
 				cfiRange: segment.cfiRange,
 				text: segment.text,
 			})
@@ -6367,9 +6713,18 @@ export class FoliateReaderService implements EpubReaderEngine {
 		suppliedRects: unknown[]
 	): unknown[] {
 		const textHint = String(annotation.text || "").trim();
+		const segments = this.normalizeHighlightSegments(annotation.segments);
+		if (annotation.temporary && annotation.flashStyle === "pulse" && segments.length > 1) {
+			const segmentRects = segments.flatMap((segment) =>
+				this.resolveSourceLocateSegmentRects(segment, annotation)
+			);
+			if (segmentRects.length > 0) {
+				return segmentRects;
+			}
+		}
 		const hasSegmentedText =
 			/[\r\n]/.test(textHint) ||
-			this.normalizeHighlightSegments(annotation.segments).length > 1;
+			segments.length > 1;
 		if (textHint && hasSegmentedText) {
 			const quoteRects = this.resolveHighlightOverlayRects(annotation);
 			if (quoteRects.length > 0) {
@@ -6387,6 +6742,40 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 		const quoteRects = this.resolveHighlightOverlayRects(annotation);
 		return quoteRects.length > 0 ? quoteRects : suppliedRects;
+	}
+
+	private resolveSourceLocateSegmentRects(
+		segment: ReaderHighlightSegment,
+		annotation: FoliateAnnotation
+	): HighlightClickInfo["rect"][] {
+		const hintedRects = this.resolveHighlightOverlayRects({
+			...annotation,
+			cfiRange: segment.cfiRange,
+			text: segment.text,
+		});
+		if (hintedRects.length > 0) {
+			return hintedRects;
+		}
+		for (const frame of this.getVisibleFramesWithIndex()) {
+			const range = this.parser.resolveRangeInLoadedSection(
+				segment.cfiRange,
+				frame.frameDocument,
+				frame.index,
+				undefined
+			);
+			if (!range) {
+				continue;
+			}
+			const rects = this.createViewportRectList(frame, range);
+			if (rects?.length) {
+				return rects;
+			}
+			const rect = this.createViewportRect(frame, range);
+			if (rect) {
+				return [rect];
+			}
+		}
+		return [];
 	}
 
 	private doesHighlightCfiCoverSavedText(
@@ -6517,8 +6906,12 @@ export class FoliateReaderService implements EpubReaderEngine {
 	): SVGElement =>
 		this.annotationOverlayRenderer.createStyledAnnotationOverlay(rects, style, color);
 
-	private createTemporaryFocusOverlay = (rects: unknown[], color: string): SVGElement =>
-		this.annotationOverlayRenderer.createTemporaryFocusOverlay(rects, color);
+	private createTemporaryFocusOverlay = (
+		rects: unknown[],
+		color: string,
+		flashStyle?: FlashStyle
+	): SVGElement =>
+		this.annotationOverlayRenderer.createTemporaryFocusOverlay(rects, color, flashStyle);
 
 	private async addResolvedHighlight(
 		highlight: ReaderHighlight,
@@ -7103,6 +7496,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.parser.dispose();
 		this.resetReaderState();
 		this.relocatedCallbacks.clear();
+		this.paginationCallbacks.clear();
 		this.scrolledChapterEndCallbacks.clear();
 		this.footnotePreviewCallbacks.clear();
 		this.selectionChangeCallbacks.clear();
@@ -7190,7 +7584,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private setSourceLocateFocus(
 		cfiRange: string,
 		color: string,
-		durationMs = READER_SOURCE_LOCATE_FOCUS_DURATION_MS
+		durationMs = READER_SOURCE_LOCATE_FOCUS_DURATION_MS,
+		flashStyle?: FlashStyle
 	): void {
 		const cfiKey = this.normalizeSourceLocateFocusCfiKey(cfiRange);
 		if (!cfiKey) {
@@ -7203,6 +7598,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.sourceLocateFocusByCfiKey.set(cfiKey, {
 			color,
 			cfiRange: String(cfiRange || "").trim(),
+			...(flashStyle ? { flashStyle } : {}),
 		});
 		const timer = window.setTimeout(() => {
 			this.sourceLocateFocusTimers.delete(cfiKey);
@@ -7212,10 +7608,11 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.sourceLocateFocusTimers.set(cfiKey, timer);
 	}
 
-	private getSourceLocateFocusColor(cfiRange: string): string | undefined {
-		return this.sourceLocateFocusByCfiKey.get(
+	private getSourceLocateFocus(cfiRange: string): { color: string; flashStyle?: FlashStyle } | undefined {
+		const focus = this.sourceLocateFocusByCfiKey.get(
 			this.normalizeSourceLocateFocusCfiKey(cfiRange)
-		)?.color;
+		);
+		return focus ? { color: focus.color, flashStyle: focus.flashStyle } : undefined;
 	}
 
 	private collectSourceLocateOverlayAnchorCfis(): string[] {
@@ -7255,6 +7652,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		persistentHighlight?: ReaderHighlight;
 		temporaryHighlight?: ReaderHighlight;
 		sourceLocateFocusColor?: string;
+		sourceLocateFocusFlashStyle?: FlashStyle;
 	}): RenderedReaderFoliateAnnotation {
 		const rendered = createRenderedFoliateAnnotation({
 			persistentHighlight: input.persistentHighlight,
@@ -7268,7 +7666,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}
 		const annotation = createReaderFoliateAnnotation(
 			rendered.annotation,
-			input.sourceLocateFocusColor
+			input.sourceLocateFocusColor,
+			input.sourceLocateFocusFlashStyle
 		);
 		return {
 			annotation,
@@ -7281,14 +7680,18 @@ export class FoliateReaderService implements EpubReaderEngine {
 		};
 	}
 
-	private async clearActiveTemporaryHighlights(): Promise<void> {
+	private async clearActiveTemporaryHighlights(
+		options: { refresh?: boolean } = {}
+	): Promise<void> {
 		if (this.temporaryHighlightDataMap.size === 0) {
 			return;
 		}
 		this.resetTemporaryHighlightTimers();
 		this.temporaryHighlightDataMap.clear();
 		this.invalidateParagraphPresentation();
-		await this.refreshHighlights();
+		if (options.refresh !== false) {
+			await this.refreshHighlights();
+		}
 	}
 
 	private async clearAppliedFoliateAnnotations(): Promise<void> {

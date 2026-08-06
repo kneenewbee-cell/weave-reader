@@ -1,5 +1,5 @@
 import { type EventRef, ItemView, Notice, WorkspaceLeaf } from "obsidian";
-import { EPUB_RUNTIME } from "../services/epub";
+import { EPUB_RUNTIME } from "../services/epub/epub-runtime";
 import { resolveRecentEpubPath } from "../utils/epub-leaf-utils";
 import { i18n, syncI18nLanguage } from "../utils/i18n";
 import { logger } from "../utils/logger";

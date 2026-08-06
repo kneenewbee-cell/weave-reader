@@ -107,4 +107,60 @@ describe("createEpubNavigationController locate overlay session", () => {
 		expect(typeof overlayDuration).toBe("number");
 		expect(overlayDuration).toBeLessThan(READER_SOURCE_LOCATE_FOCUS_DURATION_MS);
 	});
+
+	it("passes AI source range metadata to reader navigation", async () => {
+		const navigateAndHighlight = vi.fn(async () => undefined);
+		const controller = createEpubNavigationController({
+			getReaderReady: () => true,
+			getReaderService: () => ({
+				navigateAndHighlight,
+				navigateTo: vi.fn(),
+				getCurrentPosition: () => ({ cfi: "readium:start" }),
+				getSourceLocateOverlayRect: () => new DOMRect(24, 36, 120, 20),
+			}),
+			getSourceLocateOverlay: () => ({ showAtRect: vi.fn(() => true) }),
+			getLocateOverlayLabel: () => "Locate",
+		});
+
+		controller.requestBookLocate({
+			cfi: "readium:start",
+			flashStyle: "pulse",
+			flashColor: "yellow",
+			rangeEndCfi: "readium:end",
+			rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			showLocateOverlay: true,
+		});
+
+		await vi.runOnlyPendingTimersAsync();
+
+		expect(navigateAndHighlight).toHaveBeenCalledWith({
+			cfi: "readium:start",
+			href: undefined,
+			text: "",
+			flashStyle: "pulse",
+			flashColor: "yellow",
+			rangeEndCfi: "readium:end",
+			rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+		});
+	});
+
+	it("accepts comma-separated AI source range metadata from event details", () => {
+		const controller = createEpubNavigationController({
+			getReaderReady: () => false,
+			getReaderService: () => null,
+		});
+
+		const locate = controller.buildLocateFromEventDetail({
+			cfi: "readium:start",
+			flashStyle: "pulse",
+			rangeEndCfi: "readium:end",
+			rangeCfis: "readium:start, readium:middle, readium:end",
+		});
+
+		expect(locate?.rangeCfis).toEqual([
+			"readium:start",
+			"readium:middle",
+			"readium:end",
+		]);
+	});
 });

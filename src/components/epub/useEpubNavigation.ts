@@ -112,6 +112,8 @@ export function createEpubNavigationController(options: EpubNavigationController
 					text: locateIntent.text,
 					flashStyle: locateIntent.flashStyle,
 					flashColor: locateIntent.flashColor,
+					rangeEndCfi: locateIntent.rangeEndCfi,
+					rangeCfis: locateIntent.rangeCfis,
 				});
 			} else {
 				await readerService.navigateTo({
@@ -200,6 +202,19 @@ export function createEpubNavigationController(options: EpubNavigationController
 		}
 		if (typeof detail.flashColor === "string" && detail.flashColor.trim()) {
 			nav.flashColor = detail.flashColor.trim();
+		}
+		if (typeof detail.rangeEndCfi === "string" && detail.rangeEndCfi.trim()) {
+			nav.rangeEndCfi = detail.rangeEndCfi.trim();
+		}
+		if (Array.isArray(detail.rangeCfis)) {
+			nav.rangeCfis = detail.rangeCfis
+				.map((item) => (typeof item === "string" ? item.trim() : ""))
+				.filter(Boolean);
+		} else if (typeof detail.rangeCfis === "string" && detail.rangeCfis.trim()) {
+			nav.rangeCfis = detail.rangeCfis
+				.split(",")
+				.map((item) => item.trim())
+				.filter(Boolean);
 		}
 		if (typeof detail.showLocateOverlay === "boolean") {
 			nav.showLocateOverlay = detail.showLocateOverlay;

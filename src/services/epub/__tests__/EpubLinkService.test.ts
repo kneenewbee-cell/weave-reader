@@ -76,6 +76,104 @@ describe('EpubLinkService legacy link compatibility', () => {
 		);
 	});
 
+	it("routes note-to-book navigation with source flash options", async () => {
+		navigateMock.mockReset();
+		ensureBookSourceLocationAccessMock.mockReturnValue(true);
+		navigateMock.mockResolvedValueOnce({ success: true, leaf: { id: "leaf-1" } });
+		const app = {} as any;
+		const service = new EpubLinkService(app);
+
+		await service.navigateToEpubLocation(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"Hello",
+			"epubsrc-demo",
+			undefined,
+			{ flashStyle: "highlight", flashColor: "yellow" },
+		);
+
+		expect(navigateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "book",
+				resourcePath: "Books/demo.epub",
+				locate: {
+					cfi: "epubcfi(/6/2)",
+					text: "Hello",
+					flashStyle: "highlight",
+					flashColor: "yellow",
+				},
+				context: { sourceId: "epubsrc-demo", sourceMarkdownPath: undefined },
+			}),
+		);
+	});
+
+	it("routes note-to-book navigation with AI source range options", async () => {
+		navigateMock.mockReset();
+		ensureBookSourceLocationAccessMock.mockReturnValue(true);
+		navigateMock.mockResolvedValueOnce({ success: true, leaf: { id: "leaf-1" } });
+		const app = {} as any;
+		const service = new EpubLinkService(app);
+
+		await service.navigateToEpubLocation(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			"epubsrc-demo",
+			"AI阅读笔记/demo.md",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+
+		expect(navigateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "book",
+				resourcePath: "Books/demo.epub",
+				locate: {
+					cfi: "readium:start",
+					text: "",
+					flashStyle: "pulse",
+					flashColor: "yellow",
+					rangeEndCfi: "readium:end",
+					rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+				},
+				context: { sourceId: "epubsrc-demo", sourceMarkdownPath: "AI阅读笔记/demo.md" },
+			}),
+		);
+	});
+
+	it("routes markdown note source links through source-navigation leaf rules", async () => {
+		navigateMock.mockReset();
+		ensureBookSourceLocationAccessMock.mockReturnValue(true);
+		navigateMock.mockResolvedValueOnce({ success: true, leaf: { id: "leaf-1" } });
+		const app = {} as any;
+		const service = new EpubLinkService(app);
+
+		await service.navigateToEpubLocation(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"Hello",
+			"epubsrc-demo",
+			"AI阅读笔记/Demo - AI阅读.md",
+			{ flashStyle: "highlight", flashColor: "yellow" },
+		);
+
+		expect(navigateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "book",
+				resourcePath: "Books/demo.epub",
+				context: {
+					sourceId: "epubsrc-demo",
+					sourceMarkdownPath: "AI阅读笔记/Demo - AI阅读.md",
+				},
+				policy: { focus: true },
+			}),
+		);
+	});
+
 	it('does not navigate to book locations when source location is unavailable', async () => {
 		navigateMock.mockReset();
 		ensureBookSourceLocationAccessMock.mockReturnValueOnce(false);
@@ -150,6 +248,108 @@ describe('EpubLinkService legacy link compatibility', () => {
 			text: 'Hello world',
 			chapter: 3,
 		});
+	});
+
+	it("builds and parses EPUB locator links with source flash options", () => {
+		const service = new EpubLinkService({} as any);
+		const built = service.buildEpubLink(
+			"Books/demo.epub",
+			"epubcfi(/6/2)",
+			"Hello",
+			undefined,
+			undefined,
+			undefined,
+			"epubsrc-demo",
+			"ai-source-U016-P003",
+			{
+				flashStyle: "highlight",
+				flashColor: "yellow",
+				sourceTitle: "\u7b2c\u516d\u7ae0\uff0c\u56fe\u50cf\u5904\u7406\uff0c\u539f\u7406\uff0c\u7b2c 3 \u6bb5",
+			},
+		);
+
+		expect(built).toContain("&flashStyle=highlight");
+		expect(built).toContain("&flashColor=yellow");
+		expect(built).toContain("sourceTitle=");
+		expect(EpubLinkService.parseLinkMarkup(built)).toEqual({
+			filePath: "Books/demo.epub",
+			cfi: "epubcfi(/6/2)",
+			text: "",
+			chapter: undefined,
+			sourceId: "epubsrc-demo",
+			excerptId: "ai-source-U016-P003",
+			flashStyle: "highlight",
+			flashColor: "yellow",
+			sourceTitle: "\u7b2c\u516d\u7ae0\uff0c\u56fe\u50cf\u5904\u7406\uff0c\u539f\u7406\uff0c\u7b2c 3 \u6bb5",
+		});
+	});
+
+	it("builds and parses AI source range locator metadata", () => {
+		const service = new EpubLinkService({} as any);
+		const built = service.buildEpubLink(
+			"Books/demo.epub",
+			"readium:start",
+			"",
+			undefined,
+			undefined,
+			undefined,
+			"epubsrc-demo",
+			"ai-source-U143-P004",
+			{
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				sourceTitle: "原文范围：U143.P004-U143.P008",
+				rangeEndCfi: "readium:end",
+				rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+			},
+		);
+
+		expect(built).toContain("rangeEndCfi=readium%3Aend");
+		expect(built).toContain("rangeCfis=readium%3Astart,readium%3Amiddle,readium%3Aend");
+		expect(EpubLinkService.parseLinkMarkup(built)).toEqual({
+			filePath: "Books/demo.epub",
+			cfi: "readium:start",
+			text: "",
+			chapter: undefined,
+			sourceId: "epubsrc-demo",
+			excerptId: "ai-source-U143-P004",
+			flashStyle: "pulse",
+			flashColor: "yellow",
+			sourceTitle: "原文范围：U143.P004-U143.P008",
+			rangeEndCfi: "readium:end",
+			rangeCfis: ["readium:start", "readium:middle", "readium:end"],
+		});
+	});
+
+	it("keeps EPUB CFI commas inside AI source range CFI values", () => {
+		const service = new EpubLinkService({} as any);
+		const startCfi = "epubcfi(/6/20!/4/2,/1:0,/1:12)";
+		const middleCfi = "epubcfi(/6/20!/4/4,/1:0,/1:18)";
+		const endCfi = "epubcfi(/6/20!/4/6,/1:0,/1:24)";
+		const built = service.buildEpubLink(
+			"Books/demo.epub",
+			startCfi,
+			"",
+			undefined,
+			undefined,
+			undefined,
+			"epubsrc-demo",
+			"ai-source-U206-P002",
+			{
+				preferCompactLocator: false,
+				flashStyle: "pulse",
+				flashColor: "yellow",
+				sourceTitle: "原文范围：U206.P002-U206.P004",
+				rangeEndCfi: endCfi,
+				rangeCfis: [startCfi, middleCfi, endCfi],
+			},
+		);
+
+		expect(EpubLinkService.parseLinkMarkup(built)?.rangeCfis).toEqual([
+			startCfi,
+			middleCfi,
+			endCfi,
+		]);
 	});
 
 	it('parses complete EPUB link markup for both current wikilinks and legacy protocol links', () => {
