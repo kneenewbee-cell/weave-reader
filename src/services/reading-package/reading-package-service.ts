@@ -11,12 +11,19 @@ import {
 	readFingerprintsFromRecord as readEpubFingerprintsFromRecord,
 	type ExistingPortableBookMatch,
 } from "../epub/epub-portable-book-package";
+import {
+	ensureActiveEpubAnnotationVersion,
+	listEpubAnnotationVersions,
+	readActiveEpubAnnotationVersionAnnotations,
+	safeEpubAnnotationVersionId,
+} from "../epub/epub-annotation-version-store";
 import { generateUniqueVaultFilePath } from "../epub/epub-markdown-path-resolver";
 import { resolveEpubPortableBookDataLocation } from "../epub/epub-portable-data-location";
 import {
 	computeAvailableEpubFingerprints,
 	type PartialEpubFingerprints,
 } from "../epub/epub-fingerprints";
+import { materializeEpubSemanticProfileForVersion } from "../epub/semantic/semantic-store";
 import {
 	resolvePdfPortableBookDataLocation,
 	type PdfPortableBookDataLocation,
@@ -319,6 +326,260 @@ function retargetJsonDocument(value: unknown, bookId: string, bookPath: string):
 	return record;
 }
 
+type PackageDataEntry = {
+	relativePath: string;
+	text: string;
+	parsed: unknown | null;
+};
+
+const EPUB_DEFAULT_ANNOTATION_VERSION_ID = "default";
+const EPUB_SEMANTIC_PROFILE_FORMAT = "weave-reader-semantic-profile/v1";
+
+function cleanText(value: unknown): string {
+	return String(value || "").trim();
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function countPortableAnnotations(value: unknown): number {
+	return isObjectRecord(value) && Array.isArray(value.annotations)
+		? value.annotations.length
+		: 0;
+}
+
+function getVersionIdFromPackageRelativePath(relativePath: string): string {
+	const match = normalizeVaultPath(relativePath).match(/^versions\/([^/]+)\//);
+	return match ? safeEpubAnnotationVersionId(match[1]) : "";
+}
+
+function replaceVersionIdInPackageRelativePath(relativePath: string, nextVersionId: string): string {
+	return normalizeVaultPath(relativePath).replace(
+		/^versions\/([^/]+)\//,
+		`versions/${nextVersionId}/`,
+	);
+}
+
+function isEpubAnnotationPackageEntry(relativePath: string): boolean {
+	const normalizedPath = normalizeVaultPath(relativePath);
+	return (
+		normalizedPath === "annotations.json" ||
+		normalizedPath === "annotations.md" ||
+		normalizedPath === "semantic-profile.json" ||
+		normalizedPath === "active-version.json" ||
+		normalizedPath.startsWith("versions/")
+	);
+}
+
+function isDerivedEpubAnnotationEntry(relativePath: string): boolean {
+	return normalizeVaultPath(relativePath) === "annotations.md";
+}
+
+async function readPackageDataEntries(zip: JSZip): Promise<PackageDataEntry[]> {
+	const entries: PackageDataEntry[] = [];
+	for (const entry of Object.values(zip.files)) {
+		const normalizedEntryName = normalizeVaultPath(entry.name);
+		if (entry.dir || !normalizedEntryName.startsWith("data/")) {
+			continue;
+		}
+		const relativePath = normalizedEntryName.slice("data/".length);
+		const text = await entry.async("string");
+		entries.push({
+			relativePath,
+			text,
+			parsed: parseJsonText(text),
+		});
+	}
+	return entries;
+}
+
+function getPackageAnnotationVersionIds(entries: PackageDataEntry[]): string[] {
+	const versionIds = Array.from(
+		new Set(
+			entries
+				.map((entry) => getVersionIdFromPackageRelativePath(entry.relativePath))
+				.filter(Boolean),
+		),
+	);
+	if (versionIds.length) {
+		return versionIds;
+	}
+	const hasRootAnnotationData = entries.some((entry) =>
+		["annotations.json", "semantic-profile.json", "active-version.json"].includes(
+			normalizeVaultPath(entry.relativePath),
+		),
+	);
+	return hasRootAnnotationData ? [EPUB_DEFAULT_ANNOTATION_VERSION_ID] : [];
+}
+
+async function getUniqueImportedEpubVersionId(
+	app: App,
+	bookId: string,
+	originalVersionId: string,
+): Promise<string> {
+	const adapter = getAdapter(app);
+	const baseId = safeEpubAnnotationVersionId(
+		`imported-${originalVersionId || EPUB_DEFAULT_ANNOTATION_VERSION_ID}`,
+	);
+	if (!adapter.exists) {
+		return baseId;
+	}
+	for (let index = 1; index <= 500; index += 1) {
+		const candidate = index === 1 ? baseId : `${baseId}-${index}`;
+		const candidateDir = normalizeVaultPath(`${resolveEpubPortableBookDataLocation(bookId).bookDir}/versions/${candidate}`);
+		const candidateExists =
+			(await adapter.exists(candidateDir)) ||
+			(await adapter.exists(`${candidateDir}/version.json`)) ||
+			(await adapter.exists(`${candidateDir}/annotations.json`)) ||
+			(await adapter.exists(`${candidateDir}/semantic-profile.json`));
+		if (!candidateExists) {
+			return candidate;
+		}
+	}
+	return `${baseId}-${Date.now().toString(36)}`;
+}
+
+function retargetEpubAnnotationVersionJson(
+	value: unknown,
+	bookId: string,
+	versionId: string,
+	importAsSeparateVersion: boolean,
+): unknown {
+	if (!isObjectRecord(value)) {
+		return value;
+	}
+	const next: Record<string, unknown> = { ...value, bookId, versionId };
+	if (importAsSeparateVersion) {
+		const name = cleanText(next.name) || versionId;
+		next.name = name.includes("import") ? name : `${name} (imported)`;
+		next.source = cleanText(next.source) || "imported-reading-package";
+		next.updatedAt = Date.now();
+	}
+	return next;
+}
+
+function retargetEpubSemanticProfileJson(value: unknown, bookId: string, versionId: string): unknown {
+	if (!isObjectRecord(value)) {
+		return value;
+	}
+	const next: Record<string, unknown> = { ...value, bookId };
+	if (next.format !== EPUB_SEMANTIC_PROFILE_FORMAT) {
+		return next;
+	}
+	const safeVersionId = safeEpubAnnotationVersionId(versionId || EPUB_DEFAULT_ANNOTATION_VERSION_ID);
+	return {
+		...next,
+		scope: "version",
+		versionId: safeVersionId,
+		sourceVersionId: safeVersionId,
+	};
+}
+
+function readPackageActiveVersionId(entries: PackageDataEntry[]): string {
+	const activeEntry = entries.find(
+		(entry) => normalizeVaultPath(entry.relativePath) === "active-version.json",
+	);
+	return safeEpubAnnotationVersionId(
+		isObjectRecord(activeEntry?.parsed)
+			? activeEntry?.parsed.activeVersionId
+			: EPUB_DEFAULT_ANNOTATION_VERSION_ID,
+	);
+}
+
+async function importEpubAnnotationSystemAsSeparateVersions(options: {
+	app: App;
+	entries: PackageDataEntry[];
+	bookDir: string;
+	bookId: string;
+	bookPath: string;
+	importedModules: string[];
+	backupPaths: string[];
+}): Promise<string[]> {
+	const packageVersionIds = getPackageAnnotationVersionIds(options.entries);
+	const versionMap = new Map<string, string>();
+	for (const versionId of packageVersionIds) {
+		versionMap.set(
+			versionId,
+			await getUniqueImportedEpubVersionId(options.app, options.bookId, versionId),
+		);
+	}
+	const packageActiveVersionId = readPackageActiveVersionId(options.entries);
+	const mappedActiveVersionId =
+		versionMap.get(packageActiveVersionId) ||
+		Array.from(versionMap.values())[0] ||
+		"";
+
+	for (const entry of options.entries) {
+		const normalizedRelativePath = normalizeVaultPath(entry.relativePath);
+		if (!isEpubAnnotationPackageEntry(normalizedRelativePath) || isDerivedEpubAnnotationEntry(normalizedRelativePath)) {
+			continue;
+		}
+		if (normalizedRelativePath === "active-version.json") {
+			continue;
+		}
+
+		const sourceVersionId = getVersionIdFromPackageRelativePath(normalizedRelativePath);
+		const mappedVersionId =
+			sourceVersionId
+				? versionMap.get(sourceVersionId) || sourceVersionId
+				: mappedActiveVersionId;
+		if (!mappedVersionId) {
+			continue;
+		}
+
+		let targetRelativePath = normalizedRelativePath;
+		if (normalizedRelativePath === "annotations.json") {
+			targetRelativePath = `versions/${mappedVersionId}/annotations.json`;
+		} else if (normalizedRelativePath === "semantic-profile.json") {
+			targetRelativePath = `versions/${mappedVersionId}/semantic-profile.json`;
+		} else if (sourceVersionId) {
+			targetRelativePath = replaceVersionIdInPackageRelativePath(
+				normalizedRelativePath,
+				mappedVersionId,
+			);
+		}
+
+		let retargeted = entry.parsed
+			? retargetJsonDocument(entry.parsed, options.bookId, options.bookPath)
+			: null;
+		if (retargeted && /^versions\/[^/]+\/version\.json$/.test(normalizedRelativePath)) {
+			retargeted = retargetEpubAnnotationVersionJson(
+				retargeted,
+				options.bookId,
+				mappedVersionId,
+				true,
+			);
+		}
+		if (
+			retargeted &&
+			(
+				normalizedRelativePath === "semantic-profile.json" ||
+				/^versions\/[^/]+\/semantic-profile\.json$/.test(normalizedRelativePath)
+			)
+		) {
+			retargeted = retargetEpubSemanticProfileJson(
+				retargeted,
+				options.bookId,
+				mappedVersionId,
+			);
+		}
+
+		await writeVaultTextWithBackup(
+			options.app,
+			normalizeVaultPath(`${options.bookDir}/${targetRelativePath}`),
+			retargeted ? JSON.stringify(retargeted, null, 2) : entry.text,
+			options.backupPaths,
+		);
+	}
+
+	await ensureActiveEpubAnnotationVersion(options.app, options.bookId);
+	if (!options.importedModules.includes("annotationSystem")) {
+		options.importedModules.push("annotationSystem");
+	}
+	return Array.from(new Set(Array.from(versionMap.values())));
+}
+
 async function importJsonFromZip(options: {
 	app: App;
 	zip: JSZip;
@@ -513,6 +774,10 @@ async function createEpubReadingPackage(
 	}
 
 	if (options.modules.annotationSystem) {
+		await ensureActiveEpubAnnotationVersion(app, location.bookId);
+		for (const version of await listEpubAnnotationVersions(app, location.bookId)) {
+			await materializeEpubSemanticProfileForVersion(app, location.bookId, version.versionId);
+		}
 		await addTextFileIfPresent(app, zip, location.annotationsPath, "data/annotations.json");
 		await addTextFileIfPresent(app, zip, location.annotationsMarkdownPath, "data/annotations.md");
 		await addTextFileIfPresent(app, zip, location.semanticProfilePath, "data/semantic-profile.json");
@@ -859,59 +1124,84 @@ async function importEpubReadingPackage(
 	const location = resolveEpubPortableBookDataLocation(bookId);
 	const importedModules: string[] = importTarget.importedBook ? ["book"] : [];
 	const backupPaths: string[] = [];
+	const matchedExistingBook = Boolean(existingMatch?.bookId || fallbackToPreferredBook);
+	const annotationDataEntries = manifest.modules.annotationSystem
+		? (await readPackageDataEntries(zip)).filter((entry) =>
+				isEpubAnnotationPackageEntry(entry.relativePath),
+			)
+		: [];
+	const existingActiveAnnotations = matchedExistingBook
+		? await readActiveEpubAnnotationVersionAnnotations(app, location.bookId)
+		: null;
+	const importAnnotationSystemAsSeparateVersions =
+		matchedExistingBook &&
+		countPortableAnnotations(existingActiveAnnotations) > 0 &&
+		annotationDataEntries.length > 0;
 
 	if (manifest.modules.annotationSystem) {
-		await importJsonFromZip({
-			app,
-			zip,
-			zipPath: "data/annotations.json",
-			targetPath: location.annotationsPath,
-			bookId: location.bookId,
-			bookPath,
-			moduleKey: "annotationSystem",
-			importedModules,
-			backupPaths,
-		});
-		await importTextFromZip({
-			app,
-			zip,
-			zipPath: "data/annotations.md",
-			targetPath: location.annotationsMarkdownPath,
-			moduleKey: "annotationSystem",
-			importedModules,
-			backupPaths,
-		});
-		await importJsonFromZip({
-			app,
-			zip,
-			zipPath: "data/semantic-profile.json",
-			targetPath: location.semanticProfilePath,
-			bookId: location.bookId,
-			bookPath,
-			moduleKey: "annotationSystem",
-			importedModules,
-			backupPaths,
-		});
-		await importJsonFromZip({
-			app,
-			zip,
-			zipPath: "data/active-version.json",
-			targetPath: normalizeVaultPath(`${location.bookDir}/active-version.json`),
-			bookId: location.bookId,
-			bookPath,
-			moduleKey: "annotationSystem",
-			importedModules,
-			backupPaths,
-		});
-		await importVersionFiles({
-			app,
-			zip,
-			bookDir: location.bookDir,
-			bookId: location.bookId,
-			bookPath,
-			importedModules,
-			backupPaths,
-		});
+		if (importAnnotationSystemAsSeparateVersions) {
+			await importEpubAnnotationSystemAsSeparateVersions({
+				app,
+				entries: annotationDataEntries,
+				bookDir: location.bookDir,
+				bookId: location.bookId,
+				bookPath,
+				importedModules,
+				backupPaths,
+			});
+		} else {
+			await importJsonFromZip({
+				app,
+				zip,
+				zipPath: "data/annotations.json",
+				targetPath: location.annotationsPath,
+				bookId: location.bookId,
+				bookPath,
+				moduleKey: "annotationSystem",
+				importedModules,
+				backupPaths,
+			});
+			await importTextFromZip({
+				app,
+				zip,
+				zipPath: "data/annotations.md",
+				targetPath: location.annotationsMarkdownPath,
+				moduleKey: "annotationSystem",
+				importedModules,
+				backupPaths,
+			});
+			await importJsonFromZip({
+				app,
+				zip,
+				zipPath: "data/semantic-profile.json",
+				targetPath: location.semanticProfilePath,
+				bookId: location.bookId,
+				bookPath,
+				moduleKey: "annotationSystem",
+				importedModules,
+				backupPaths,
+			});
+			await importJsonFromZip({
+				app,
+				zip,
+				zipPath: "data/active-version.json",
+				targetPath: normalizeVaultPath(`${location.bookDir}/active-version.json`),
+				bookId: location.bookId,
+				bookPath,
+				moduleKey: "annotationSystem",
+				importedModules,
+				backupPaths,
+			});
+			await importVersionFiles({
+				app,
+				zip,
+				bookDir: location.bookDir,
+				bookId: location.bookId,
+				bookPath,
+				importedModules,
+				backupPaths,
+			});
+		}
 	}
 
 	if (manifest.modules.navigationState) {

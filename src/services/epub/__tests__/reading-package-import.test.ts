@@ -9,6 +9,27 @@ import {
 
 function createWritableMockApp(files: Map<string, string | Uint8Array>): App {
 	const normalize = (path: string) => String(path || "").replace(/\\/g, "/");
+	const listChildren = (path: string) => {
+		const root = normalize(path).replace(/\/+$/g, "");
+		const filesInDir: string[] = [];
+		const folderSet = new Set<string>();
+		for (const filePath of files.keys()) {
+			if (!filePath.startsWith(`${root}/`)) {
+				continue;
+			}
+			const rest = filePath.slice(root.length + 1);
+			const [firstPart] = rest.split("/");
+			if (!firstPart) {
+				continue;
+			}
+			if (rest.includes("/")) {
+				folderSet.add(`${root}/${firstPart}`);
+			} else {
+				filesInDir.push(filePath);
+			}
+		}
+		return { files: filesInDir, folders: Array.from(folderSet) };
+	};
 	return {
 		vault: {
 			adapter: {
@@ -21,6 +42,7 @@ function createWritableMockApp(files: Map<string, string | Uint8Array>): App {
 					files.set(normalize(path), new Uint8Array(data));
 				},
 				mkdir: async () => undefined,
+				list: async (path: string) => listChildren(path),
 			},
 		},
 	} as unknown as App;
@@ -237,6 +259,135 @@ describe("reading package import", () => {
 		expect(annotations.bookId).toBe("epub-book-current");
 		expect(annotations.filePath).toBe("Books/current.epub");
 		expect(files.has("Books/demo.epub")).toBe(false);
+	});
+
+	it("imports EPUB annotation versions as separate versions when the matched book already has annotations", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "epub",
+			bookId: "epub-book-remote",
+			bookPath: "Remote/demo.epub",
+			title: "Demo",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			sourceFingerprint: "same-fingerprint",
+			exportedAt: 1785950000000,
+		});
+		zip.file(
+			"data/active-version.json",
+			JSON.stringify({
+				format: "weave-reader-active-annotation-version/v1",
+				version: 1,
+				bookId: "epub-book-remote",
+				activeVersionId: "default",
+				updatedAt: 10,
+			}),
+		);
+		zip.file(
+			"data/versions/default/version.json",
+			JSON.stringify({
+				format: "weave-reader-annotation-version/v1",
+				version: 1,
+				bookId: "epub-book-remote",
+				versionId: "default",
+				name: "Default",
+				createdAt: 10,
+				updatedAt: 10,
+			}),
+		);
+		zip.file(
+			"data/versions/default/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-annotations/v1",
+				version: 1,
+				bookId: "epub-book-remote",
+				updatedAt: 10,
+				annotations: [{ semanticId: "remote" }],
+			}),
+		);
+		zip.file(
+			"data/versions/default/semantic-profile.json",
+			JSON.stringify({
+				format: "weave-reader-semantic-profile/v1",
+				version: 1,
+				scope: "version",
+				bookId: "epub-book-remote",
+				versionId: "default",
+				sourceVersionId: "default",
+				semantics: [{ id: "remote", label: "Remote" }],
+			}),
+		);
+		const root = "weave/epub-data/books/epub-book-local";
+		const files = new Map<string, string | Uint8Array>([
+			[
+				"weave/epub-data/index.json",
+				JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						"epub-book-local": {
+							bookId: "epub-book-local",
+							filePath: "Books/demo.epub",
+							sourceFingerprint: "same-fingerprint",
+						},
+					},
+				}),
+			],
+			[
+				`${root}/active-version.json`,
+				JSON.stringify({
+					format: "weave-reader-active-annotation-version/v1",
+					version: 1,
+					bookId: "epub-book-local",
+					activeVersionId: "default",
+					updatedAt: 1,
+				}),
+			],
+			[
+				`${root}/versions/default/annotations.json`,
+				JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId: "epub-book-local",
+					updatedAt: 1,
+					annotations: [{ semanticId: "local" }],
+				}),
+			],
+		]);
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{ defaultBookFolder: "Books" },
+		);
+
+		expect(result.bookId).toBe("epub-book-local");
+		expect(result.importMode).toBe("fingerprintMatch");
+		expect(JSON.parse(String(files.get(`${root}/active-version.json`) || "{}"))).toMatchObject({
+			bookId: "epub-book-local",
+			activeVersionId: "default",
+		});
+		expect(JSON.parse(String(files.get(`${root}/versions/default/annotations.json`) || "{}"))).toMatchObject({
+			bookId: "epub-book-local",
+			annotations: [{ semanticId: "local" }],
+		});
+		expect(JSON.parse(String(files.get(`${root}/versions/imported-default/annotations.json`) || "{}"))).toMatchObject({
+			bookId: "epub-book-local",
+			annotations: [{ semanticId: "remote" }],
+		});
+		expect(JSON.parse(String(files.get(`${root}/versions/imported-default/semantic-profile.json`) || "{}"))).toMatchObject({
+			bookId: "epub-book-local",
+			versionId: "imported-default",
+			sourceVersionId: "imported-default",
+		});
 	});
 
 	it("imports a targetless EPUB package by writing its embedded original book", async () => {

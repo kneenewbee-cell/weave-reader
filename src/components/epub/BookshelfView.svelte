@@ -105,6 +105,7 @@
                 importReadingPackage,
                 pickReadingPackageArrayBuffer,
                 type ReadingPackageBookFormat,
+                type ReadingPackageImportResult,
                 type ReadingPackageModuleSelection,
         } from '../../services/reading-package';
         import { openReadingPackageExportModal } from '../modals/ReadingPackageExportModal';
@@ -1890,6 +1891,7 @@
                                 targetBookPath: context.targetPath,
                                 defaultBookFolder: '/',
                         });
+                        notifyReadingPackageImportChanged(result);
                         dispatchBookshelfDataChanged();
                         await refreshBookshelf();
                         showReadingPackageImportResultModal(app, result);
@@ -1921,6 +1923,7 @@
                                 defaultBookFolder: '/',
                         });
                         await storageService.addBooksToBookshelf([result.bookPath]);
+                        notifyReadingPackageImportChanged(result);
                         dispatchBookshelfDataChanged();
                         await refreshBookshelf();
                         showReadingPackageImportResultModal(app, result);
@@ -1929,6 +1932,16 @@
                         logger.error('Failed to import reading package from bookshelf:', error);
                         new Notice(`阅读包导入失败：${getReadingPackageImportNoticeMessage(error)}`);
                 }
+        }
+
+        function notifyReadingPackageImportChanged(result: ReadingPackageImportResult): void {
+                if (result.bookFormat !== 'epub' || !result.importedModules.includes('annotationSystem')) {
+                        return;
+                }
+                notifyEpubAnnotationVersionChanged(result.bookId, {
+                        reason: 'reading-package-import',
+                        filePath: result.bookPath,
+                });
         }
 
         async function importAnnotatedBookPackageToShelf(

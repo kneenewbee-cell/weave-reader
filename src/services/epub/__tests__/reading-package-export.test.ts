@@ -15,6 +15,10 @@ function createMockApp(files: Map<string, string | Uint8Array>): App {
 				exists: async (path: string) => files.has(normalize(path)),
 				read: async (path: string) => String(files.get(normalize(path)) || ""),
 				readBinary: async (path: string) => files.get(normalize(path)) as Uint8Array,
+				write: async (path: string, data: string) => {
+					files.set(normalize(path), data);
+				},
+				mkdir: async () => undefined,
 				list: async (path: string) => {
 					const root = normalize(path).replace(/\/+$/g, "");
 					const filesInDir: string[] = [];
@@ -98,6 +102,54 @@ describe("reading package export", () => {
 		expect(await zip.file("data/bookmarks.json")?.async("string")).toContain("bookmarks");
 		expect(await zip.file("data/reading-state.json")?.async("string")).toContain("progress");
 		expect(await zip.file("data/ai-reading/note.md")?.async("string")).toContain("Books/demo.epub");
+	});
+
+	it("materializes the active EPUB annotation version before exporting a reading package", async () => {
+		const files = new Map<string, string | Uint8Array>([
+			["Books/demo.epub", new Uint8Array([1, 2, 3])],
+			[
+				"weave/epub-data/books/epub-book-1/book.json",
+				JSON.stringify({
+					bookId: "epub-book-1",
+					title: "Demo",
+					filePath: "Books/demo.epub",
+				}),
+			],
+			[
+				"weave/epub-data/books/epub-book-1/annotations.json",
+				JSON.stringify({
+					format: "weave-reader-annotations/v1",
+					version: 1,
+					bookId: "epub-book-1",
+					updatedAt: 1,
+					annotations: [{ semanticId: "important" }],
+				}),
+			],
+		]);
+
+		const result = await createReadingPackage(createMockApp(files), {
+			bookFormat: "epub",
+			bookId: "epub-book-1",
+			filePath: "Books/demo.epub",
+			displayName: "Demo",
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+
+		const activeVersionText = await zip.file("data/active-version.json")?.async("string");
+		const versionAnnotationsText = await zip.file("data/versions/default/annotations.json")?.async("string");
+
+		expect(activeVersionText).toBeDefined();
+		expect(activeVersionText || "").toContain("default");
+		expect(versionAnnotationsText).toBeDefined();
+		expect(versionAnnotationsText || "").toContain("important");
 	});
 
 	it("ignores extra circular module properties when writing the package manifest", async () => {
