@@ -3319,6 +3319,48 @@ export class EpubStorageService {
 		const preferredSourceFingerprint = String(
 			options.preferredFileFingerprint || options.preferredSourceFingerprint || ""
 		).trim().toLowerCase();
+		const entryStatMatches = (entry?: EpubSourceRegistryEntry): boolean =>
+			Boolean(
+				entry &&
+					currentStat &&
+					entry.filePath === normalizedPath &&
+					entry.sourceSize === currentStat.size &&
+					entry.sourceMtime === currentStat.mtime
+			);
+		const entryHasCompleteFingerprints = (entry?: EpubSourceRegistryEntry): boolean =>
+			Boolean(
+				entry?.sourceFingerprint &&
+					entry.fileFingerprint &&
+					entry.packageFingerprint &&
+					entry.contentFingerprint
+			);
+		const entryFingerprintMatchesPreferred = (entry?: EpubSourceRegistryEntry): boolean => {
+			if (!preferredSourceFingerprint) {
+				return true;
+			}
+			return (
+				this.normalizeFingerprint(entry?.sourceFingerprint || entry?.fileFingerprint) ===
+				preferredSourceFingerprint
+			);
+		};
+		const entrySourceIdMatchesPreferred = (entry?: EpubSourceRegistryEntry): boolean =>
+			!options.preferredSourceId || entry?.sourceId === options.preferredSourceId;
+		const reusableEntry = [
+			byPath,
+			options.preferredSourceId
+				? registry.find((entry) => entry.sourceId === options.preferredSourceId)
+				: undefined,
+		].find(
+			(entry) =>
+				entryStatMatches(entry) &&
+				entryHasCompleteFingerprints(entry) &&
+				entryFingerprintMatchesPreferred(entry) &&
+				entrySourceIdMatchesPreferred(entry)
+		);
+		if (reusableEntry) {
+			return reusableEntry;
+		}
+
 		const computedFingerprints = await this.computeSourceFingerprints(normalizedPath);
 		const fingerprints: PartialEpubFingerprints = {
 			fileFingerprint:

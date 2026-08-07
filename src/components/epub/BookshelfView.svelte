@@ -656,8 +656,8 @@
         async function loadBookMetadata(files: EpubFileInfo[], runId: number, allowRetry = true): Promise<void> {
                 try {
                         const [books, scanEntries] = await Promise.all([
-                                // Bookshelf progress/reading status depends on hydrated readingState.
-                                storageService.loadBooks({ hydrateStates: true }),
+                                // Unified local records already include current state; avoid per-book bookmark hydration on every shelf refresh.
+                                storageService.loadBooks({ hydrateStates: false }),
                                 storageService.loadScanIndex(),
                         ]);
                         if (runId !== refreshRunId) return;

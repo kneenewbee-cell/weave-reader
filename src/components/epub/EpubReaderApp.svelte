@@ -3752,20 +3752,7 @@
 		}
 
 		try {
-			const sourceEntry = await storageService.ensureSourceIdentity(targetFilePath, {
-				preferredSourceId: reusableBook?.sourceId,
-			});
-			if (isStaleBookLoad(loadToken)) {
-				return;
-			}
-
-			if (sourceEntry) {
-				loadedBook.sourceId = sourceEntry.sourceId;
-				loadedBook.sourceFingerprint = sourceEntry.sourceFingerprint;
-				loadedBook.sourceSize = sourceEntry.sourceSize;
-				loadedBook.sourceMtime = sourceEntry.sourceMtime;
-				loadedBook.filePath = sourceEntry.filePath;
-			} else if (reusableBook?.sourceId) {
+			if (reusableBook?.sourceId && !loadedBook.sourceId) {
 				loadedBook.sourceId = reusableBook.sourceId;
 			}
 
@@ -3906,12 +3893,6 @@
 				|| (canonicalFilePath !== targetFilePath
 					? await storageService.findBookByFilePath(targetFilePath)
 					: null);
-			if (isStaleBookLoad(loadToken)) {
-				return;
-			}
-			if (existingBook?.id) {
-				await storageService.hydrateBookState(existingBook.id);
-			}
 			if (isStaleBookLoad(loadToken)) {
 				return;
 			}

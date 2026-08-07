@@ -1952,6 +1952,62 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("skips offscreen chapter highlights without resolving every stored cfi", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const visibleHighlight = {
+				cfiRange: "epubcfi(/6/4!/4/2,/1:0,/1:8)",
+				color: "yellow",
+				text: "Visible annotation",
+				chapterIndex: 2,
+				presentation: "highlight" as const,
+			};
+			const offscreenHighlights = Array.from({ length: 120 }, (_, index) => ({
+				cfiRange: `epubcfi(/6/${index + 20}!/4/2,/1:0,/1:8)`,
+				color: "green",
+				text: `Offscreen annotation ${index}`,
+				chapterIndex: 99 + index,
+				presentation: "highlight" as const,
+			}));
+			const view = {
+				addAnnotation: vi.fn(async () => undefined),
+				deleteAnnotation: vi.fn(async () => undefined),
+				removeEventListener: vi.fn(),
+				close: vi.fn(),
+				remove: vi.fn(),
+			};
+
+			(service as any).foliateView = view;
+			vi.spyOn(service as any, "resolveHighlightAnchorCfi").mockImplementation(
+				(async (...args: any[]) => {
+					const [highlight] = args as [{ cfiRange: string }];
+					return highlight.cfiRange;
+				}) as any
+			);
+			const sectionSpy = vi
+				.spyOn((service as any).parser, "getSectionIndexForCfi")
+				.mockImplementation((cfiRange: string) =>
+					cfiRange === visibleHighlight.cfiRange ? 2 : 100
+				);
+			vi.spyOn(service as any, "getVisibleFramesWithIndex").mockReturnValue([
+				{ index: 2, frameDocument: document },
+			]);
+
+			await service.applyHighlights([...offscreenHighlights, visibleHighlight]);
+
+			expect(view.addAnnotation).toHaveBeenCalledTimes(1);
+			expect(view.addAnnotation.mock.calls[0]?.[0]).toMatchObject({
+				value: visibleHighlight.cfiRange,
+				text: visibleHighlight.text,
+			});
+			for (const highlight of offscreenHighlights) {
+				expect(sectionSpy).not.toHaveBeenCalledWith(highlight.cfiRange);
+			}
+		} finally {
+			service.destroy();
+		}
+	});
+
 	it("waits for a queued forced highlight repaint before applyHighlights resolves", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {

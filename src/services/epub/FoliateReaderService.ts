@@ -442,6 +442,12 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private referenceBadgeClickCallbacks = new Set<(info: HighlightClickInfo) => void>();
 	private highlightDataMap = new Map<string, ReaderHighlight>();
 	private temporaryHighlightDataMap = new Map<string, ReaderHighlight>();
+	private highlightKeysBySectionIndex = new Map<number, Set<string>>();
+	private temporaryHighlightKeysBySectionIndex = new Map<number, Set<string>>();
+	private unindexedHighlightKeys = new Set<string>();
+	private unindexedTemporaryHighlightKeys = new Set<string>();
+	private highlightSectionIndexByKey = new Map<string, number>();
+	private temporaryHighlightSectionIndexByKey = new Map<string, number>();
 	private highlightAnchorResolutionByKey = new Map<string, Promise<string>>();
 	private savedHighlights: ReaderHighlight[] = [];
 	private renderedAnnotations = new Map<string, RenderedFoliateAnnotation>();
@@ -1984,6 +1990,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.annotationSyncEpoch += 1;
 		const deduped = new Map<string, ReaderHighlight>();
 		this.highlightDataMap.clear();
+		this.resetPersistentHighlightIndex();
 		if (!options?.preserveAnchorCache) {
 			this.highlightAnchorResolutionByKey.clear();
 		}
@@ -1998,7 +2005,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}
 		this.savedHighlights = Array.from(deduped.values());
 		for (const highlight of this.savedHighlights) {
-			this.highlightDataMap.set(getReaderHighlightIdentityKey(highlight), highlight);
+			this.setStoredHighlight(getReaderHighlightIdentityKey(highlight), highlight);
 		}
 		if (options?.preserveAnchorCache) {
 			for (const key of Array.from(this.highlightAnchorResolutionByKey.keys())) {
@@ -2120,6 +2127,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private removeStoredHighlightByKey(key: string): void {
 		this.highlightDataMap.delete(key);
 		this.temporaryHighlightDataMap.delete(key);
+		this.unindexHighlightKey(key);
+		this.unindexHighlightKey(key, true);
 		this.highlightAnchorResolutionByKey.delete(key);
 		const timer = this.temporaryHighlightTimers.get(key);
 		if (timer) {
@@ -6474,6 +6483,186 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.annotationSyncInFlight = null;
 	}
 
+	private normalizeHighlightSectionIndex(value: unknown): number | null {
+		if (typeof value !== "number" || !Number.isFinite(value)) {
+			return null;
+		}
+		return Math.max(0, Math.floor(value));
+	}
+
+	private getKnownHighlightSectionIndex(highlight: ReaderHighlight): number | null {
+		const explicit = this.normalizeHighlightSectionIndex(highlight.chapterIndex);
+		if (explicit !== null) {
+			return explicit;
+		}
+		return this.normalizeHighlightSectionIndex(
+			this.parser.getSectionIndexForCfi(highlight.cfiRange)
+		);
+	}
+
+	private addKeyToSectionIndex(
+		index: Map<number, Set<string>>,
+		sectionIndex: number,
+		key: string
+	): void {
+		let keys = index.get(sectionIndex);
+		if (!keys) {
+			keys = new Set<string>();
+			index.set(sectionIndex, keys);
+		}
+		keys.add(key);
+	}
+
+	private removeKeyFromSectionIndex(
+		index: Map<number, Set<string>>,
+		sectionIndex: number | undefined,
+		key: string
+	): void {
+		if (typeof sectionIndex !== "number") {
+			return;
+		}
+		const keys = index.get(sectionIndex);
+		if (!keys) {
+			return;
+		}
+		keys.delete(key);
+		if (keys.size === 0) {
+			index.delete(sectionIndex);
+		}
+	}
+
+	private unindexHighlightKey(key: string, temporary = false): void {
+		if (temporary) {
+			this.removeKeyFromSectionIndex(
+				this.temporaryHighlightKeysBySectionIndex,
+				this.temporaryHighlightSectionIndexByKey.get(key),
+				key
+			);
+			this.temporaryHighlightSectionIndexByKey.delete(key);
+			this.unindexedTemporaryHighlightKeys.delete(key);
+			return;
+		}
+		this.removeKeyFromSectionIndex(
+			this.highlightKeysBySectionIndex,
+			this.highlightSectionIndexByKey.get(key),
+			key
+		);
+		this.highlightSectionIndexByKey.delete(key);
+		this.unindexedHighlightKeys.delete(key);
+	}
+
+	private indexHighlightKey(key: string, highlight: ReaderHighlight, temporary = false): void {
+		this.unindexHighlightKey(key, temporary);
+		const sectionIndex = this.getKnownHighlightSectionIndex(highlight);
+		if (sectionIndex === null) {
+			if (temporary) {
+				this.unindexedTemporaryHighlightKeys.add(key);
+			} else {
+				this.unindexedHighlightKeys.add(key);
+			}
+			return;
+		}
+		if (temporary) {
+			this.temporaryHighlightSectionIndexByKey.set(key, sectionIndex);
+			this.addKeyToSectionIndex(this.temporaryHighlightKeysBySectionIndex, sectionIndex, key);
+			return;
+		}
+		this.highlightSectionIndexByKey.set(key, sectionIndex);
+		this.addKeyToSectionIndex(this.highlightKeysBySectionIndex, sectionIndex, key);
+	}
+
+	private setStoredHighlight(
+		key: string,
+		highlight: ReaderHighlight,
+		temporary = false
+	): void {
+		if (temporary) {
+			this.temporaryHighlightDataMap.set(key, highlight);
+		} else {
+			this.highlightDataMap.set(key, highlight);
+		}
+		this.indexHighlightKey(key, highlight, temporary);
+	}
+
+	private resetPersistentHighlightIndex(): void {
+		this.highlightKeysBySectionIndex.clear();
+		this.highlightSectionIndexByKey.clear();
+		this.unindexedHighlightKeys.clear();
+	}
+
+	private resetTemporaryHighlightIndex(): void {
+		this.temporaryHighlightKeysBySectionIndex.clear();
+		this.temporaryHighlightSectionIndexByKey.clear();
+		this.unindexedTemporaryHighlightKeys.clear();
+	}
+
+	private rebuildHighlightIndexesIfNeeded(): void {
+		if (
+			this.highlightSectionIndexByKey.size + this.unindexedHighlightKeys.size !==
+			this.highlightDataMap.size
+		) {
+			this.resetPersistentHighlightIndex();
+			for (const [key, highlight] of this.highlightDataMap.entries()) {
+				this.indexHighlightKey(key, highlight, false);
+			}
+		}
+		if (
+			this.temporaryHighlightSectionIndexByKey.size + this.unindexedTemporaryHighlightKeys.size !==
+			this.temporaryHighlightDataMap.size
+		) {
+			this.resetTemporaryHighlightIndex();
+			for (const [key, highlight] of this.temporaryHighlightDataMap.entries()) {
+				this.indexHighlightKey(key, highlight, true);
+			}
+		}
+	}
+
+	private collectVisibleHighlightCandidates(visibleIndexes: Set<number>): Array<{
+		key: string;
+		persistentHighlight?: ReaderHighlight;
+		temporaryHighlight?: ReaderHighlight;
+		visibleHighlight: ReaderHighlight;
+	}> {
+		this.rebuildHighlightIndexesIfNeeded();
+		const candidateKeys = new Set<string>();
+		for (const index of visibleIndexes) {
+			for (const key of this.highlightKeysBySectionIndex.get(index) || []) {
+				candidateKeys.add(key);
+			}
+			for (const key of this.temporaryHighlightKeysBySectionIndex.get(index) || []) {
+				candidateKeys.add(key);
+			}
+		}
+		for (const key of this.unindexedHighlightKeys) {
+			candidateKeys.add(key);
+		}
+		for (const key of this.unindexedTemporaryHighlightKeys) {
+			candidateKeys.add(key);
+		}
+
+		const pendingVisible: Array<{
+			key: string;
+			persistentHighlight?: ReaderHighlight;
+			temporaryHighlight?: ReaderHighlight;
+			visibleHighlight: ReaderHighlight;
+		}> = [];
+		for (const key of candidateKeys) {
+			const persistentHighlight = this.highlightDataMap.get(key);
+			const temporaryHighlight = this.temporaryHighlightDataMap.get(key);
+			const visibleHighlight = temporaryHighlight || persistentHighlight;
+			if (!visibleHighlight) {
+				continue;
+			}
+			pendingVisible.push({
+				key,
+				persistentHighlight,
+				temporaryHighlight,
+				visibleHighlight,
+			});
+		}
+		return pendingVisible;
+	}
+
 	private async syncAnnotationsWithView(): Promise<void> {
 		const view = this.foliateView;
 		const syncEpoch = this.annotationSyncEpoch;
@@ -6486,41 +6675,16 @@ export class FoliateReaderService implements EpubReaderEngine {
 		const visibleFrames = this.getVisibleFramesWithIndex();
 		const visibleIndexes = new Set(visibleFrames.map((item) => item.index));
 		const desiredVisible = new Map<string, RenderedFoliateAnnotation>();
-
-		const highlightKeys = new Set([
-			...this.highlightDataMap.keys(),
-			...this.temporaryHighlightDataMap.keys(),
-		]);
-
-		const pendingVisible: Array<{
-			key: string;
-			persistentHighlight?: ReaderHighlight;
-			temporaryHighlight?: ReaderHighlight;
-			visibleHighlight: ReaderHighlight;
-		}> = [];
-
-		for (const key of highlightKeys) {
-			const persistentHighlight = this.highlightDataMap.get(key);
-			const temporaryHighlight = this.temporaryHighlightDataMap.get(key);
-			const visibleHighlight = temporaryHighlight || persistentHighlight;
-			if (!visibleHighlight) {
-				continue;
-			}
+		const pendingVisible = this.collectVisibleHighlightCandidates(visibleIndexes).filter(
+			({ visibleHighlight }) => {
 			const sectionIndex = resolveHighlightSectionIndexForView(
 				visibleHighlight,
 				visibleFrames,
 				this.parser
 			);
-			if (sectionIndex === null || !visibleIndexes.has(sectionIndex)) {
-				continue;
+			return sectionIndex !== null && visibleIndexes.has(sectionIndex);
 			}
-			pendingVisible.push({
-				key,
-				persistentHighlight,
-				temporaryHighlight,
-				visibleHighlight,
-			});
-		}
+		);
 
 		await Promise.all(
 			pendingVisible.map(async ({
@@ -6934,11 +7098,12 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 		if (normalizedHighlight.temporary) {
 			const existingTemporaryHighlight = this.temporaryHighlightDataMap.get(key);
-			this.temporaryHighlightDataMap.set(
+			this.setStoredHighlight(
 				key,
 				existingTemporaryHighlight
 					? this.mergeHighlights(existingTemporaryHighlight, normalizedHighlight)
-					: normalizedHighlight
+					: normalizedHighlight,
+				true
 			);
 			await this.refreshHighlights();
 
@@ -6961,7 +7126,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			? this.mergeHighlights(existingHighlight, normalizedHighlight)
 			: normalizedHighlight;
 		deduped.set(key, mergedHighlight);
-		this.highlightDataMap.set(key, mergedHighlight);
+		this.setStoredHighlight(key, mergedHighlight);
 		this.savedHighlights = Array.from(deduped.values());
 		await this.refreshHighlights();
 	}
@@ -6975,6 +7140,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 			this.temporaryHighlightTimers.delete(key);
 		}
 		this.temporaryHighlightDataMap.delete(key);
+		this.unindexHighlightKey(key, true);
 		this.invalidateParagraphPresentation();
 		await this.refreshHighlights();
 	}
@@ -7119,16 +7285,17 @@ export class FoliateReaderService implements EpubReaderEngine {
 				if (cfiRange !== highlight.cfiRange) {
 					const updated = this.normalizeHighlightSources({ ...highlight, cfiRange });
 					if (this.highlightDataMap.has(key)) {
-						this.highlightDataMap.set(key, updated);
+						this.setStoredHighlight(key, updated);
 						this.savedHighlights = this.savedHighlights.map((item) =>
 							getReaderHighlightIdentityKey(item) === key ? updated : item
 						);
 					}
 					const temporary = this.temporaryHighlightDataMap.get(key);
 					if (temporary) {
-						this.temporaryHighlightDataMap.set(
+						this.setStoredHighlight(
 							key,
-							this.normalizeHighlightSources({ ...temporary, cfiRange })
+							this.normalizeHighlightSources({ ...temporary, cfiRange }),
+							true
 						);
 					}
 				}
@@ -7688,6 +7855,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}
 		this.resetTemporaryHighlightTimers();
 		this.temporaryHighlightDataMap.clear();
+		this.resetTemporaryHighlightIndex();
 		this.invalidateParagraphPresentation();
 		if (options.refresh !== false) {
 			await this.refreshHighlights();
@@ -7734,6 +7902,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.temporarilyRevealedConcealmentTimers.clear();
 		this.highlightDataMap.clear();
 		this.temporaryHighlightDataMap.clear();
+		this.resetPersistentHighlightIndex();
+		this.resetTemporaryHighlightIndex();
 		this.highlightAnchorResolutionByKey.clear();
 		this.savedHighlights = [];
 		this.renderedAnnotations.clear();

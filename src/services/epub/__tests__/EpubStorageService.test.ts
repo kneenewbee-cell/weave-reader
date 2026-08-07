@@ -1967,6 +1967,37 @@ describe('EpubStorageService', () => {
     ]);
   });
 
+  it('reuses a current source registry entry without recomputing fingerprints', async () => {
+    const existingEntry = {
+      sourceId: 'epubsrc-existing',
+      filePath: 'Books/demo.epub',
+      sourceFingerprint: 'file-existing',
+      fileFingerprint: 'file-existing',
+      packageFingerprint: 'package-existing',
+      contentFingerprint: 'content-existing',
+      sourceSize: 1024,
+      sourceMtime: 1710000000000,
+      lastSeenAt: 1710000000000,
+      lastKnownPath: 'Books/demo.epub',
+    };
+    const { app } = createMemoryApp(
+      {
+        [LOCAL_EPUB_DATA_PATH]: JSON.stringify({
+          version: 1,
+          sourceRegistry: [existingEntry],
+        }),
+      },
+      ['Books/demo.epub'],
+      {
+        'Books/demo.epub': await createValidEpubBinary(),
+      }
+    );
+    const service = new EpubStorageService(app);
+
+    await expect(service.ensureSourceIdentity('Books/demo.epub')).resolves.toMatchObject(existingEntry);
+    expect(app.vault.adapter.readBinary).not.toHaveBeenCalled();
+  });
+
   it('replaces ephemeral runtime book ids with a stable book id and reuses it for the same source', async () => {
     const binaryContent = 'same-binary-epub';
     const { app, files } = createMemoryApp({}, ['Books/demo.epub'], {
