@@ -173,6 +173,132 @@ describe("reading package import", () => {
 		expect(Array.from(files.keys()).some((path) => path.includes("AI阅读笔记"))).toBe(false);
 	});
 
+	it("merges PDF text annotations instead of overwriting local annotations", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "pdf",
+			bookId: "pdf-book-old",
+			bookPath: "Old/demo.pdf",
+			title: "Demo PDF",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			exportedAt: 1785950000000,
+		});
+		const duplicateAnnotation = {
+			id: "duplicate",
+			pageNumber: 1,
+			kind: "highlight",
+			color: "#ffd54a",
+			text: "same text",
+			rects: [{ x: 0.1, y: 0.1, width: 0.1, height: 0.02 }],
+			createdAt: 10,
+		};
+		const localConflictAnnotation = {
+			id: "conflict",
+			pageNumber: 1,
+			kind: "wavy",
+			color: "#e53935",
+			text: "local wavy",
+			rects: [{ x: 0.2, y: 0.2, width: 0.1, height: 0.02 }],
+			createdAt: 20,
+		};
+		const importedConflictAnnotation = {
+			id: "conflict",
+			pageNumber: 1,
+			kind: "underline",
+			color: "#26c6da",
+			text: "imported underline",
+			rects: [{ x: 0.3, y: 0.3, width: 0.1, height: 0.02 }],
+			createdAt: 30,
+		};
+		zip.file(
+			"data/annotations.json",
+			JSON.stringify({
+				format: "weave-reader-pdf-annotations/v1",
+				bookId: "pdf-book-old",
+				sourcePath: "Old/demo.pdf",
+				pageCount: 2,
+				annotations: [
+					duplicateAnnotation,
+					importedConflictAnnotation,
+					{
+						id: "imported-only",
+						pageNumber: 2,
+						kind: "underline",
+						color: "#26c6da",
+						text: "imported only",
+						rects: [{ x: 0.4, y: 0.4, width: 0.1, height: 0.02 }],
+						createdAt: 40,
+					},
+				],
+			}),
+		);
+		const annotationsPath = resolvePdfPortableBookDataLocation("Books/demo.pdf").annotationsPath;
+		const files = new Map<string, string | Uint8Array>([
+			[
+				annotationsPath,
+				JSON.stringify({
+					format: "weave-reader-pdf-annotations/v1",
+					bookId: "pdf-book-current",
+					sourcePath: "Books/demo.pdf",
+					pageCount: 2,
+					annotations: [
+						{
+							id: "local-only",
+							pageNumber: 1,
+							kind: "wavy",
+							color: "#e53935",
+							text: "local only",
+							rects: [{ x: 0.05, y: 0.05, width: 0.1, height: 0.02 }],
+							createdAt: 5,
+						},
+						duplicateAnnotation,
+						localConflictAnnotation,
+					],
+				}),
+			],
+		]);
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{ targetBookPath: "Books/demo.pdf" },
+		);
+
+		const mergedAnnotations = JSON.parse(String(files.get(annotationsPath) || "{}")) as {
+			sourcePath?: string;
+			annotations?: Array<Record<string, unknown>>;
+		};
+		const annotations = mergedAnnotations.annotations || [];
+		const importedConflictCopies = annotations.filter(
+			(annotation) => annotation.text === "imported underline",
+		);
+
+		expect(result.importedModules).toEqual(expect.arrayContaining(["annotationSystem"]));
+		expect(mergedAnnotations.sourcePath).toBe("Books/demo.pdf");
+		expect(annotations).toHaveLength(5);
+		expect(annotations.map((annotation) => annotation.id)).toEqual(
+			expect.arrayContaining(["local-only", "duplicate", "conflict", "imported-only"]),
+		);
+		expect(annotations.filter((annotation) => annotation.id === "duplicate")).toHaveLength(1);
+		expect(annotations.find((annotation) => annotation.id === "conflict")).toMatchObject({
+			color: "#e53935",
+			kind: "wavy",
+			text: "local wavy",
+		});
+		expect(importedConflictCopies).toHaveLength(1);
+		expect(importedConflictCopies[0].id).not.toBe("conflict");
+		expect(Array.from(files.keys()).some((path) => path.includes("/.backup/"))).toBe(true);
+	});
+
 	it("does not regenerate PDF annotation markdown when the package has no annotation payload", async () => {
 		const zip = new JSZip();
 		writeReadingPackageManifest(zip, {

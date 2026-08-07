@@ -627,6 +627,19 @@ function pdfInkStrokeSignature(value: unknown): string {
 	return JSON.stringify(canonicalizeForCompare(value));
 }
 
+function pdfTextAnnotationSignature(value: unknown): string {
+	return JSON.stringify(canonicalizeForCompare(value));
+}
+
+function readPdfTextAnnotations(value: unknown): Record<string, unknown>[] {
+	if (!isObjectRecord(value) || !Array.isArray(value.annotations)) {
+		return [];
+	}
+	return value.annotations.filter((annotation): annotation is Record<string, unknown> =>
+		isObjectRecord(annotation),
+	);
+}
+
 function readPdfInkStrokes(value: unknown): Record<string, unknown>[] {
 	if (!isObjectRecord(value) || !Array.isArray(value.strokes)) {
 		return [];
@@ -644,6 +657,32 @@ function clonePdfInkStroke(
 		...stroke,
 		...(nextId ? { id: nextId } : {}),
 	})) as Record<string, unknown>;
+}
+
+function clonePdfTextAnnotation(
+	annotation: Record<string, unknown>,
+	nextId?: string,
+): Record<string, unknown> {
+	return JSON.parse(JSON.stringify({
+		...annotation,
+		...(nextId ? { id: nextId } : {}),
+	})) as Record<string, unknown>;
+}
+
+function createImportedPdfTextAnnotationId(
+	originalId: string,
+	usedIds: Set<string>,
+): string {
+	const base = cleanText(originalId)
+		? `${cleanText(originalId)}-imported`
+		: "imported-pdf-annotation";
+	for (let index = 1; index <= 500; index += 1) {
+		const candidate = index === 1 ? base : `${base}-${index}`;
+		if (!usedIds.has(candidate)) {
+			return candidate;
+		}
+	}
+	return `${base}-${Date.now().toString(36)}`;
 }
 
 function createImportedPdfInkStrokeId(
@@ -671,6 +710,64 @@ function normalizePdfInkPageCount(...values: unknown[]): number {
 		}
 	}
 	return pageCount;
+}
+
+function mergePdfTextAnnotationDocuments(options: {
+	local: unknown;
+	imported: unknown;
+	bookId: string;
+	bookPath: string;
+}): Record<string, unknown> {
+	const local = isObjectRecord(options.local) ? options.local : {};
+	const imported = isObjectRecord(options.imported) ? options.imported : {};
+	const mergedAnnotations = readPdfTextAnnotations(local).map((annotation) =>
+		clonePdfTextAnnotation(annotation),
+	);
+	const byId = new Map<string, string>();
+	const usedIds = new Set<string>();
+	for (const annotation of mergedAnnotations) {
+		const id = cleanText(annotation.id);
+		if (id) {
+			usedIds.add(id);
+			if (!byId.has(id)) {
+				byId.set(id, pdfTextAnnotationSignature(annotation));
+			}
+		}
+	}
+
+	for (const annotation of readPdfTextAnnotations(imported)) {
+		const id = cleanText(annotation.id);
+		if (!id) {
+			const nextId = createImportedPdfTextAnnotationId("", usedIds);
+			usedIds.add(nextId);
+			mergedAnnotations.push(clonePdfTextAnnotation(annotation, nextId));
+			continue;
+		}
+		const existingSignature = byId.get(id);
+		if (!existingSignature) {
+			usedIds.add(id);
+			byId.set(id, pdfTextAnnotationSignature(annotation));
+			mergedAnnotations.push(clonePdfTextAnnotation(annotation));
+			continue;
+		}
+		if (existingSignature === pdfTextAnnotationSignature(annotation)) {
+			continue;
+		}
+		const nextId = createImportedPdfTextAnnotationId(id, usedIds);
+		usedIds.add(nextId);
+		mergedAnnotations.push(clonePdfTextAnnotation(annotation, nextId));
+	}
+
+	return {
+		...local,
+		...imported,
+		version: 1,
+		bookId: options.bookId,
+		sourcePath: options.bookPath,
+		pageCount: normalizePdfInkPageCount(local.pageCount, imported.pageCount),
+		annotations: mergedAnnotations,
+		updatedAt: Date.now(),
+	};
 }
 
 function mergePdfInkDocuments(options: {
@@ -762,6 +859,44 @@ async function importPdfInkFromZip(options: {
 	);
 	if (!options.importedModules.includes("ink")) {
 		options.importedModules.push("ink");
+	}
+	return true;
+}
+
+async function importPdfTextAnnotationsFromZip(options: {
+	app: App;
+	zip: JSZip;
+	zipPath: string;
+	targetPath: string;
+	bookId: string;
+	bookPath: string;
+	importedModules: string[];
+	backupPaths: string[];
+}): Promise<boolean> {
+	const text = await options.zip.file(options.zipPath)?.async("string");
+	if (text === undefined) {
+		return false;
+	}
+	const imported = retargetJsonDocument(
+		parseJsonText(text),
+		options.bookId,
+		options.bookPath,
+	);
+	const local = parseJsonText(await readVaultText(options.app, options.targetPath));
+	const merged = mergePdfTextAnnotationDocuments({
+		local,
+		imported,
+		bookId: options.bookId,
+		bookPath: options.bookPath,
+	});
+	await writeVaultTextWithBackup(
+		options.app,
+		options.targetPath,
+		JSON.stringify(merged, null, 2),
+		options.backupPaths,
+	);
+	if (!options.importedModules.includes("annotationSystem")) {
+		options.importedModules.push("annotationSystem");
 	}
 	return true;
 }
@@ -1503,14 +1638,13 @@ async function importPdfReadingPackage(
 	const backupPaths: string[] = [];
 
 	if (manifest.modules.annotationSystem) {
-		const importedAnnotations = await importJsonFromZip({
+		const importedAnnotations = await importPdfTextAnnotationsFromZip({
 			app,
 			zip,
 			zipPath: "data/annotations.json",
 			targetPath: location.annotationsPath,
 			bookId: location.bookId,
 			bookPath,
-			moduleKey: "annotationSystem",
 			importedModules,
 			backupPaths,
 		});
@@ -1525,7 +1659,7 @@ async function importPdfReadingPackage(
 			importedModules,
 			backupPaths,
 		});
-		if (importedAnnotations !== null) {
+		if (importedAnnotations) {
 			await regeneratePdfAnnotationsMarkdown({
 				app,
 				location,
