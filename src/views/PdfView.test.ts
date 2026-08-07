@@ -4,6 +4,8 @@ import { App, Notice, TFile, WorkspaceLeaf, loadPdfJs } from "obsidian";
 import { epubActiveDocumentStore } from "../stores/epub-active-document-store";
 import { getEpubStorageService } from "../services/epub/epub-storage-access";
 import { EPUB_DUAL_WINDOW_ANNOTATION_EVENT } from "../services/epub/epub-dual-window";
+import { dispatchPdfAnnotationsChanged } from "../services/pdf/pdf-annotation-events";
+import { resolvePdfPortableBookDataLocation } from "../services/pdf/pdf-portable-data-location";
 import { PdfView } from "./PdfView";
 
 vi.mock("../services/epub/epub-storage-access", () => ({
@@ -296,6 +298,26 @@ describe("PdfView custom PDF reader", () => {
 		view.contentEl
 			.querySelector<HTMLButtonElement>(`[data-weave-pdf-ink-mode="${mode}"]`)
 			?.click();
+	}
+
+	function createInkPayload(strokes: Array<{ id: string; x: number; y: number }>) {
+		return JSON.stringify({
+			version: 1,
+			sourcePath: "Books/duboule-page.pdf",
+			pageCount: 1,
+			strokes: strokes.map((stroke) => ({
+				id: stroke.id,
+				pageNumber: 1,
+				tool: "pen",
+				color: "#111111",
+				width: 2,
+				points: [
+					{ x: stroke.x, y: stroke.y, t: 1 },
+					{ x: stroke.x + 0.1, y: stroke.y + 0.1, t: 2 },
+				],
+			})),
+			updatedAt: 1,
+		});
 	}
 
 	function createSingleTextPdf(text = "Hello") {
@@ -837,6 +859,46 @@ describe("PdfView custom PDF reader", () => {
 			color: "#111111",
 		});
 		expect(payload.strokes[0].points[0]).toMatchObject({ x: 0.1, y: 0.1 });
+		restoreCanvas();
+	});
+
+	it("reloads ink strokes from disk after a PDF reading package import event", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, files } = createPdfView();
+		const location = resolvePdfPortableBookDataLocation("Books/duboule-page.pdf");
+		files.set(location.inkPath, createInkPayload([{ id: "local", x: 0.1, y: 0.1 }]));
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const layer = view.contentEl.querySelector<SVGSVGElement>(
+			".weave-pdf-annotation-layer"
+		);
+		expect(layer).toBeTruthy();
+		expect(layer!.querySelectorAll("path")).toHaveLength(1);
+
+		files.set(
+			location.inkPath,
+			createInkPayload([
+				{ id: "local", x: 0.1, y: 0.1 },
+				{ id: "imported", x: 0.4, y: 0.4 },
+			])
+		);
+		dispatchPdfAnnotationsChanged({
+			filePath: "Books/duboule-page.pdf",
+			bookId: location.bookId,
+			reason: "reading-package-import",
+			modules: ["ink"],
+		});
+
+		await vi.waitFor(() => {
+			expect(layer!.querySelectorAll("path")).toHaveLength(2);
+		});
 		restoreCanvas();
 	});
 

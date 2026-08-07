@@ -36,6 +36,7 @@
                 mergePdfBookshelfInfoIntoMeta,
                 type PdfBookshelfInfo,
         } from '../../services/epub/pdf-bookshelf-metadata';
+        import { dispatchPdfAnnotationsChanged } from '../../services/pdf/pdf-annotation-events';
         import {
                 clampBookshelfProgress,
                 formatBookshelfLastReadTime,
@@ -1936,7 +1937,18 @@
         }
 
         function notifyReadingPackageImportChanged(result: ReadingPackageImportResult): void {
-                if (result.bookFormat !== 'epub' || !result.importedModules.includes('annotationSystem')) {
+                if (result.bookFormat === 'pdf') {
+                        if (result.importedModules.includes('annotationSystem') || result.importedModules.includes('ink')) {
+                                dispatchPdfAnnotationsChanged({
+                                        filePath: result.bookPath,
+                                        bookId: result.bookId,
+                                        reason: 'reading-package-import',
+                                        modules: result.importedModules,
+                                });
+                        }
+                        return;
+                }
+                if (!result.importedModules.includes('annotationSystem')) {
                         return;
                 }
                 notifyEpubAnnotationVersionChanged(result.bookId, {

@@ -56,6 +56,10 @@ import {
 } from "../services/pdf/pdf-text-annotation-store";
 import { resolvePdfPortableBookDataLocation } from "../services/pdf/pdf-portable-data-location";
 import { renderPdfAnnotationNoteMarkdown } from "../services/pdf/pdf-annotation-note-markdown";
+import {
+	PDF_ANNOTATIONS_CHANGED_EVENT,
+	normalizePdfAnnotationsChangedDetail,
+} from "../services/pdf/pdf-annotation-events";
 import { openAnnotationNoteFileWithExistingLeaf } from "../services/epub/open-annotation-note-file";
 import { DirectoryUtils } from "../utils/directory-utils";
 
@@ -258,6 +262,9 @@ export class PdfView extends ItemView {
 	private readonly handleDualWindowAnnotationEvent = (event: Event) => {
 		this.handlePdfDualWindowAnnotationEvent(event);
 	};
+	private readonly handlePdfAnnotationsChangedEvent = (event: Event) => {
+		void this.reloadPdfAnnotationsFromDisk(event);
+	};
 
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -397,6 +404,10 @@ export class PdfView extends ItemView {
 			EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
 			this.handleDualWindowAnnotationEvent
 		);
+		window.addEventListener(
+			PDF_ANNOTATIONS_CHANGED_EVENT,
+			this.handlePdfAnnotationsChangedEvent
+		);
 		this.activeLeafChangeRef = this.app.workspace.on("active-leaf-change", (leaf) => {
 			this.syncAsActivePdfDocumentIfActive(leaf);
 		});
@@ -422,6 +433,10 @@ export class PdfView extends ItemView {
 		window.removeEventListener(
 			EPUB_DUAL_WINDOW_ANNOTATION_EVENT,
 			this.handleDualWindowAnnotationEvent
+		);
+		window.removeEventListener(
+			PDF_ANNOTATIONS_CHANGED_EVENT,
+			this.handlePdfAnnotationsChangedEvent
 		);
 		this.contentEl.removeAttribute("tabindex");
 		this.contentEl.removeClass("weave-pdf-view-content");
@@ -1392,6 +1407,31 @@ export class PdfView extends ItemView {
 			this.textAnnotations = [];
 			this.annotationsDirty = false;
 		}
+	}
+
+	private async reloadPdfAnnotationsFromDisk(event: Event): Promise<void> {
+		const detail = normalizePdfAnnotationsChangedDetail(
+			(event as CustomEvent).detail,
+		);
+		if (!detail || detail.filePath !== this.getCurrentFilePath()) {
+			return;
+		}
+		if (!this.isOpen || this.pageCount <= 0) {
+			return;
+		}
+		const token = this.renderToken;
+		await this.loadPdfAnnotations(token);
+		if (!this.isCurrentRender(token)) {
+			return;
+		}
+		this.selectedInkStrokeIds.clear();
+		this.strokeClipboard = [];
+		this.undoInkStack = [];
+		this.redoInkStack = [];
+		this.renderAllInkStrokes();
+		this.renderAllTextAnnotations();
+		this.updateToolbarState();
+		this.syncAsActivePdfDocumentIfActive();
 	}
 
 	private async persistPdfAnnotations(
