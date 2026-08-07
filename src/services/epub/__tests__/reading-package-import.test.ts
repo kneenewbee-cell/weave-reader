@@ -182,6 +182,63 @@ describe("reading package import", () => {
 		expect(files.size).toBe(0);
 	});
 
+	it("imports a targetless data-only EPUB package into an existing book matched by fingerprint", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "epub",
+			bookId: "epub-book-old",
+			bookPath: "Old/demo.epub",
+			title: "Demo",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			contentFingerprint: "content-demo",
+			exportedAt: 1785950000000,
+		});
+		zip.file("data/annotations.json", "{\"bookId\":\"epub-book-old\",\"filePath\":\"Old/demo.epub\",\"annotations\":[]}");
+		const files = new Map<string, string | Uint8Array>([
+			[
+				"weave/epub-data/index.json",
+				JSON.stringify({
+					format: "weave-reader-epub-data-index/v1",
+					version: 1,
+					books: {
+						"epub-book-current": {
+							bookId: "epub-book-current",
+							filePath: "Books/current.epub",
+							contentFingerprint: "content-demo",
+						},
+					},
+				}),
+			],
+		]);
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{ defaultBookFolder: "Books" },
+		);
+
+		const annotations = JSON.parse(
+			String(files.get("weave/epub-data/books/epub-book-current/annotations.json") || "{}"),
+		) as Record<string, unknown>;
+
+		expect(result.bookId).toBe("epub-book-current");
+		expect(result.bookPath).toBe("Books/current.epub");
+		expect(result.importMode).toBe("fingerprintMatch");
+		expect(result.importedModules).toEqual(expect.arrayContaining(["annotationSystem"]));
+		expect(annotations.bookId).toBe("epub-book-current");
+		expect(annotations.filePath).toBe("Books/current.epub");
+		expect(files.has("Books/demo.epub")).toBe(false);
+	});
+
 	it("imports a targetless EPUB package by writing its embedded original book", async () => {
 		const zip = new JSZip();
 		writeReadingPackageManifest(zip, {

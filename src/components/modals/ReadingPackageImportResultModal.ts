@@ -10,6 +10,7 @@ const MODULE_LABELS: Record<string, string> = {
 };
 
 const IMPORT_MODE_LABELS: Record<string, string> = {
+	fingerprintMatch: "三指纹匹配到已有书",
 	embeddedBook: "写入包内原书（新书）",
 	existingBookPath: "绑定到仓库已有原书路径",
 	specifiedTarget: "导入到指定书籍",

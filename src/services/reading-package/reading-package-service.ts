@@ -2,8 +2,21 @@ import type { App } from "obsidian";
 import { normalizePath } from "obsidian";
 import JSZip from "jszip";
 import { resolveEpubAiReadingNotePath } from "../epub/epub-ai-reading";
+import {
+	applyFingerprintsToRecord as applyEpubFingerprintsToRecord,
+	findExistingBookMatchByFingerprints as findExistingEpubBookMatchByFingerprints,
+	hasAnyFingerprint as hasAnyEpubFingerprint,
+	hasMatchingFingerprint as hasMatchingEpubFingerprint,
+	mergeFingerprints as mergeEpubFingerprints,
+	readFingerprintsFromRecord as readEpubFingerprintsFromRecord,
+	type ExistingPortableBookMatch,
+} from "../epub/epub-portable-book-package";
 import { generateUniqueVaultFilePath } from "../epub/epub-markdown-path-resolver";
 import { resolveEpubPortableBookDataLocation } from "../epub/epub-portable-data-location";
+import {
+	computeAvailableEpubFingerprints,
+	type PartialEpubFingerprints,
+} from "../epub/epub-fingerprints";
 import {
 	resolvePdfPortableBookDataLocation,
 	type PdfPortableBookDataLocation,
@@ -57,6 +70,7 @@ export interface ImportReadingPackageOptions {
 }
 
 export type ReadingPackageImportMode =
+	| "fingerprintMatch"
 	| "specifiedTarget"
 	| "embeddedBook"
 	| "existingBookPath";
@@ -135,6 +149,21 @@ async function readVaultBinary(app: App, path: string): Promise<ArrayBuffer | Ui
 		return await adapter.readBinary(normalizedPath);
 	} catch {
 		return null;
+	}
+}
+
+async function computeEpubVaultBookFingerprints(
+	app: App,
+	bookPath: string,
+): Promise<PartialEpubFingerprints> {
+	const binary = await readVaultBinary(app, bookPath);
+	if (!binary) {
+		return {};
+	}
+	try {
+		return await computeAvailableEpubFingerprints(binary);
+	} catch {
+		return {};
 	}
 }
 
@@ -388,6 +417,7 @@ function createManifest(options: {
 	displayName?: string;
 	bookFileFallback: string;
 	modules: ReadingPackageModuleSelection;
+	fingerprints?: PartialEpubFingerprints;
 }): ReadingPackageManifestV2 {
 	const modules = {
 		book: options.modules.book === true,
@@ -405,6 +435,10 @@ function createManifest(options: {
 		bookPath: options.bookPath,
 		bookFileName: getFileName(options.bookPath, options.bookFileFallback),
 		title: String(options.displayName || "").trim() || undefined,
+		sourceFingerprint: options.fingerprints?.fileFingerprint || undefined,
+		fileFingerprint: options.fingerprints?.fileFingerprint || undefined,
+		packageFingerprint: options.fingerprints?.packageFingerprint || undefined,
+		contentFingerprint: options.fingerprints?.contentFingerprint || undefined,
 		includeBook: modules.book === true,
 		modules,
 		exportedAt: Date.now(),
@@ -438,6 +472,16 @@ async function createEpubReadingPackage(
 	const bookPath = normalizeVaultPath(options.filePath);
 	const location = resolveEpubPortableBookDataLocation(options.bookId);
 	const zip = new JSZip();
+	const bookJson = await readVaultText(app, location.bookMetadataPath);
+	const bookRecord = parseJsonObject(bookJson);
+	const bookBinary = await readVaultBinary(app, bookPath);
+	const computedFingerprints = bookBinary
+		? await computeAvailableEpubFingerprints(bookBinary)
+		: {};
+	const fingerprints = mergeEpubFingerprints(
+		computedFingerprints,
+		readEpubFingerprintsFromRecord(bookRecord),
+	);
 	const manifest = createManifest({
 		bookFormat: "epub",
 		bookId: location.bookId,
@@ -445,17 +489,27 @@ async function createEpubReadingPackage(
 		displayName: options.displayName,
 		bookFileFallback: "book.epub",
 		modules: options.modules,
+		fingerprints,
 	});
 	writeReadingPackageManifest(zip, manifest);
-	const includedBook = await addBookFileIfRequested(app, zip, manifest.includeBook, bookPath, "book.epub");
-	if (manifest.includeBook && !includedBook) {
-		throw new Error("reading-package-book-file-unavailable");
+	if (manifest.includeBook) {
+		if (!bookBinary) {
+			throw new Error("reading-package-book-file-unavailable");
+		}
+		zip.file(
+			`book/${getFileName(bookPath, "book.epub")}`,
+			bookBinary instanceof Uint8Array ? bookBinary : new Uint8Array(bookBinary),
+		);
 	}
 
-	const bookJson = await readVaultText(app, location.bookMetadataPath);
-	const bookRecord = parseJsonObject(bookJson);
 	if (bookJson !== null) {
-		zip.file("data/book.json", bookJson);
+		const withFingerprints = bookRecord
+			? applyEpubFingerprintsToRecord(bookRecord, fingerprints)
+			: null;
+		zip.file(
+			"data/book.json",
+			withFingerprints ? JSON.stringify(withFingerprints, null, 2) : bookJson,
+		);
 	}
 
 	if (options.modules.annotationSystem) {
@@ -582,10 +636,19 @@ async function resolveImportBookPath(options: {
 	manifest: ReadingPackageManifestV2;
 	importOptions: ImportReadingPackageOptions;
 	fallbackName: string;
+	targetBookPath?: string;
+	matchedExistingBook?: ExistingPortableBookMatch | null;
 }): Promise<{ bookPath: string; importedBook: boolean; importMode: ReadingPackageImportMode }> {
-	const targetBookPath = normalizeOptionalVaultPath(options.importOptions.targetBookPath);
+	const targetBookPath = normalizeOptionalVaultPath(
+		options.targetBookPath || options.importOptions.targetBookPath,
+	);
 	if (targetBookPath) {
 		return { bookPath: targetBookPath, importedBook: false, importMode: "specifiedTarget" };
+	}
+
+	const matchedBookPath = normalizeOptionalVaultPath(options.matchedExistingBook?.filePath);
+	if (matchedBookPath) {
+		return { bookPath: matchedBookPath, importedBook: false, importMode: "fingerprintMatch" };
 	}
 
 	const bookEntry = getPackageBookEntry(options.zip);
@@ -746,13 +809,51 @@ async function importEpubReadingPackage(
 	manifest: ReadingPackageManifestV2,
 	options: ImportReadingPackageOptions,
 ): Promise<ReadingPackageImportResult> {
-	const bookId = normalizeVaultPath(options.preferredBookId || manifest.bookId);
+	const packageBookJson = parseJsonText(await zip.file("data/book.json")?.async("string") || null);
+	const packageFingerprints = mergeEpubFingerprints(
+		readEpubFingerprintsFromRecord(manifest),
+		readEpubFingerprintsFromRecord(packageBookJson),
+	);
+	const bookEntry = getPackageBookEntry(zip);
+	const preferredBookId = normalizeVaultPath(options.preferredBookId || "");
+	const preferredTargetPath = normalizeOptionalVaultPath(options.targetBookPath);
+	const preferredTargetFingerprints =
+		preferredBookId && preferredTargetPath
+			? await computeEpubVaultBookFingerprints(app, preferredTargetPath)
+			: {};
+	const preferredTargetMatchesPackage = hasMatchingEpubFingerprint(
+		packageFingerprints,
+		preferredTargetFingerprints,
+	);
+	const canUsePreferredTarget = Boolean(
+		preferredBookId &&
+			preferredTargetPath &&
+			(hasAnyEpubFingerprint(packageFingerprints)
+				? preferredTargetMatchesPackage
+				: !bookEntry),
+	);
+	const existingMatch = await findExistingEpubBookMatchByFingerprints(
+		app,
+		packageFingerprints,
+		canUsePreferredTarget ? preferredBookId : undefined,
+	);
+	const fallbackToPreferredBook = Boolean(canUsePreferredTarget && !existingMatch && !bookEntry);
+	const bookId = normalizeVaultPath(
+		existingMatch?.bookId ||
+			(fallbackToPreferredBook ? preferredBookId : "") ||
+			manifest.bookId,
+	);
 	const importTarget = await resolveImportBookPath({
 		app,
 		zip,
 		manifest,
 		importOptions: options,
 		fallbackName: "book.epub",
+		targetBookPath:
+			canUsePreferredTarget && bookId === preferredBookId
+				? preferredTargetPath
+				: undefined,
+		matchedExistingBook: existingMatch,
 	});
 	const bookPath = importTarget.bookPath;
 	const location = resolveEpubPortableBookDataLocation(bookId);

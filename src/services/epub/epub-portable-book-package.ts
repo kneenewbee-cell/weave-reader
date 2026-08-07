@@ -81,7 +81,7 @@ interface EpubAnnotatedBookPackageManifest {
 	title?: string;
 }
 
-type EpubFingerprintMatchKind =
+export type EpubFingerprintMatchKind =
 	| "fileFingerprint"
 	| "packageFingerprint"
 	| "contentFingerprint";
@@ -91,7 +91,7 @@ export type EpubAnnotatedBookPackageMatchKind =
 	| "preferred-fallback"
 	| "new-book";
 
-interface ExistingPortableBookMatch {
+export interface ExistingPortableBookMatch {
 	bookId: string;
 	filePath?: string;
 	fingerprints: PartialEpubFingerprints;
@@ -128,7 +128,7 @@ function cleanFingerprint(value: unknown): string {
 	return cleanString(value).toLowerCase();
 }
 
-function readFingerprintsFromRecord(value: unknown): PartialEpubFingerprints {
+export function readFingerprintsFromRecord(value: unknown): PartialEpubFingerprints {
 	if (!isRecord(value)) {
 		return {};
 	}
@@ -144,7 +144,7 @@ function readFingerprintsFromRecord(value: unknown): PartialEpubFingerprints {
 	};
 }
 
-function mergeFingerprints(
+export function mergeFingerprints(
 	...fingerprintSets: PartialEpubFingerprints[]
 ): PartialEpubFingerprints {
 	const merged: PartialEpubFingerprints = {};
@@ -162,7 +162,7 @@ function mergeFingerprints(
 	return merged;
 }
 
-function hasAnyFingerprint(fingerprints: PartialEpubFingerprints): boolean {
+export function hasAnyFingerprint(fingerprints: PartialEpubFingerprints): boolean {
 	return Boolean(
 		fingerprints.fileFingerprint ||
 			fingerprints.packageFingerprint ||
@@ -177,7 +177,7 @@ function getFingerprintValue(
 	return cleanFingerprint(fingerprints[matchKind]);
 }
 
-function hasMatchingFingerprint(
+export function hasMatchingFingerprint(
 	left: PartialEpubFingerprints,
 	right: PartialEpubFingerprints
 ): boolean {
@@ -191,7 +191,7 @@ function hasMatchingFingerprint(
 	return false;
 }
 
-function applyFingerprintsToRecord(
+export function applyFingerprintsToRecord(
 	value: unknown,
 	fingerprints: PartialEpubFingerprints
 ): unknown {
@@ -515,7 +515,7 @@ function findGlobalBookMatch(
 	return null;
 }
 
-async function findExistingBookMatchByFingerprints(
+export async function findExistingBookMatchByFingerprints(
 	app: App,
 	packageFingerprints: PartialEpubFingerprints,
 	preferredBookId?: string

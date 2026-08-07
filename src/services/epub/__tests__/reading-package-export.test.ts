@@ -134,6 +134,49 @@ describe("reading package export", () => {
 		expect(manifestText).not.toContain("window");
 	});
 
+	it("writes EPUB fingerprints from book metadata into the package manifest", async () => {
+		const files = new Map<string, string | Uint8Array>([
+			[
+				"weave/epub-data/books/epub-book-1/book.json",
+				JSON.stringify({
+					bookId: "epub-book-1",
+					title: "Demo",
+					filePath: "Books/demo.epub",
+					sourceFingerprint: "FILE-DEMO",
+					packageFingerprint: "PACKAGE-DEMO",
+					contentFingerprint: "CONTENT-DEMO",
+				}),
+			],
+			["weave/epub-data/books/epub-book-1/annotations.json", "{\"annotations\":[]}"],
+		]);
+
+		const result = await createReadingPackage(createMockApp(files), {
+			bookFormat: "epub",
+			bookId: "epub-book-1",
+			filePath: "Books/demo.epub",
+			displayName: "Demo",
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const manifest = await readReadingPackageManifest(zip);
+		const bookJson = JSON.parse(await zip.file("data/book.json")?.async("string") || "{}") as Record<string, unknown>;
+
+		expect(manifest?.fileFingerprint).toBe("file-demo");
+		expect(manifest?.sourceFingerprint).toBe("file-demo");
+		expect(manifest?.packageFingerprint).toBe("package-demo");
+		expect(manifest?.contentFingerprint).toBe("content-demo");
+		expect(bookJson.fileFingerprint).toBe("file-demo");
+		expect(bookJson.contentFingerprint).toBe("content-demo");
+		expect(zip.file("book/demo.epub")).toBeNull();
+	});
+
 	it("rejects an export with no selected reading package content", async () => {
 		const files = new Map<string, string | Uint8Array>([
 			["Books/demo.epub", new Uint8Array([1, 2, 3])],

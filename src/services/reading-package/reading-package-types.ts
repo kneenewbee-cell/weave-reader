@@ -21,6 +21,10 @@ export interface ReadingPackageManifestV2 {
 	bookPath: string;
 	bookFileName?: string;
 	title?: string;
+	sourceFingerprint?: string;
+	fileFingerprint?: string;
+	packageFingerprint?: string;
+	contentFingerprint?: string;
 	includeBook: boolean;
 	modules: ReadingPackageModuleSelection;
 	exportedAt: number;
@@ -40,6 +44,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cleanString(value: unknown): string {
 	return String(value || "").trim();
+}
+
+function cleanFingerprint(value: unknown): string {
+	return cleanString(value).toLowerCase();
 }
 
 function normalizeBookFormat(value: unknown): ReadingPackageBookFormat | "" {
@@ -80,6 +88,12 @@ export function normalizeReadingPackageManifest(
 		bookPath: normalizePath(cleanString(value.bookPath)),
 		bookFileName: cleanString(value.bookFileName) || undefined,
 		title: cleanString(value.title) || undefined,
+		sourceFingerprint:
+			cleanFingerprint(value.fileFingerprint || value.sourceFingerprint) || undefined,
+		fileFingerprint:
+			cleanFingerprint(value.fileFingerprint || value.sourceFingerprint) || undefined,
+		packageFingerprint: cleanFingerprint(value.packageFingerprint) || undefined,
+		contentFingerprint: cleanFingerprint(value.contentFingerprint) || undefined,
 		includeBook: value.includeBook === true,
 		modules: normalizeReadingPackageModuleSelection(value.modules),
 		exportedAt: Number.isFinite(Number(value.exportedAt))
