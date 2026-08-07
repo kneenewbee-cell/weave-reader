@@ -818,14 +818,17 @@ async function addBookFileIfRequested(
 	return true;
 }
 
-async function addVersionsDirectory(app: App, zip: JSZip, bookDir: string): Promise<void> {
+async function addVersionsDirectory(app: App, zip: JSZip, bookDir: string): Promise<boolean> {
 	const versionsRoot = normalizeVaultPath(`${bookDir}/versions`);
+	let added = false;
 	for (const filePath of await collectVaultFilesRecursively(app, versionsRoot)) {
 		const text = await readVaultText(app, filePath);
 		if (text !== null) {
 			zip.file(`data/versions/${relativeTo(versionsRoot, filePath)}`, text);
+			added = true;
 		}
 	}
+	return added;
 }
 
 function createManifest(options: {
@@ -863,6 +866,22 @@ function createManifest(options: {
 	};
 }
 
+function createEmptyReadingPackageModuleSelection(): ReadingPackageModuleSelection {
+	return {
+		book: false,
+		annotationSystem: false,
+		ink: false,
+		navigationState: false,
+		aiReadingNote: false,
+	};
+}
+
+function assertReadingPackageHasActualContent(modules: ReadingPackageModuleSelection): void {
+	if (!hasSelectedReadingPackageModule(modules)) {
+		throw new Error("reading-package-empty-content");
+	}
+}
+
 function getPdfLocation(bookId: string, filePath: string): PdfPortableBookDataLocation {
 	const resolved = resolvePdfPortableBookDataLocation(filePath);
 	if (!bookId || resolved.bookId === bookId) {
@@ -890,6 +909,7 @@ async function createEpubReadingPackage(
 	const bookPath = normalizeVaultPath(options.filePath);
 	const location = resolveEpubPortableBookDataLocation(options.bookId);
 	const zip = new JSZip();
+	const actualModules = createEmptyReadingPackageModuleSelection();
 	const bookJson = await readVaultText(app, location.bookMetadataPath);
 	const bookRecord = parseJsonObject(bookJson);
 	const bookBinary = await readVaultBinary(app, bookPath);
@@ -900,17 +920,7 @@ async function createEpubReadingPackage(
 		computedFingerprints,
 		readEpubFingerprintsFromRecord(bookRecord),
 	);
-	const manifest = createManifest({
-		bookFormat: "epub",
-		bookId: location.bookId,
-		bookPath,
-		displayName: options.displayName,
-		bookFileFallback: "book.epub",
-		modules: options.modules,
-		fingerprints,
-	});
-	writeReadingPackageManifest(zip, manifest);
-	if (manifest.includeBook) {
+	if (options.modules.book) {
 		if (!bookBinary) {
 			throw new Error("reading-package-book-file-unavailable");
 		}
@@ -918,6 +928,7 @@ async function createEpubReadingPackage(
 			`book/${getFileName(bookPath, "book.epub")}`,
 			bookBinary instanceof Uint8Array ? bookBinary : new Uint8Array(bookBinary),
 		);
+		actualModules.book = true;
 	}
 
 	if (bookJson !== null) {
@@ -935,15 +946,22 @@ async function createEpubReadingPackage(
 		for (const version of await listEpubAnnotationVersions(app, location.bookId)) {
 			await materializeEpubSemanticProfileForVersion(app, location.bookId, version.versionId);
 		}
-		await addTextFileIfPresent(app, zip, location.annotationsPath, "data/annotations.json");
-		await addTextFileIfPresent(app, zip, location.annotationsMarkdownPath, "data/annotations.md");
-		await addTextFileIfPresent(app, zip, location.semanticProfilePath, "data/semantic-profile.json");
-		await addTextFileIfPresent(app, zip, `${location.bookDir}/active-version.json`, "data/active-version.json");
-		await addVersionsDirectory(app, zip, location.bookDir);
+		const includedAnnotations = await addTextFileIfPresent(app, zip, location.annotationsPath, "data/annotations.json");
+		const includedMarkdown = await addTextFileIfPresent(app, zip, location.annotationsMarkdownPath, "data/annotations.md");
+		const includedSemantic = await addTextFileIfPresent(app, zip, location.semanticProfilePath, "data/semantic-profile.json");
+		const includedActiveVersion = await addTextFileIfPresent(app, zip, `${location.bookDir}/active-version.json`, "data/active-version.json");
+		const includedVersions = await addVersionsDirectory(app, zip, location.bookDir);
+		actualModules.annotationSystem =
+			includedAnnotations ||
+			includedMarkdown ||
+			includedSemantic ||
+			includedActiveVersion ||
+			includedVersions;
 	}
 	if (options.modules.navigationState) {
-		await addTextFileIfPresent(app, zip, location.bookmarksPath, "data/bookmarks.json");
-		await addTextFileIfPresent(app, zip, location.readingStatePath, "data/reading-state.json");
+		const includedBookmarks = await addTextFileIfPresent(app, zip, location.bookmarksPath, "data/bookmarks.json");
+		const includedReadingState = await addTextFileIfPresent(app, zip, location.readingStatePath, "data/reading-state.json");
+		actualModules.navigationState = includedBookmarks || includedReadingState;
 	}
 	if (options.modules.aiReadingNote) {
 		const notePath =
@@ -959,8 +977,20 @@ async function createEpubReadingPackage(
 				"data/ai-reading/meta.json",
 				JSON.stringify({ notePath, sourceFile: bookPath, updatedAt: Date.now() }, null, 2),
 			);
+			actualModules.aiReadingNote = true;
 		}
 	}
+
+	assertReadingPackageHasActualContent(actualModules);
+	writeReadingPackageManifest(zip, createManifest({
+		bookFormat: "epub",
+		bookId: location.bookId,
+		bookPath,
+		displayName: options.displayName,
+		bookFileFallback: "book.epub",
+		modules: actualModules,
+		fingerprints,
+	}));
 
 	const arrayBuffer = await zip.generateAsync({ type: "arraybuffer" });
 	return {
@@ -981,33 +1011,40 @@ async function createPdfReadingPackage(
 	const bookPath = normalizeVaultPath(options.filePath);
 	const location = getPdfLocation(options.bookId, bookPath);
 	const zip = new JSZip();
-	const manifest = createManifest({
+	const actualModules = createEmptyReadingPackageModuleSelection();
+	const includedBook = await addBookFileIfRequested(app, zip, options.modules.book, bookPath, "document.pdf");
+	if (options.modules.book && !includedBook) {
+		throw new Error("reading-package-book-file-unavailable");
+	}
+	actualModules.book = includedBook;
+
+	await addTextFileIfPresent(app, zip, location.bookMetadataPath, "data/book.json");
+	if (options.modules.annotationSystem) {
+		const includedAnnotations = await addTextFileIfPresent(app, zip, location.annotationsPath, "data/annotations.json");
+		if (includedAnnotations) {
+			await addTextFileIfPresent(app, zip, location.annotationsMarkdownPath, "data/annotations.md");
+		}
+		const includedSemantic = await addTextFileIfPresent(app, zip, location.semanticProfilePath, "data/semantic-profile.json");
+		actualModules.annotationSystem = includedAnnotations || includedSemantic;
+	}
+	if (options.modules.ink) {
+		actualModules.ink = await addTextFileIfPresent(app, zip, location.inkPath, "data/ink.json");
+	}
+	if (options.modules.navigationState) {
+		const includedBookmarks = await addTextFileIfPresent(app, zip, location.bookmarksPath, "data/bookmarks.json");
+		const includedReadingState = await addTextFileIfPresent(app, zip, location.readingStatePath, "data/reading-state.json");
+		actualModules.navigationState = includedBookmarks || includedReadingState;
+	}
+
+	assertReadingPackageHasActualContent(actualModules);
+	writeReadingPackageManifest(zip, createManifest({
 		bookFormat: "pdf",
 		bookId: location.bookId,
 		bookPath,
 		displayName: options.displayName,
 		bookFileFallback: "document.pdf",
-		modules: options.modules,
-	});
-	writeReadingPackageManifest(zip, manifest);
-	const includedBook = await addBookFileIfRequested(app, zip, manifest.includeBook, bookPath, "document.pdf");
-	if (manifest.includeBook && !includedBook) {
-		throw new Error("reading-package-book-file-unavailable");
-	}
-
-	await addTextFileIfPresent(app, zip, location.bookMetadataPath, "data/book.json");
-	if (options.modules.annotationSystem) {
-		await addTextFileIfPresent(app, zip, location.annotationsPath, "data/annotations.json");
-		await addTextFileIfPresent(app, zip, location.annotationsMarkdownPath, "data/annotations.md");
-		await addTextFileIfPresent(app, zip, location.semanticProfilePath, "data/semantic-profile.json");
-	}
-	if (options.modules.ink) {
-		await addTextFileIfPresent(app, zip, location.inkPath, "data/ink.json");
-	}
-	if (options.modules.navigationState) {
-		await addTextFileIfPresent(app, zip, location.bookmarksPath, "data/bookmarks.json");
-		await addTextFileIfPresent(app, zip, location.readingStatePath, "data/reading-state.json");
-	}
+		modules: actualModules,
+	}));
 
 	const arrayBuffer = await zip.generateAsync({ type: "arraybuffer" });
 	return {
@@ -1461,7 +1498,7 @@ async function importPdfReadingPackage(
 	const backupPaths: string[] = [];
 
 	if (manifest.modules.annotationSystem) {
-		await importJsonFromZip({
+		const importedAnnotations = await importJsonFromZip({
 			app,
 			zip,
 			zipPath: "data/annotations.json",
@@ -1483,13 +1520,15 @@ async function importPdfReadingPackage(
 			importedModules,
 			backupPaths,
 		});
-		await regeneratePdfAnnotationsMarkdown({
-			app,
-			location,
-			bookPath,
-			title: manifest.title,
-			backupPaths,
-		});
+		if (importedAnnotations !== null) {
+			await regeneratePdfAnnotationsMarkdown({
+				app,
+				location,
+				bookPath,
+				title: manifest.title,
+				backupPaths,
+			});
+		}
 	}
 
 	if (manifest.modules.ink) {

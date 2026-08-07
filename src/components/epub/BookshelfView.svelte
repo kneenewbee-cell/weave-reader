@@ -101,6 +101,7 @@
                 createReadingPackage,
                 downloadReadingPackage,
                 formatReadingPackageErrorLogArgs,
+                getReadingPackageExportNoticeMessage,
                 hasSelectedReadingPackageModule,
                 importReadingPackage,
                 pickReadingPackageArrayBuffer,
@@ -1872,7 +1873,7 @@
                                 'Failed to export reading package:',
                                 ...formatReadingPackageErrorLogArgs(filePath, error)
                         );
-                        new Notice(`阅读包导出失败：${error instanceof Error ? error.message : String(error)}`);
+                        new Notice(`阅读包导出失败：${getReadingPackageExportNoticeMessage(error)}`);
                 }
         }
 

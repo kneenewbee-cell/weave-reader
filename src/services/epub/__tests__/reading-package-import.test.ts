@@ -173,6 +173,51 @@ describe("reading package import", () => {
 		expect(Array.from(files.keys()).some((path) => path.includes("AI阅读笔记"))).toBe(false);
 	});
 
+	it("does not regenerate PDF annotation markdown when the package has no annotation payload", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "pdf",
+			bookId: "pdf-book-old",
+			bookPath: "Old/demo.pdf",
+			title: "Demo PDF",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			exportedAt: 1785950000000,
+		});
+		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
+		const files = new Map<string, string | Uint8Array>([
+			[
+				location.annotationsPath,
+				JSON.stringify({
+					format: "weave-reader-pdf-annotations/v1",
+					bookId: location.bookId,
+					sourcePath: "Books/demo.pdf",
+					pageCount: 1,
+					annotations: [{ id: "local-a1", pageNumber: 1, text: "local" }],
+				}),
+			],
+			[location.annotationsMarkdownPath, "# Existing local note"],
+		]);
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{ targetBookPath: "Books/demo.pdf" },
+		);
+
+		expect(result.importedModules).not.toContain("annotationSystem");
+		expect(result.backupPaths).toHaveLength(0);
+		expect(files.get(location.annotationsMarkdownPath)).toBe("# Existing local note");
+	});
+
 	it("merges PDF ink strokes by keeping identical strokes once and preserving conflicting strokes", async () => {
 		const zip = new JSZip();
 		writeReadingPackageManifest(zip, {

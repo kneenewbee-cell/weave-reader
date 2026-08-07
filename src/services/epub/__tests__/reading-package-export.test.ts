@@ -251,6 +251,28 @@ describe("reading package export", () => {
 		).rejects.toThrow("reading-package-empty-selection");
 	});
 
+	it("rejects a PDF export when selected reading modules have no payload files", async () => {
+		const files = new Map<string, string | Uint8Array>([
+			["Books/demo.pdf", new Uint8Array([9, 8, 7])],
+		]);
+
+		await expect(
+			createReadingPackage(createMockApp(files), {
+				bookFormat: "pdf",
+				bookId: "pdf-book-1",
+				filePath: "Books/demo.pdf",
+				displayName: "Demo PDF",
+				modules: {
+					book: false,
+					annotationSystem: true,
+					ink: true,
+					navigationState: true,
+					aiReadingNote: false,
+				},
+			}),
+		).rejects.toThrow("reading-package-empty-content");
+	});
+
 	it("allows exporting only the original book file", async () => {
 		const files = new Map<string, string | Uint8Array>([
 			["Books/demo.epub", new Uint8Array([1, 2, 3])],
@@ -276,6 +298,42 @@ describe("reading package export", () => {
 		expect(manifest?.includeBook).toBe(true);
 		expect(await zip.file("book/demo.epub")?.async("uint8array")).toHaveLength(3);
 		expect(zip.file("data/annotations.json")).toBeNull();
+	});
+
+	it("writes PDF manifest modules from actual exported payload files", async () => {
+		const files = new Map<string, string | Uint8Array>([
+			["Books/demo.pdf", new Uint8Array([9, 8, 7])],
+			["weave/pdf-data/books/pdf-book-1/ink.json", "{\"strokes\":[{\"id\":\"s1\"}]}"],
+		]);
+
+		const result = await createReadingPackage(createMockApp(files), {
+			bookFormat: "pdf",
+			bookId: "pdf-book-1",
+			filePath: "Books/demo.pdf",
+			displayName: "Demo PDF",
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: true,
+				navigationState: true,
+				aiReadingNote: false,
+			},
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const manifest = await readReadingPackageManifest(zip);
+
+		expect(manifest?.includeBook).toBe(false);
+		expect(manifest?.modules).toMatchObject({
+			book: false,
+			annotationSystem: false,
+			ink: true,
+			navigationState: false,
+			aiReadingNote: false,
+		});
+		expect(await zip.file("data/ink.json")?.async("string")).toContain("s1");
+		expect(zip.file("data/annotations.json")).toBeNull();
+		expect(zip.file("data/reading-state.json")).toBeNull();
 	});
 
 	it("exports grouped PDF reading data without AI reading note", async () => {
