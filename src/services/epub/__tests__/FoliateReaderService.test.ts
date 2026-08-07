@@ -1296,6 +1296,44 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
+	it("returns TOC entries with screen page numbers when a screen index exists", async () => {
+		const service = new FoliateReaderService(createMockApp(await createSampleEpubBuffer()) as any);
+		const container = document.createElement("div");
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+			x: 0,
+			y: 0,
+			left: 0,
+			top: 0,
+			right: 720,
+			bottom: 720,
+			width: 720,
+			height: 720,
+			toJSON: () => ({}),
+		});
+		document.body.appendChild(container);
+		try {
+			await service.loadEpub("Books/foliate-sample.epub", "foliate-book", {
+				skipCoverImage: true,
+			} as any);
+			await service.renderTo(container, {
+				flow: "paginated",
+				spread: "none",
+				width: 720,
+				height: 720,
+				lineHeight: 1.6,
+				pageMargin: 48,
+				widthMode: "standard",
+			});
+
+			const toc = await service.getTableOfContents();
+
+			expect(toc[0]?.screenPageNumber).toBe(1);
+			expect(toc[0]?.subitems?.[0]?.screenPageNumber).toBe(1);
+		} finally {
+			service.destroy();
+		}
+	});
+
 	it("optimistically updates pagination after page-turn APIs before relocate arrives", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {
@@ -1468,6 +1506,52 @@ describe("FoliateReaderService", () => {
 			});
 
 			expect(service.isAtBookEnd()).toBe(false);
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("maps screen page jumps back to the matching section CFI page", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			(service as any).screenPaginationState = {
+				layoutKey: "book|layout",
+				totalPages: 100,
+				sections: [
+					{ index: 0, href: "chapter-1.xhtml", pageStart: 1, pageCount: 50 },
+					{ index: 1, href: "chapter-2.xhtml", pageStart: 51, pageCount: 50 },
+				],
+				sectionByHref: new Map(),
+			};
+			vi.spyOn((service as any).parser, "getSectionReadingMetrics").mockImplementation((index) =>
+				index === 1
+					? {
+							index: 1,
+							href: "chapter-2.xhtml",
+							title: "Chapter 2",
+							textLength: 5000,
+							wordCount: 2500,
+							positionCount: 5,
+							positionStart: 10,
+						}
+					: null
+			);
+			const resolveCfiSpy = vi
+				.spyOn((service as any).parser, "resolveCfiForPage")
+				.mockResolvedValue("epubcfi(/6/4)");
+			const navigateSpy = vi
+				.spyOn(service as any, "navigateViewWithFallback")
+				.mockResolvedValue(undefined);
+			vi.spyOn(service as any, "syncCurrentPositionFromTarget").mockResolvedValue(undefined);
+
+			await service.goToPage(76);
+
+			expect(resolveCfiSpy).toHaveBeenCalledWith(13);
+			expect(navigateSpy).toHaveBeenCalledWith(
+				"epubcfi(/6/4)",
+				expect.any(String),
+				expect.any(Number)
+			);
 		} finally {
 			service.destroy();
 		}

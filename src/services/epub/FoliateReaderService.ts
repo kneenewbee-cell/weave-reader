@@ -56,6 +56,7 @@ import {
 import {
 	buildScreenPaginationLayoutKey,
 	buildScreenPaginationState,
+	cloneTocItemsWithScreenPages,
 	overrideScreenPaginationSectionPageCount,
 	resolveScreenPageRange,
 	type ScreenPageRange,
@@ -1037,7 +1038,36 @@ export class FoliateReaderService implements EpubReaderEngine {
 
 	async getTableOfContents(): Promise<TocItem[]> {
 		await this.parser.hydrateTocPageNumbersForCurrentBook();
-		return this.parser.getTocItems();
+		const items = this.parser.getTocItems();
+		this.refreshScreenPaginationState();
+		if (!this.screenPaginationState) {
+			return items;
+		}
+		const pageByItemId = new Map<string, number>();
+		await this.hydrateTocScreenPageMap(items, pageByItemId);
+		return cloneTocItemsWithScreenPages(items, (item) => pageByItemId.get(item.id));
+	}
+
+	private async hydrateTocScreenPageMap(
+		items: TocItem[],
+		pageByItemId: Map<string, number>
+	): Promise<void> {
+		const state = this.screenPaginationState;
+		if (!state) {
+			return;
+		}
+		for (const item of items) {
+			const sectionIndex = await this.parser.resolveHrefSectionIndex(item.href);
+			if (typeof sectionIndex === "number") {
+				const section = state.sections.find((candidate) => candidate.index === sectionIndex);
+				if (section) {
+					pageByItemId.set(item.id, section.pageStart);
+				}
+			}
+			if (item.subitems?.length) {
+				await this.hydrateTocScreenPageMap(item.subitems, pageByItemId);
+			}
+		}
 	}
 
 	async navigateTo(options: ReaderNavigateOptions): Promise<void> {
@@ -1896,7 +1926,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 	async goToPage(pageNumber: number): Promise<void> {
 		await this.enqueueNavigation(async (positionOperationToken) => {
 			this.clearSelections();
-			const canonical = await this.parser.resolveCfiForPage(pageNumber);
+			const canonical = await this.parser.resolveCfiForPage(
+				this.resolveLegacyPositionPageForScreenPage(pageNumber)
+			);
 			if (!canonical) {
 				return;
 			}
@@ -1907,6 +1939,36 @@ export class FoliateReaderService implements EpubReaderEngine {
 			);
 			await this.syncCurrentPositionFromTarget(canonical, undefined, positionOperationToken);
 		}, "goToPage");
+	}
+
+	private resolveLegacyPositionPageForScreenPage(pageNumber: number): number {
+		const state = this.screenPaginationState;
+		if (!state || state.totalPages <= 0) {
+			return pageNumber;
+		}
+		const normalizedPage = Math.round(this.clamp(pageNumber, 1, state.totalPages));
+		const section =
+			state.sections.find(
+				(candidate) =>
+					normalizedPage >= candidate.pageStart &&
+					normalizedPage < candidate.pageStart + candidate.pageCount
+			) || state.sections[state.sections.length - 1];
+		if (!section) {
+			return normalizedPage;
+		}
+		const metrics = this.parser.getSectionReadingMetrics(section.index);
+		if (!metrics || metrics.positionCount <= 0) {
+			return normalizedPage;
+		}
+		const localScreenPage = this.clamp(
+			normalizedPage - section.pageStart + 1,
+			1,
+			Math.max(section.pageCount, 1)
+		);
+		const progression =
+			section.pageCount > 1 ? (localScreenPage - 1) / Math.max(section.pageCount - 1, 1) : 0;
+		const legacyOffset = Math.round(progression * Math.max(metrics.positionCount - 1, 0));
+		return metrics.positionStart + legacyOffset + 1;
 	}
 
 	getPageNumberFromCfi(cfi: string): Promise<number | undefined> {
