@@ -54,6 +54,11 @@ import {
 	PdfTextAnnotationStore,
 	sortPdfTextAnnotationsByPosition,
 } from "../services/pdf/pdf-text-annotation-store";
+import {
+	applyPdfInkStylePatch,
+	scalePdfInkSelectionFromBaseline,
+	type PdfInkStylePatch,
+} from "../services/pdf/pdf-ink-bulk-edit";
 import { resolvePdfPortableBookDataLocation } from "../services/pdf/pdf-portable-data-location";
 import { renderPdfAnnotationNoteMarkdown } from "../services/pdf/pdf-annotation-note-markdown";
 import {
@@ -1924,9 +1929,12 @@ export class PdfView extends ItemView {
 			button.setAttribute("aria-label", `颜色 ${color}`);
 			button.setAttribute("data-weave-pdf-ink-edit-color", color);
 			button.style.background = color;
+			button.addEventListener("click", () => {
+				this.applySelectedInkStyle({ color });
+			});
 		}
 
-		this.createInkEditRangeInput(panel, {
+		const widthInput = this.createInkEditRangeInput(panel, {
 			label: "粗细",
 			value: this.readSelectedInkWidth(selectedStrokes),
 			min: 1,
@@ -1934,7 +1942,13 @@ export class PdfView extends ItemView {
 			step: 1,
 			dataAttr: "data-weave-pdf-ink-edit-width",
 		});
-		this.createInkEditRangeInput(panel, {
+		widthInput.addEventListener("input", () => {
+			this.previewSelectedInkWidth(Number(widthInput.value) || this.penWidth);
+		});
+		widthInput.addEventListener("change", () => {
+			this.commitInkEditGesture();
+		});
+		const scaleInput = this.createInkEditRangeInput(panel, {
 			label: "缩放",
 			value: 100,
 			min: 50,
@@ -1942,6 +1956,12 @@ export class PdfView extends ItemView {
 			step: 1,
 			dataAttr: "data-weave-pdf-ink-edit-scale",
 			valueSuffix: "%",
+		});
+		scaleInput.addEventListener("input", () => {
+			this.previewSelectedInkScale(Number(scaleInput.value) || 100);
+		});
+		scaleInput.addEventListener("change", () => {
+			this.commitInkEditGesture();
 		});
 
 		this.inkEditPanelEl = panel;
@@ -1966,6 +1986,9 @@ export class PdfView extends ItemView {
 		button.type = "button";
 		button.setAttribute("data-weave-pdf-ink-edit-tool", tool);
 		button.setAttribute("aria-pressed", active ? "true" : "false");
+		button.addEventListener("click", () => {
+			this.applySelectedInkStyle({ tool });
+		});
 		return button;
 	}
 
@@ -1993,6 +2016,9 @@ export class PdfView extends ItemView {
 			},
 		});
 		input.type = "range";
+		input.min = String(options.min);
+		input.max = String(options.max);
+		input.step = String(options.step);
 		input.value = String(options.value);
 		input.setAttribute(options.dataAttr, "true");
 		const value = row.createEl("span", {
@@ -2000,9 +2026,138 @@ export class PdfView extends ItemView {
 			text: `${options.value}${options.valueSuffix || ""}`,
 		});
 		input.addEventListener("input", () => {
-			value.setText(`${input.value}${options.valueSuffix || ""}`);
+			value.textContent = `${input.value}${options.valueSuffix || ""}`;
 		});
 		return input;
+	}
+
+	private applySelectedInkStyle(patch: PdfInkStylePatch): void {
+		const session = this.inkEditSession;
+		if (!session || session.selectedIds.size === 0) {
+			return;
+		}
+		const selectedStrokes = this.getInkEditSelectedStrokes(session);
+		if (selectedStrokes.length === 0) {
+			this.closeInkEditPanel();
+			return;
+		}
+		const beforeStrokes = clonePdfInkStrokes(this.inkStrokes);
+		this.pushUndoSnapshot({ inkStrokes: beforeStrokes });
+		this.inkStrokes = applyPdfInkStylePatch(this.inkStrokes, session.selectedIds, patch);
+		session.beforeStrokes = clonePdfInkStrokes(this.inkStrokes);
+		session.baselineSelectedStrokes = clonePdfInkStrokes(
+			this.getInkEditSelectedStrokes(session)
+		);
+		session.activeGestureBeforeStrokes = null;
+		session.gestureDirty = false;
+		this.annotationsDirty = true;
+		this.renderInkStrokesForPage(session.pageNumber);
+		this.updateToolbarState();
+		this.syncAsActivePdfDocument();
+		this.refreshInkEditPanelValues();
+		void this.persistPdfAnnotations();
+	}
+
+	private beginInkEditGesture(): void {
+		const session = this.inkEditSession;
+		if (!session || session.activeGestureBeforeStrokes) {
+			return;
+		}
+		session.activeGestureBeforeStrokes = clonePdfInkStrokes(this.inkStrokes);
+		session.gestureDirty = false;
+	}
+
+	private markInkEditGestureDirty(): void {
+		if (this.inkEditSession) {
+			this.inkEditSession.gestureDirty = true;
+		}
+	}
+
+	private commitInkEditGesture(): void {
+		const session = this.inkEditSession;
+		if (!session || !session.activeGestureBeforeStrokes) {
+			return;
+		}
+		const beforeStrokes = session.activeGestureBeforeStrokes;
+		const dirty = session.gestureDirty;
+		session.activeGestureBeforeStrokes = null;
+		session.gestureDirty = false;
+		if (!dirty) {
+			return;
+		}
+		this.pushUndoSnapshot({ inkStrokes: beforeStrokes });
+		session.beforeStrokes = clonePdfInkStrokes(this.inkStrokes);
+		this.annotationsDirty = true;
+		this.renderInkStrokesForPage(session.pageNumber);
+		this.updateToolbarState();
+		this.syncAsActivePdfDocument();
+		this.refreshInkEditPanelValues();
+		void this.persistPdfAnnotations();
+	}
+
+	private previewSelectedInkScale(scalePercent: number): void {
+		const session = this.inkEditSession;
+		if (!session) {
+			return;
+		}
+		this.beginInkEditGesture();
+		this.inkStrokes = scalePdfInkSelectionFromBaseline(
+			this.inkStrokes,
+			session.baselineSelectedStrokes,
+			session.selectedIds,
+			Math.max(50, Math.min(200, scalePercent)) / 100,
+		);
+		this.markInkEditGestureDirty();
+		this.renderInkStrokesForPage(session.pageNumber);
+		this.syncAsActivePdfDocument();
+	}
+
+	private previewSelectedInkWidth(width: number): void {
+		const session = this.inkEditSession;
+		if (!session) {
+			return;
+		}
+		this.beginInkEditGesture();
+		this.inkStrokes = applyPdfInkStylePatch(this.inkStrokes, session.selectedIds, { width });
+		session.baselineSelectedStrokes = clonePdfInkStrokes(
+			this.getInkEditSelectedStrokes(session)
+		);
+		this.markInkEditGestureDirty();
+		this.renderInkStrokesForPage(session.pageNumber);
+		this.syncAsActivePdfDocument();
+		this.refreshInkEditPanelValues();
+	}
+
+	private refreshInkEditPanelValues(): void {
+		const session = this.inkEditSession;
+		const panel = this.inkEditPanelEl;
+		if (!session || !panel) {
+			return;
+		}
+		const selectedStrokes = this.getInkEditSelectedStrokes(session);
+		if (selectedStrokes.length === 0) {
+			this.closeInkEditPanel();
+			return;
+		}
+		const dot = panel.querySelector<HTMLElement>(".weave-pdf-ink-edit-panel__color-dot");
+		if (dot) {
+			dot.style.background = this.readSelectedInkColor(selectedStrokes);
+		}
+		const selectedTool = this.readSelectedInkTool(selectedStrokes);
+		for (const button of Array.from(
+			panel.querySelectorAll<HTMLButtonElement>("[data-weave-pdf-ink-edit-tool]")
+		)) {
+			button.setAttribute(
+				"aria-pressed",
+				button.dataset.weavePdfInkEditTool === selectedTool ? "true" : "false",
+			);
+		}
+	}
+
+	private getInkEditSelectedStrokes(
+		session: NonNullable<PdfView["inkEditSession"]>
+	): PdfInkStroke[] {
+		return this.inkStrokes.filter((stroke) => session.selectedIds.has(stroke.id));
 	}
 
 	private readSelectedInkColor(strokes: PdfInkStroke[]): string {

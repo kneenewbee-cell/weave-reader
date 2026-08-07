@@ -1228,6 +1228,182 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
+	it("applies ink edit panel color and tool changes to all selected strokes", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).startsWith("weave/pdf-data/books/") && String(path).endsWith("/ink.json")
+		);
+		adapter.read.mockResolvedValue(JSON.stringify({
+			version: 1,
+			sourcePath: "Books/duboule-page.pdf",
+			pageCount: 1,
+			strokes: [
+				{
+					id: "a",
+					pageNumber: 1,
+					tool: "pen",
+					color: "#111111",
+					width: 2,
+					points: [{ x: 0.2, y: 0.2, t: 1 }, { x: 0.4, y: 0.4, t: 2 }],
+				},
+				{
+					id: "b",
+					pageNumber: 1,
+					tool: "pen",
+					color: "#111111",
+					width: 2,
+					points: [{ x: 0.6, y: 0.3, t: 3 }, { x: 0.8, y: 0.5, t: 4 }],
+				},
+			],
+			textAnnotations: [],
+			updatedAt: 1,
+		}));
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const layer = view.contentEl.querySelector<SVGSVGElement>(
+			".weave-pdf-annotation-layer"
+		);
+		expect(layer).toBeTruthy();
+		layer!.getBoundingClientRect = vi.fn(() => ({
+			top: 0,
+			bottom: 280,
+			height: 280,
+			left: 0,
+			right: 200,
+			width: 200,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect));
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="stroke-select"]')?.click();
+		dispatchPointerEvent(layer!, "pointerdown", { clientX: 10, clientY: 14, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointermove", { clientX: 180, clientY: 224, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointerup", {
+			clientX: 180,
+			clientY: 224,
+			buttons: 0,
+			pointerType: "mouse",
+		});
+		layer!.dispatchEvent(new MouseEvent("contextmenu", {
+			bubbles: true,
+			cancelable: true,
+			clientX: 80,
+			clientY: 112,
+			button: 2,
+		}));
+
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-ink-edit-tool="highlighter"]')?.click();
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-ink-edit-color="#ff0000"]')?.click();
+
+		await vi.waitFor(() => expect(adapter.write).toHaveBeenCalled());
+		const { payload } = getLastPdfInkAnnotationsPayload(adapter);
+		expect(payload.strokes).toHaveLength(2);
+		expect(payload.strokes.every((stroke: any) => stroke.tool === "highlighter")).toBe(true);
+		expect(payload.strokes.every((stroke: any) => stroke.color === "#ff0000")).toBe(true);
+		restoreCanvas();
+	});
+
+	it("previews scale slider changes without repeated persistence and commits once on change", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).startsWith("weave/pdf-data/books/") && String(path).endsWith("/ink.json")
+		);
+		adapter.read.mockResolvedValue(JSON.stringify({
+			version: 1,
+			sourcePath: "Books/duboule-page.pdf",
+			pageCount: 1,
+			strokes: [
+				{
+					id: "a",
+					pageNumber: 1,
+					tool: "pen",
+					color: "#111111",
+					width: 2,
+					points: [{ x: 0.2, y: 0.2, t: 1 }, { x: 0.4, y: 0.4, t: 2 }],
+				},
+				{
+					id: "b",
+					pageNumber: 1,
+					tool: "pen",
+					color: "#111111",
+					width: 10,
+					points: [{ x: 0.6, y: 0.3, t: 3 }, { x: 0.8, y: 0.5, t: 4 }],
+				},
+			],
+			textAnnotations: [],
+			updatedAt: 1,
+		}));
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+		adapter.write.mockClear();
+		const inkWriteCount = () =>
+			adapter.write.mock.calls.filter(([path]) =>
+				String(path).startsWith("weave/pdf-data/books/") && String(path).endsWith("/ink.json")
+			).length;
+
+		const layer = view.contentEl.querySelector<SVGSVGElement>(
+			".weave-pdf-annotation-layer"
+		);
+		expect(layer).toBeTruthy();
+		layer!.getBoundingClientRect = vi.fn(() => ({
+			top: 0,
+			bottom: 280,
+			height: 280,
+			left: 0,
+			right: 200,
+			width: 200,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect));
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="stroke-select"]')?.click();
+		dispatchPointerEvent(layer!, "pointerdown", { clientX: 10, clientY: 14, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointermove", { clientX: 180, clientY: 224, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointerup", {
+			clientX: 180,
+			clientY: 224,
+			buttons: 0,
+			pointerType: "mouse",
+		});
+		layer!.dispatchEvent(new MouseEvent("contextmenu", {
+			bubbles: true,
+			cancelable: true,
+			clientX: 80,
+			clientY: 112,
+			button: 2,
+		}));
+
+		const scale = view.contentEl.querySelector<HTMLInputElement>("[data-weave-pdf-ink-edit-scale]");
+		expect(scale).toBeTruthy();
+		scale!.value = "150";
+		scale!.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(inkWriteCount()).toBe(0);
+		scale!.dispatchEvent(new Event("change", { bubbles: true }));
+
+		await vi.waitFor(() => expect(inkWriteCount()).toBe(1));
+		const { payload } = getLastPdfInkAnnotationsPayload(adapter);
+		expect(payload.strokes[0].points).toEqual([{ x: 0.05, y: 0.125, t: 1 }, { x: 0.35, y: 0.425, t: 2 }]);
+		expect(payload.strokes[1].points).toEqual([{ x: 0.65, y: 0.275, t: 3 }, { x: 0.95, y: 0.575, t: 4 }]);
+		expect(payload.strokes[0].width).toBe(3);
+		expect(payload.strokes[1].width).toBe(15);
+		restoreCanvas();
+	});
+
 	it("keeps a capture selection and copies it as a real clipboard image", async () => {
 		const restoreCanvas = installCanvasMock();
 		const originalClipboard = navigator.clipboard;
