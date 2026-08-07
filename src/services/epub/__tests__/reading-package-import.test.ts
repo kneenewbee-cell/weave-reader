@@ -216,9 +216,80 @@ describe("reading package import", () => {
 		const annotations = JSON.parse(String(files.get(annotationsPath) || "{}")) as Record<string, unknown>;
 
 		expect(result.bookPath).toBe("Books/demo.epub");
+		expect(result.bookTitle).toBe("Demo");
+		expect(result.sourceBookPath).toBe("Old/demo.epub");
+		expect(result.importMode).toBe("embeddedBook");
 		expect(result.importedModules).toEqual(expect.arrayContaining(["book", "annotationSystem"]));
 		expect(files.get("Books/demo.epub")).toBeInstanceOf(Uint8Array);
 		expect(annotations.filePath).toBe("Books/demo.epub");
+	});
+
+	it("treats a root target path as missing and imports the embedded EPUB book instead", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "epub",
+			bookId: "epub-book-old",
+			bookPath: "Old/demo.epub",
+			bookFileName: "demo.epub",
+			title: "Demo",
+			includeBook: true,
+			modules: {
+				book: true,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			exportedAt: 1785950000000,
+		});
+		zip.file("book/demo.epub", new Uint8Array([1, 2, 3]));
+		zip.file("data/annotations.json", "{\"bookId\":\"epub-book-old\",\"filePath\":\"Old/demo.epub\",\"annotations\":[]}");
+		const files = new Map<string, string | Uint8Array>();
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{ defaultBookFolder: "Books", targetBookPath: "/" },
+		);
+
+		expect(result.bookPath).toBe("Books/demo.epub");
+		expect(result.importMode).toBe("embeddedBook");
+		expect(result.importedModules).toEqual(expect.arrayContaining(["book", "annotationSystem"]));
+		expect(files.get("Books/demo.epub")).toBeInstanceOf(Uint8Array);
+	});
+
+	it("rejects a data-only package when the target path is root", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "epub",
+			bookId: "epub-book-old",
+			bookPath: "Missing/demo.epub",
+			title: "Demo",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: true,
+				ink: false,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			exportedAt: 1785950000000,
+		});
+		zip.file("data/annotations.json", "{\"bookId\":\"epub-book-old\",\"filePath\":\"Missing/demo.epub\",\"annotations\":[]}");
+		const files = new Map<string, string | Uint8Array>();
+
+		await expect(
+			importReadingPackage(
+				createWritableMockApp(files),
+				await zip.generateAsync({ type: "arraybuffer" }),
+				{ defaultBookFolder: "Books", targetBookPath: "/" },
+			),
+		).rejects.toThrow("reading-package-target-book-required");
+		expect(files.size).toBe(0);
 	});
 
 	it("imports a targetless PDF package by writing its embedded original book", async () => {
@@ -265,6 +336,9 @@ describe("reading package import", () => {
 		const annotations = JSON.parse(String(files.get(annotationsPath) || "{}")) as Record<string, unknown>;
 
 		expect(result.bookPath).toBe("Books/demo.pdf");
+		expect(result.bookTitle).toBe("Demo PDF");
+		expect(result.sourceBookPath).toBe("Old/demo.pdf");
+		expect(result.importMode).toBe("embeddedBook");
 		expect(result.importedModules).toEqual(expect.arrayContaining(["book", "annotationSystem", "ink"]));
 		expect(files.get("Books/demo.pdf")).toBeInstanceOf(Uint8Array);
 		expect(annotations.sourcePath).toBe("Books/demo.pdf");

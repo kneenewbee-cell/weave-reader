@@ -56,10 +56,18 @@ export interface ImportReadingPackageOptions {
 	defaultBookFolder?: string;
 }
 
+export type ReadingPackageImportMode =
+	| "specifiedTarget"
+	| "embeddedBook"
+	| "existingBookPath";
+
 export interface ReadingPackageImportResult {
 	bookFormat: ReadingPackageBookFormat;
 	bookId: string;
 	bookPath: string;
+	bookTitle?: string;
+	sourceBookPath?: string;
+	importMode: ReadingPackageImportMode;
 	importedModules: string[];
 	backupPaths: string[];
 }
@@ -70,6 +78,17 @@ function getAdapter(app: App): AdapterLike {
 
 function normalizeVaultPath(path: unknown): string {
 	return normalizePath(String(path || "").trim());
+}
+
+function normalizeOptionalVaultPath(path: unknown): string {
+	const raw = String(path || "").trim();
+	if (!raw) {
+		return "";
+	}
+	const normalizedPath = normalizeVaultPath(raw);
+	return normalizedPath && normalizedPath !== "/" && normalizedPath !== "."
+		? normalizedPath
+		: "";
 }
 
 function getFileName(path: string, fallback: string): string {
@@ -563,10 +582,10 @@ async function resolveImportBookPath(options: {
 	manifest: ReadingPackageManifestV2;
 	importOptions: ImportReadingPackageOptions;
 	fallbackName: string;
-}): Promise<{ bookPath: string; importedBook: boolean }> {
-	const targetBookPath = normalizeVaultPath(options.importOptions.targetBookPath);
+}): Promise<{ bookPath: string; importedBook: boolean; importMode: ReadingPackageImportMode }> {
+	const targetBookPath = normalizeOptionalVaultPath(options.importOptions.targetBookPath);
 	if (targetBookPath) {
-		return { bookPath: targetBookPath, importedBook: false };
+		return { bookPath: targetBookPath, importedBook: false, importMode: "specifiedTarget" };
 	}
 
 	const bookEntry = getPackageBookEntry(options.zip);
@@ -577,12 +596,12 @@ async function resolveImportBookPath(options: {
 			getPackageBookImportFileName(bookEntry.name, options.manifest, options.fallbackName),
 		);
 		await writeVaultBinary(options.app, bookPath, await bookEntry.async("arraybuffer"));
-		return { bookPath, importedBook: true };
+		return { bookPath, importedBook: true, importMode: "embeddedBook" };
 	}
 
-	const manifestBookPath = normalizeVaultPath(options.manifest.bookPath);
+	const manifestBookPath = normalizeOptionalVaultPath(options.manifest.bookPath);
 	if (manifestBookPath && await vaultPathExists(options.app, manifestBookPath)) {
-		return { bookPath: manifestBookPath, importedBook: false };
+		return { bookPath: manifestBookPath, importedBook: false, importMode: "existingBookPath" };
 	}
 
 	throw new Error("reading-package-target-book-required");
@@ -836,6 +855,9 @@ async function importEpubReadingPackage(
 		bookFormat: "epub",
 		bookId: location.bookId,
 		bookPath,
+		bookTitle: manifest.title,
+		sourceBookPath: normalizeOptionalVaultPath(manifest.bookPath) || undefined,
+		importMode: importTarget.importMode,
 		importedModules,
 		backupPaths,
 	};
@@ -965,6 +987,9 @@ async function importPdfReadingPackage(
 		bookFormat: "pdf",
 		bookId: location.bookId,
 		bookPath,
+		bookTitle: manifest.title,
+		sourceBookPath: normalizeOptionalVaultPath(manifest.bookPath) || undefined,
+		importMode: importTarget.importMode,
 		importedModules,
 		backupPaths,
 	};
