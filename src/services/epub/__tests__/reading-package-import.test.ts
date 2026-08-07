@@ -6,6 +6,7 @@ import {
 	importReadingPackage,
 	writeReadingPackageManifest,
 } from "../../reading-package";
+import { resolvePdfPortableBookDataLocation } from "../../pdf/pdf-portable-data-location";
 
 function createWritableMockApp(files: Map<string, string | Uint8Array>): App {
 	const normalize = (path: string) => String(path || "").replace(/\\/g, "/");
@@ -170,6 +171,123 @@ describe("reading package import", () => {
 		expect(Array.from(files.keys()).some((path) => path.endsWith("/annotations.json"))).toBe(true);
 		expect(Array.from(files.keys()).some((path) => path.endsWith("/annotations.md"))).toBe(true);
 		expect(Array.from(files.keys()).some((path) => path.includes("AI阅读笔记"))).toBe(false);
+	});
+
+	it("merges PDF ink strokes by keeping identical strokes once and preserving conflicting strokes", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "pdf",
+			bookId: "pdf-book-old",
+			bookPath: "Old/demo.pdf",
+			title: "Demo PDF",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: false,
+				ink: true,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			exportedAt: 1785950000000,
+		});
+		const duplicateStroke = {
+			id: "duplicate",
+			pageNumber: 1,
+			tool: "pen",
+			color: "#111111",
+			width: 2,
+			points: [{ x: 0.1, y: 0.1, t: 1 }],
+		};
+		const localConflictStroke = {
+			id: "conflict",
+			pageNumber: 1,
+			tool: "pen",
+			color: "#222222",
+			width: 2,
+			points: [{ x: 0.2, y: 0.2, t: 2 }],
+		};
+		const importedConflictStroke = {
+			id: "conflict",
+			pageNumber: 1,
+			tool: "pen",
+			color: "#ff0000",
+			width: 3,
+			points: [{ x: 0.3, y: 0.3, t: 3 }],
+		};
+		zip.file(
+			"data/ink.json",
+			JSON.stringify({
+				version: 1,
+				sourcePath: "Old/demo.pdf",
+				pageCount: 2,
+				updatedAt: 2,
+				strokes: [
+					duplicateStroke,
+					importedConflictStroke,
+					{
+						id: "imported-only",
+						pageNumber: 2,
+						tool: "highlighter",
+						color: "#ffff00",
+						width: 8,
+						points: [{ x: 0.4, y: 0.4, t: 4 }],
+					},
+				],
+			}),
+		);
+		const inkPath = resolvePdfPortableBookDataLocation("Books/demo.pdf").inkPath;
+		const files = new Map<string, string | Uint8Array>([
+			[
+				inkPath,
+				JSON.stringify({
+					version: 1,
+					sourcePath: "Books/demo.pdf",
+					pageCount: 2,
+					updatedAt: 1,
+					strokes: [
+						{
+							id: "local-only",
+							pageNumber: 1,
+							tool: "pen",
+							color: "#000000",
+							width: 1,
+							points: [{ x: 0, y: 0, t: 0 }],
+						},
+						duplicateStroke,
+						localConflictStroke,
+					],
+				}),
+			],
+		]);
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{ targetBookPath: "Books/demo.pdf" },
+		);
+
+		const mergedInk = JSON.parse(String(files.get(inkPath) || "{}")) as {
+			sourcePath?: string;
+			strokes?: Array<Record<string, unknown>>;
+		};
+		const strokes = mergedInk.strokes || [];
+		const conflictCopies = strokes.filter((stroke) => stroke.color === "#ff0000");
+
+		expect(result.importedModules).toEqual(expect.arrayContaining(["ink"]));
+		expect(mergedInk.sourcePath).toBe("Books/demo.pdf");
+		expect(strokes).toHaveLength(5);
+		expect(strokes.map((stroke) => stroke.id)).toEqual(
+			expect.arrayContaining(["local-only", "duplicate", "conflict", "imported-only"]),
+		);
+		expect(strokes.filter((stroke) => stroke.id === "duplicate")).toHaveLength(1);
+		expect(strokes.find((stroke) => stroke.id === "conflict")).toMatchObject({
+			color: "#222222",
+		});
+		expect(conflictCopies).toHaveLength(1);
+		expect(conflictCopies[0].id).not.toBe("conflict");
+		expect(Array.from(files.keys()).some((path) => path.includes("/.backup/"))).toBe(true);
 	});
 
 	it("rejects a targetless data-only package when the original book is unavailable", async () => {

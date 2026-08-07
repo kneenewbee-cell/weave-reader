@@ -609,6 +609,163 @@ async function importJsonFromZip(options: {
 	return retargeted;
 }
 
+function canonicalizeForCompare(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(canonicalizeForCompare);
+	}
+	if (!isObjectRecord(value)) {
+		return value;
+	}
+	const result: Record<string, unknown> = {};
+	for (const key of Object.keys(value).sort()) {
+		result[key] = canonicalizeForCompare(value[key]);
+	}
+	return result;
+}
+
+function pdfInkStrokeSignature(value: unknown): string {
+	return JSON.stringify(canonicalizeForCompare(value));
+}
+
+function readPdfInkStrokes(value: unknown): Record<string, unknown>[] {
+	if (!isObjectRecord(value) || !Array.isArray(value.strokes)) {
+		return [];
+	}
+	return value.strokes.filter((stroke): stroke is Record<string, unknown> =>
+		isObjectRecord(stroke),
+	);
+}
+
+function clonePdfInkStroke(
+	stroke: Record<string, unknown>,
+	nextId?: string,
+): Record<string, unknown> {
+	return JSON.parse(JSON.stringify({
+		...stroke,
+		...(nextId ? { id: nextId } : {}),
+	})) as Record<string, unknown>;
+}
+
+function createImportedPdfInkStrokeId(
+	originalId: string,
+	usedIds: Set<string>,
+): string {
+	const base = cleanText(originalId)
+		? `${cleanText(originalId)}-imported`
+		: "imported-pdf-ink";
+	for (let index = 1; index <= 500; index += 1) {
+		const candidate = index === 1 ? base : `${base}-${index}`;
+		if (!usedIds.has(candidate)) {
+			return candidate;
+		}
+	}
+	return `${base}-${Date.now().toString(36)}`;
+}
+
+function normalizePdfInkPageCount(...values: unknown[]): number {
+	let pageCount = 0;
+	for (const value of values) {
+		const next = Math.floor(Number(value) || 0);
+		if (Number.isFinite(next) && next > pageCount) {
+			pageCount = next;
+		}
+	}
+	return pageCount;
+}
+
+function mergePdfInkDocuments(options: {
+	local: unknown;
+	imported: unknown;
+	bookPath: string;
+}): Record<string, unknown> {
+	const local = isObjectRecord(options.local) ? options.local : {};
+	const imported = isObjectRecord(options.imported) ? options.imported : {};
+	const mergedStrokes = readPdfInkStrokes(local).map((stroke) =>
+		clonePdfInkStroke(stroke),
+	);
+	const byId = new Map<string, string>();
+	const usedIds = new Set<string>();
+	for (const stroke of mergedStrokes) {
+		const id = cleanText(stroke.id);
+		if (id) {
+			usedIds.add(id);
+			if (!byId.has(id)) {
+				byId.set(id, pdfInkStrokeSignature(stroke));
+			}
+		}
+	}
+
+	for (const stroke of readPdfInkStrokes(imported)) {
+		const id = cleanText(stroke.id);
+		if (!id) {
+			const nextId = createImportedPdfInkStrokeId("", usedIds);
+			usedIds.add(nextId);
+			mergedStrokes.push(clonePdfInkStroke(stroke, nextId));
+			continue;
+		}
+		const existingSignature = byId.get(id);
+		if (!existingSignature) {
+			usedIds.add(id);
+			byId.set(id, pdfInkStrokeSignature(stroke));
+			mergedStrokes.push(clonePdfInkStroke(stroke));
+			continue;
+		}
+		if (existingSignature === pdfInkStrokeSignature(stroke)) {
+			continue;
+		}
+		const nextId = createImportedPdfInkStrokeId(id, usedIds);
+		usedIds.add(nextId);
+		mergedStrokes.push(clonePdfInkStroke(stroke, nextId));
+	}
+
+	return {
+		...local,
+		...imported,
+		version: 1,
+		sourcePath: options.bookPath,
+		pageCount: normalizePdfInkPageCount(local.pageCount, imported.pageCount),
+		strokes: mergedStrokes,
+		updatedAt: Date.now(),
+	};
+}
+
+async function importPdfInkFromZip(options: {
+	app: App;
+	zip: JSZip;
+	zipPath: string;
+	targetPath: string;
+	bookId: string;
+	bookPath: string;
+	importedModules: string[];
+	backupPaths: string[];
+}): Promise<boolean> {
+	const text = await options.zip.file(options.zipPath)?.async("string");
+	if (text === undefined) {
+		return false;
+	}
+	const imported = retargetJsonDocument(
+		parseJsonText(text),
+		options.bookId,
+		options.bookPath,
+	);
+	const local = parseJsonText(await readVaultText(options.app, options.targetPath));
+	const merged = mergePdfInkDocuments({
+		local,
+		imported,
+		bookPath: options.bookPath,
+	});
+	await writeVaultTextWithBackup(
+		options.app,
+		options.targetPath,
+		JSON.stringify(merged, null, 2),
+		options.backupPaths,
+	);
+	if (!options.importedModules.includes("ink")) {
+		options.importedModules.push("ink");
+	}
+	return true;
+}
+
 function sanitizeNoteTitle(value: unknown, fallback: string): string {
 	return (
 		String(value || "").trim()
@@ -1336,14 +1493,13 @@ async function importPdfReadingPackage(
 	}
 
 	if (manifest.modules.ink) {
-		await importJsonFromZip({
+		await importPdfInkFromZip({
 			app,
 			zip,
 			zipPath: "data/ink.json",
 			targetPath: location.inkPath,
 			bookId: location.bookId,
 			bookPath,
-			moduleKey: "ink",
 			importedModules,
 			backupPaths,
 		});
