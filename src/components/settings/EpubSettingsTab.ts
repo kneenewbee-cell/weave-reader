@@ -11,17 +11,6 @@ export class EpubSettingsTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	getSettingDefinitions() {
-		return [
-			{
-				type: "render" as const,
-				render: (containerEl: HTMLElement) => {
-					void this.renderPanelInto(containerEl);
-				},
-			},
-		];
-	}
-
 	display(): void {
 		void this.renderPanelInto(this.containerEl);
 	}
