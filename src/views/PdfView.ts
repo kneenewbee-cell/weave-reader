@@ -212,6 +212,15 @@ export class PdfView extends ItemView {
 	private selectedInkStrokeIds: Set<string> = new Set();
 	private selectedInkDragGroupEl: SVGGElement | null = null;
 	private selectedInkDragPageNumber: number | null = null;
+	private inkEditPanelEl: HTMLElement | null = null;
+	private inkEditSession: {
+		pageNumber: number;
+		selectedIds: Set<string>;
+		beforeStrokes: PdfInkStroke[];
+		baselineSelectedStrokes: PdfInkStroke[];
+		activeGestureBeforeStrokes: PdfInkStroke[] | null;
+		gestureDirty: boolean;
+	} | null = null;
 	private strokeSelectionDrag: {
 		kind: "marquee" | "move";
 		pageNumber: number;
@@ -425,6 +434,7 @@ export class PdfView extends ItemView {
 		await this.persistPdfAnnotations();
 		await this.flushPendingPdfProgress();
 		await this.disposeLoadedPdf();
+		this.closeInkEditPanel();
 		this.clearFocusedTextAnnotation();
 		this.bookshelfProgressChangedNotifier.flush();
 		this.bookshelfProgressChangedNotifier.dispose();
@@ -459,6 +469,8 @@ export class PdfView extends ItemView {
 		this.eraserSessionBefore = null;
 		this.eraserSessionChanged = false;
 		this.selectedInkStrokeIds.clear();
+		this.inkEditPanelEl = null;
+		this.inkEditSession = null;
 		this.strokeSelectionDrag = null;
 		this.selectionRectEl = null;
 		this.captureDrag = null;
@@ -891,6 +903,7 @@ export class PdfView extends ItemView {
 		}
 		this.finishActiveInkInput();
 		if (tool !== "stroke-select") {
+			this.closeInkEditPanel();
 			this.clearInkSelection();
 		}
 		if (tool !== "capture") {
@@ -1216,6 +1229,9 @@ export class PdfView extends ItemView {
 		});
 		layer.addEventListener("lostpointercapture", (event) => {
 			this.handleInkPointerCancel(event, pageNumber);
+		});
+		layer.addEventListener("contextmenu", (event) => {
+			this.handleInkContextMenu(event, pageNumber, layer);
 		});
 	}
 
@@ -1823,6 +1839,188 @@ export class PdfView extends ItemView {
 		} else {
 			this.clearSelectedInkDragTransform(pageNumber);
 		}
+	}
+
+	private handleInkContextMenu(
+		event: MouseEvent,
+		pageNumber: number,
+		layer: SVGSVGElement
+	): void {
+		if (this.activeTool !== "stroke-select") {
+			return;
+		}
+		const point = this.eventToInkPoint(event, layer);
+		if (!point) {
+			this.closeInkEditPanel();
+			return;
+		}
+		const hitStroke = this.findInkStrokeAtPoint(pageNumber, point, layer);
+		if (!hitStroke) {
+			this.closeInkEditPanel();
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		if (!this.selectedInkStrokeIds.has(hitStroke.id)) {
+			this.selectedInkStrokeIds = new Set([hitStroke.id]);
+			this.renderInkStrokesForPage(pageNumber);
+		}
+		this.openInkEditPanel(pageNumber, { x: event.clientX, y: event.clientY });
+	}
+
+	private openInkEditPanel(
+		pageNumber: number,
+		anchor: { x: number; y: number }
+	): void {
+		const selectedIds = new Set(this.selectedInkStrokeIds);
+		const selectedStrokes = this.inkStrokes.filter((stroke) =>
+			selectedIds.has(stroke.id)
+		);
+		if (selectedStrokes.length === 0) {
+			this.closeInkEditPanel();
+			return;
+		}
+
+		this.closeInkEditPanel();
+		this.inkEditSession = {
+			pageNumber,
+			selectedIds,
+			beforeStrokes: clonePdfInkStrokes(this.inkStrokes),
+			baselineSelectedStrokes: clonePdfInkStrokes(selectedStrokes),
+			activeGestureBeforeStrokes: null,
+			gestureDirty: false,
+		};
+
+		const panel = this.contentEl.createDiv({ cls: "weave-pdf-ink-edit-panel" });
+		panel.setAttribute("data-weave-pdf-ink-edit-panel", "true");
+		for (const eventName of ["mousedown", "pointerdown", "contextmenu"]) {
+			panel.addEventListener(eventName, (event) => {
+				event.stopPropagation();
+			});
+		}
+		const left = Math.min(Math.max(8, anchor.x + 8), Math.max(8, window.innerWidth - 280));
+		const top = Math.min(Math.max(8, anchor.y + 8), Math.max(8, window.innerHeight - 260));
+		panel.style.left = `${left}px`;
+		panel.style.top = `${top}px`;
+
+		const header = panel.createDiv({ cls: "weave-pdf-ink-edit-panel__header" });
+		header.createEl("span", { text: "墨迹编辑" });
+		const dot = header.createEl("span", { cls: "weave-pdf-ink-edit-panel__color-dot" });
+		dot.style.background = this.readSelectedInkColor(selectedStrokes);
+
+		const selectedTool = this.readSelectedInkTool(selectedStrokes);
+		const toolRow = panel.createDiv({ cls: "weave-pdf-ink-edit-panel__tool-row" });
+		this.createInkEditToolButton(toolRow, "pen", "普通笔", selectedTool === "pen");
+		this.createInkEditToolButton(toolRow, "highlighter", "透明笔", selectedTool === "highlighter");
+
+		const colorRow = panel.createDiv({ cls: "weave-pdf-ink-edit-panel__row" });
+		colorRow.createEl("span", { text: "颜色" });
+		const colors = ["#111111", "#ff0000", "#0ea5e9", "#22c55e", "#8b5cf6", "#ffd54a"];
+		for (const color of colors) {
+			const button = colorRow.createEl("button", {
+				cls: "weave-pdf-ink-edit-panel__color-button",
+			});
+			button.type = "button";
+			button.setAttribute("aria-label", `颜色 ${color}`);
+			button.setAttribute("data-weave-pdf-ink-edit-color", color);
+			button.style.background = color;
+		}
+
+		this.createInkEditRangeInput(panel, {
+			label: "粗细",
+			value: this.readSelectedInkWidth(selectedStrokes),
+			min: 1,
+			max: 48,
+			step: 1,
+			dataAttr: "data-weave-pdf-ink-edit-width",
+		});
+		this.createInkEditRangeInput(panel, {
+			label: "缩放",
+			value: 100,
+			min: 50,
+			max: 200,
+			step: 1,
+			dataAttr: "data-weave-pdf-ink-edit-scale",
+			valueSuffix: "%",
+		});
+
+		this.inkEditPanelEl = panel;
+	}
+
+	private closeInkEditPanel(): void {
+		this.inkEditPanelEl?.remove();
+		this.inkEditPanelEl = null;
+		this.inkEditSession = null;
+	}
+
+	private createInkEditToolButton(
+		parent: HTMLElement,
+		tool: PdfInkDrawingTool,
+		label: string,
+		active = false
+	): HTMLButtonElement {
+		const button = parent.createEl("button", {
+			cls: "weave-pdf-ink-edit-panel__tool-button",
+			text: label,
+		});
+		button.type = "button";
+		button.setAttribute("data-weave-pdf-ink-edit-tool", tool);
+		button.setAttribute("aria-pressed", active ? "true" : "false");
+		return button;
+	}
+
+	private createInkEditRangeInput(
+		parent: HTMLElement,
+		options: {
+			label: string;
+			value: number;
+			min: number;
+			max: number;
+			step: number;
+			dataAttr: string;
+			valueSuffix?: string;
+		}
+	): HTMLInputElement {
+		const row = parent.createDiv({ cls: "weave-pdf-ink-edit-panel__row" });
+		row.createEl("span", { text: options.label });
+		const input = row.createEl("input", {
+			attr: {
+				type: "range",
+				min: String(options.min),
+				max: String(options.max),
+				step: String(options.step),
+				value: String(options.value),
+			},
+		});
+		input.type = "range";
+		input.value = String(options.value);
+		input.setAttribute(options.dataAttr, "true");
+		const value = row.createEl("span", {
+			cls: "weave-pdf-ink-edit-panel__range-value",
+			text: `${options.value}${options.valueSuffix || ""}`,
+		});
+		input.addEventListener("input", () => {
+			value.setText(`${input.value}${options.valueSuffix || ""}`);
+		});
+		return input;
+	}
+
+	private readSelectedInkColor(strokes: PdfInkStroke[]): string {
+		const firstColor = strokes[0]?.color || this.penColor;
+		return strokes.every((stroke) => stroke.color === firstColor) ? firstColor : "#888888";
+	}
+
+	private readSelectedInkTool(strokes: PdfInkStroke[]): PdfInkDrawingTool | null {
+		const firstTool = strokes[0]?.tool;
+		return firstTool && strokes.every((stroke) => stroke.tool === firstTool) ? firstTool : null;
+	}
+
+	private readSelectedInkWidth(strokes: PdfInkStroke[]): number {
+		if (strokes.length === 0) {
+			return this.penWidth;
+		}
+		const total = strokes.reduce((sum, stroke) => sum + stroke.width, 0);
+		return Math.max(1, Math.min(48, Math.round(total / strokes.length)));
 	}
 
 	private startCaptureSelection(
@@ -2938,6 +3136,7 @@ export class PdfView extends ItemView {
 		if (this.selectedInkStrokeIds.size === 0) {
 			return;
 		}
+		this.closeInkEditPanel();
 		this.selectedInkStrokeIds.clear();
 		this.renderAllInkStrokes();
 	}
@@ -3664,16 +3863,17 @@ export class PdfView extends ItemView {
 		};
 	}
 
-	private eventToInkPoint(event: PointerEvent, layer: SVGSVGElement): PdfInkPoint | null {
+	private eventToInkPoint(event: MouseEvent | PointerEvent, layer: SVGSVGElement): PdfInkPoint | null {
 		const rect = layer.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) {
 			return null;
 		}
+		const pressure = (event as PointerEvent).pressure;
 		return {
 			x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
 			y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
 			t: Number.isFinite(event.timeStamp) ? event.timeStamp : Date.now(),
-			pressure: Number.isFinite(event.pressure) ? event.pressure : undefined,
+			pressure: Number.isFinite(pressure) ? pressure : undefined,
 		};
 	}
 

@@ -1142,6 +1142,92 @@ describe("PdfView custom PDF reader", () => {
 		restoreCanvas();
 	});
 
+	it("opens an ink edit panel when right-clicking a selected stroke in stroke select mode", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockImplementation(async (path: string) =>
+			String(path).startsWith("weave/pdf-data/books/") && String(path).endsWith("/ink.json")
+		);
+		adapter.read.mockResolvedValue(createInkPayload([{ id: "stroke-a", x: 0.2, y: 0.2 }]));
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const layer = view.contentEl.querySelector<SVGSVGElement>(
+			".weave-pdf-annotation-layer"
+		);
+		expect(layer).toBeTruthy();
+		layer!.getBoundingClientRect = vi.fn(() => ({
+			top: 0,
+			bottom: 280,
+			height: 280,
+			left: 0,
+			right: 200,
+			width: 200,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect));
+
+		view.contentEl.querySelector<HTMLButtonElement>('[data-weave-pdf-tool="stroke-select"]')?.click();
+		dispatchPointerEvent(layer!, "pointerdown", { clientX: 50, clientY: 70, pointerType: "mouse" });
+		dispatchPointerEvent(layer!, "pointerup", {
+			clientX: 50,
+			clientY: 70,
+			buttons: 0,
+			pointerType: "mouse",
+		});
+		layer!.dispatchEvent(new MouseEvent("contextmenu", {
+			bubbles: true,
+			cancelable: true,
+			clientX: 50,
+			clientY: 70,
+			button: 2,
+		}));
+
+		const panel = view.contentEl.querySelector<HTMLElement>("[data-weave-pdf-ink-edit-panel]");
+		expect(panel).toBeTruthy();
+		expect(panel?.textContent).toContain("墨迹编辑");
+		expect(panel?.querySelector('[data-weave-pdf-ink-edit-tool="pen"]')).toBeTruthy();
+		expect(panel?.querySelector('[data-weave-pdf-ink-edit-tool="highlighter"]')).toBeTruthy();
+		expect(panel?.querySelector<HTMLInputElement>("[data-weave-pdf-ink-edit-scale]")?.value).toBe("100");
+		restoreCanvas();
+	});
+
+	it("does not open the ink edit panel outside stroke select mode", async () => {
+		const restoreCanvas = installCanvasMock();
+		const { pdf } = createMockPdfDocument(1);
+		vi.mocked(loadPdfJs).mockResolvedValue({
+			getDocument: vi.fn(() => ({ promise: Promise.resolve(pdf) })),
+		} as any);
+		const { view, adapter } = createPdfView();
+		adapter.exists.mockResolvedValue(false);
+
+		await view.onOpen();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const layer = view.contentEl.querySelector<SVGSVGElement>(
+			".weave-pdf-annotation-layer"
+		);
+		expect(layer).toBeTruthy();
+		layer!.dispatchEvent(new MouseEvent("contextmenu", {
+			bubbles: true,
+			cancelable: true,
+			clientX: 50,
+			clientY: 70,
+			button: 2,
+		}));
+
+		expect(view.contentEl.querySelector("[data-weave-pdf-ink-edit-panel]")).toBeNull();
+		restoreCanvas();
+	});
+
 	it("keeps a capture selection and copies it as a real clipboard image", async () => {
 		const restoreCanvas = installCanvasMock();
 		const originalClipboard = navigator.clipboard;
