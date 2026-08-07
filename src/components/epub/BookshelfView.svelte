@@ -100,6 +100,7 @@
         import {
                 createReadingPackage,
                 downloadReadingPackage,
+                formatReadingPackageErrorLogArgs,
                 importReadingPackage,
                 pickReadingPackageArrayBuffer,
                 type ReadingPackageBookFormat,
@@ -1865,10 +1866,10 @@
                         downloadReadingPackage(result);
                         new Notice(`阅读包已导出：${result.fileName}`);
                 } catch (error) {
-                        logger.error('Failed to export reading package:', {
-                                filePath,
-                                error,
-                        });
+                        logger.error(
+                                'Failed to export reading package:',
+                                ...formatReadingPackageErrorLogArgs(filePath, error)
+                        );
                         new Notice(`阅读包导出失败：${error instanceof Error ? error.message : String(error)}`);
                 }
         }

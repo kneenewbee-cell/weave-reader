@@ -344,7 +344,9 @@ function createManifest(options: {
 	modules: ReadingPackageModuleSelection;
 }): ReadingPackageManifestV2 {
 	const modules = {
-		...options.modules,
+		book: options.modules.book === true,
+		annotationSystem: options.modules.annotationSystem === true,
+		navigationState: options.modules.navigationState === true,
 		aiReadingNote:
 			options.bookFormat === "epub" ? options.modules.aiReadingNote === true : false,
 		ink: options.bookFormat === "pdf" ? options.modules.ink === true : false,

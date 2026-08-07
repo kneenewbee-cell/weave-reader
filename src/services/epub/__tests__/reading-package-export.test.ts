@@ -100,6 +100,40 @@ describe("reading package export", () => {
 		expect(await zip.file("data/ai-reading/note.md")?.async("string")).toContain("Books/demo.epub");
 	});
 
+	it("ignores extra circular module properties when writing the package manifest", async () => {
+		const files = new Map<string, string | Uint8Array>([
+			["Books/demo.epub", new Uint8Array([1, 2, 3])],
+			[
+				"weave/epub-data/books/epub-book-1/book.json",
+				JSON.stringify({ bookId: "epub-book-1", title: "Demo" }),
+			],
+		]);
+		const circular: Record<string, unknown> = {};
+		circular.window = circular;
+		const modules = {
+			book: false,
+			annotationSystem: true,
+			ink: false,
+			navigationState: true,
+			aiReadingNote: true,
+			window: circular,
+		};
+
+		const result = await createReadingPackage(createMockApp(files), {
+			bookFormat: "epub",
+			bookId: "epub-book-1",
+			filePath: "Books/demo.epub",
+			displayName: "Demo",
+			modules: modules as never,
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const manifestText = await zip.file("manifest.json")?.async("string");
+
+		expect(manifestText).toContain(BOOK_PACKAGE_V2_FORMAT);
+		expect(manifestText).not.toContain("window");
+	});
+
 	it("exports grouped PDF reading data without AI reading note", async () => {
 		const files = new Map<string, string | Uint8Array>([
 			["Books/demo.pdf", new Uint8Array([9, 8, 7])],
