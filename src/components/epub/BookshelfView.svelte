@@ -1865,7 +1865,10 @@
                         downloadReadingPackage(result);
                         new Notice(`阅读包已导出：${result.fileName}`);
                 } catch (error) {
-                        logger.error('Failed to export reading package:', error);
+                        logger.error('Failed to export reading package:', {
+                                filePath,
+                                error,
+                        });
                         new Notice(`阅读包导出失败：${error instanceof Error ? error.message : String(error)}`);
                 }
         }
@@ -2467,50 +2470,6 @@
                                 .setIcon('upload-cloud')
                                 .onClick(() => {
                                         void importReadingPackageToShelfBook(filePath);
-                                });
-                });
-                menu.addItem((item) => {
-                        item.setTitle(t('epub.bookshelf.menu.importGroup'))
-                                .setIcon('upload');
-                        const subMenu = getMenuSubmenu(item, menu);
-                        subMenu.addItem((subItem) => {
-                                subItem.setTitle(t('epub.bookshelf.menu.importAnnotationPackage'))
-                                        .setIcon('file-up')
-                                        .onClick(() => {
-                                                void importAnnotatedBookPackageToShelfBook(
-                                                        filePath,
-                                                        'annotation-package'
-                                                );
-                                        });
-                        });
-                        subMenu.addItem((subItem) => {
-                                subItem.setTitle(t('epub.bookshelf.menu.importAnnotatedBookPackage'))
-                                        .setIcon('archive')
-                                        .onClick(() => {
-                                                void importAnnotatedBookPackageToShelfBook(
-                                                        filePath,
-                                                        'annotated-book-package'
-                                                );
-                                        });
-                                });
-                });
-                menu.addItem((item) => {
-                        item.setTitle(t('epub.bookshelf.menu.exportGroup'))
-                                .setIcon('download');
-                        const subMenu = getMenuSubmenu(item, menu);
-                        subMenu.addItem((subItem) => {
-                                subItem.setTitle(t('epub.bookshelf.menu.exportAnnotationPackage'))
-                                        .setIcon('file-down')
-                                        .onClick(() => {
-                                                void exportAnnotatedBookPackageFromShelf(filePath, false);
-                                        });
-                        });
-                        subMenu.addItem((subItem) => {
-                                subItem.setTitle(t('epub.bookshelf.menu.exportAnnotatedBookPackage'))
-                                        .setIcon('archive')
-                                        .onClick(() => {
-                                                void exportAnnotatedBookPackageFromShelf(filePath, true);
-                                        });
                                 });
                 });
                 menu.addSeparator();
