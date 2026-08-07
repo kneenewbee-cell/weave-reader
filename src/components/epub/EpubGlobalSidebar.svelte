@@ -13,7 +13,11 @@
 	import type { EpubNavigationRequest, EpubSharedState, PdfSharedAnnotation } from '../../stores/epub-active-document-store';
 	import EpubSearchInput from './EpubSearchInput.svelte';
 	import TableOfContents from './TableOfContents.svelte';
-	import { resolveLastReadTocHref, resolveActiveTocHref } from '../../utils/epub-toc-reading-position';
+	import {
+		buildTocScreenPaginationReloadKey,
+		resolveLastReadTocHref,
+		resolveActiveTocHref,
+	} from '../../utils/epub-toc-reading-position';
 	import EpubBookmarksPanel from './EpubBookmarksPanel.svelte';
 	import NotesPanel from './NotesPanel.svelte';
 	import BookshelfView from './BookshelfView.svelte';
@@ -73,9 +77,10 @@
 	let bookmarkCount = $state(0);
 	let bookmarkCountLoadToken = 0;
 	let lastBookmarkCountContextKey = '';
-  	let tocLoadToken = 0;
+ 	let tocLoadToken = 0;
 	let tocLoading = $state(false);
 	let tocLoadFailed = $state(false);
+	let lastTocReloadKey = '';
  	let sidebarDisposed = false;
  	let lastExternalSearchNonce = 0;
  	const SIDEBAR_PROGRESS_SEGMENT_COUNT = 16;
@@ -688,9 +693,21 @@
 	}
 
 	$effect(() => {
-		if (sharedState?.book) {
+		const bookId = sharedState?.book?.id ?? '';
+		const filePath = sharedState?.filePath ?? '';
+		const reloadKey = buildTocScreenPaginationReloadKey({
+			bookId,
+			filePath,
+			screenTotalPages: sharedState?.paginationInfo?.screenTotalPages,
+		});
+		if (sharedState?.book && sharedState.readerService) {
+			if (reloadKey === lastTocReloadKey) {
+				return;
+			}
+			lastTocReloadKey = reloadKey;
 			void loadToc();
 		} else {
+			lastTocReloadKey = '';
 			tocItems = [];
 			tocLoading = false;
 			tocLoadFailed = false;

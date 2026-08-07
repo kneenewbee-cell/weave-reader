@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TocItem } from "../types";
 import {
+	buildTocScreenPaginationReloadKey,
 	findTocHrefForSectionHref,
 	isTocHrefActive,
 	resolveActiveTocHref,
@@ -96,5 +97,39 @@ describe("epub-toc-reading-position", () => {
 		).toBe(true);
 		expect(isTocHrefActive("Text/chapter1.xhtml", "Text/chapter1.xhtml#section-1")).toBe(false);
 		expect(isTocHrefActive("Text/other.xhtml", "Text/chapter1.xhtml")).toBe(false);
+	});
+
+	it("changes the toc reload key when screen pagination becomes available", () => {
+		const legacyKey = buildTocScreenPaginationReloadKey({
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			screenTotalPages: undefined,
+		});
+		const screenKey = buildTocScreenPaginationReloadKey({
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			screenTotalPages: 214,
+		});
+
+		expect(screenKey).not.toBe(legacyKey);
+		expect(screenKey).toContain("screen:214");
+	});
+
+	it("keeps the toc reload key stable during ordinary page turns", () => {
+		expect(
+			buildTocScreenPaginationReloadKey({
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
+				screenTotalPages: 214,
+				currentPage: 10,
+			})
+		).toBe(
+			buildTocScreenPaginationReloadKey({
+				bookId: "book-1",
+				filePath: "Books/demo.epub",
+				screenTotalPages: 214,
+				currentPage: 12,
+			})
+		);
 	});
 });

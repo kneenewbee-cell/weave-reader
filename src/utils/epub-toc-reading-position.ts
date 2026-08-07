@@ -2,6 +2,26 @@ import type { EpubBook, EpubReaderEngine, TocItem } from "../services/epub";
 
 export type FlatTocItem = TocItem & { depth: number };
 
+export interface TocScreenPaginationReloadKeyInput {
+	bookId?: string | null;
+	filePath?: string | null;
+	screenTotalPages?: number | null;
+	currentPage?: number | null;
+}
+
+export function buildTocScreenPaginationReloadKey(
+	input: TocScreenPaginationReloadKeyInput
+): string {
+	const bookId = String(input.bookId || "").trim();
+	const filePath = String(input.filePath || "").trim();
+	const rawScreenTotal =
+		typeof input.screenTotalPages === "number" && Number.isFinite(input.screenTotalPages)
+			? Math.round(input.screenTotalPages)
+			: 0;
+	const screenKey = rawScreenTotal > 0 ? `screen:${rawScreenTotal}` : "legacy";
+	return [bookId, filePath, screenKey].join("::");
+}
+
 export function flattenTocItems(source: TocItem[], depth = 0): FlatTocItem[] {
 	const result: FlatTocItem[] = [];
 	for (const item of source) {

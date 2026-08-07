@@ -61,6 +61,10 @@
 		return statusDetail.trim().length > 0;
 	}
 
+	function hasPageLabel() {
+		return pageLabel.trim().length > 0;
+	}
+
 	function getPageStatusLabel() {
 		return pageLabel.trim() || t('epub.bottomNav.pageStatus', { current: currentPage, total: totalPages });
 	}
@@ -206,7 +210,9 @@
 			{#if hasStatusText()}
 				<span class="epub-nav-status-label epub-nav-status-custom">{statusText}</span>
 			{:else if hasPageInfo()}
-				{#if vertical}
+				{#if vertical && hasPageLabel()}
+					<span class="epub-nav-status-label epub-nav-status-screen-label">{getPageStatusLabel()}</span>
+				{:else if vertical}
 					<span class="epub-nav-status-current">{currentPage}</span>
 					<span class="epub-nav-status-divider"></span>
 					<span class="epub-nav-status-total">{totalPages}</span>
@@ -438,6 +444,12 @@
 		font-size: 10px;
 		line-height: 1.1;
 		font-weight: 600;
+	}
+
+	.epub-nav-status.vertical .epub-nav-status-screen-label {
+		max-width: 68px;
+		text-align: center;
+		white-space: normal;
 	}
 
 	.epub-nav-status.vertical .epub-nav-status-custom {
