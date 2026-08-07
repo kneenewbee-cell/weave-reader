@@ -479,8 +479,25 @@ export class FoliateVaultPublicationParser {
 		};
 	}
 
+	getAllSectionReadingMetrics(): FoliateSectionReadingMetrics[] {
+		return this.sectionDescriptors.map((section) => ({
+			index: section.index,
+			href: section.href,
+			title: section.title,
+			textLength: section.textLength,
+			wordCount: section.wordCount,
+			positionCount: section.positionCount,
+			positionStart: section.positionStart,
+		}));
+	}
+
 	isFixedLayout(): boolean {
 		return this.metadata.isFixedLayout;
+	}
+
+	async resolveHrefSectionIndex(href: string): Promise<number | null> {
+		const resolved = await this.resolveHrefTarget(href);
+		return typeof resolved?.index === "number" ? resolved.index : null;
 	}
 
 	getSectionIndexForHref(href: string): number {

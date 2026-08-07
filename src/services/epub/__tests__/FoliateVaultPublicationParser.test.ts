@@ -154,6 +154,42 @@ describe("FoliateVaultPublicationParser", () => {
     }
   });
 
+  it("exposes copied section metrics for screen pagination", async () => {
+    let parser: FoliateVaultPublicationParser | null = null;
+    try {
+      const binary = await createLegacyHtmXhtmlEpubBuffer();
+      parser = new FoliateVaultPublicationParser(createMockApp(binary) as any);
+      await parser.load("Books/legacy-htm.epub");
+
+      const metrics = parser.getAllSectionReadingMetrics();
+
+      expect(metrics).toHaveLength(1);
+      expect(metrics[0]?.index).toBe(0);
+      expect(metrics[0]?.href).toContain("Text/00001.htm");
+      expect(metrics[0]?.positionStart).toBe(0);
+
+      metrics[0]!.positionStart = 999;
+
+      expect(parser.getAllSectionReadingMetrics()[0]?.positionStart).toBe(0);
+    } finally {
+      parser?.dispose();
+    }
+  });
+
+  it("resolves TOC hrefs to section indices for screen pagination", async () => {
+    let parser: FoliateVaultPublicationParser | null = null;
+    try {
+      const binary = await createLegacyHtmXhtmlEpubBuffer();
+      parser = new FoliateVaultPublicationParser(createMockApp(binary) as any);
+      await parser.load("Books/legacy-htm.epub");
+
+      await expect(parser.resolveHrefSectionIndex("OEBPS/Text/00001.htm#chapter")).resolves.toBe(0);
+      await expect(parser.resolveHrefSectionIndex("missing.xhtml")).resolves.toBeNull();
+    } finally {
+      parser?.dispose();
+    }
+  });
+
   it("routes cbz files through foliate generic makeBook with the comic book MIME type", async () => {
     const binary = await createSampleCbzBuffer();
     const parser = new FoliateVaultPublicationParser(
