@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { waitFor } from "@testing-library/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Platform, TFile } from "obsidian";
 import { getReaderHighlightIdentityKey } from "../highlight/highlight-identity";
@@ -1335,6 +1336,138 @@ describe("FoliateReaderService", () => {
 				totalPages: 100,
 			});
 			detach();
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("optimistically advances screen pagination by two in dual-page mode", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const view = {
+				next: vi.fn().mockResolvedValue(undefined),
+				removeEventListener: vi.fn(),
+				close: vi.fn(),
+				remove: vi.fn(),
+			};
+			(service as any).foliateView = view;
+			(service as any).currentFlowMode = "paginated";
+			(service as any).currentLayoutMode = "double";
+			(service as any).currentPosition = {
+				chapterIndex: 0,
+				cfi: "epubcfi(/6/2)",
+				percent: 9,
+			};
+			(service as any).currentPaginationInfo = {
+				currentPage: 10,
+				totalPages: 100,
+				screenStartPage: 10,
+				screenEndPage: 11,
+				screenTotalPages: 100,
+				pageLabel: "第 10-11 / 100 页",
+			};
+			vi.spyOn((service as any).parser, "getTotalPositions").mockReturnValue(100);
+			vi.spyOn((service as any).parser, "getMetadata").mockReturnValue({
+				chapterCount: 2,
+			});
+			const paginationChanged = vi.fn();
+			const detach = service.onPaginationChanged(paginationChanged);
+
+			await service.nextPage();
+
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 12,
+				totalPages: 100,
+				screenStartPage: 12,
+				screenEndPage: 13,
+				screenTotalPages: 100,
+			});
+			expect(paginationChanged.mock.calls[0]?.[0]).toMatchObject({
+				currentPage: 12,
+				screenStartPage: 12,
+				screenEndPage: 13,
+			});
+			detach();
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("uses Foliate relocate fraction and size for the current screen page range", async () => {
+		const service = new FoliateReaderService(createMockApp(await createSampleEpubBuffer()) as any);
+		const container = document.createElement("div");
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+			x: 0,
+			y: 0,
+			left: 0,
+			top: 0,
+			right: 1200,
+			bottom: 720,
+			width: 1200,
+			height: 720,
+			toJSON: () => ({}),
+		});
+		document.body.appendChild(container);
+		try {
+			await service.loadEpub("Books/foliate-sample.epub", "foliate-book", {
+				skipCoverImage: true,
+			} as any);
+			await service.renderTo(container, {
+				flow: "paginated",
+				spread: "always",
+				width: 1200,
+				height: 720,
+				lineHeight: 1.6,
+				pageMargin: 48,
+				widthMode: "full",
+			});
+			const view = container.querySelector("foliate-view") as FakeFoliateViewElement | null;
+
+			view?.dispatchEvent(
+				new CustomEvent("relocate", {
+					detail: {
+						index: 0,
+						cfi: "OPS/text/chapter1.xhtml#sec-1",
+						fraction: 0.25,
+						size: 0.125,
+					},
+				})
+			);
+			await waitFor(async () => {
+				const nextInfo = await service.getPaginationInfo();
+				expect(nextInfo.screenStartPage).toBe(3);
+			});
+			const info = await service.getPaginationInfo();
+			expect(info.screenStartPage).toBe(3);
+			expect(info.screenEndPage).toBe(4);
+			expect(info.pageLabel).toContain("3-4");
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("checks book end against screen totals when screen pagination is active", () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			(service as any).currentFlowMode = "paginated";
+			(service as any).currentPosition = {
+				chapterIndex: 0,
+				cfi: "epubcfi(/6/2)",
+				percent: 60,
+			};
+			(service as any).currentPaginationInfo = {
+				currentPage: 60,
+				totalPages: 100,
+				screenStartPage: 60,
+				screenEndPage: 61,
+				screenTotalPages: 100,
+			};
+			vi.spyOn((service as any).parser, "getTotalPositions").mockReturnValue(20);
+			vi.spyOn((service as any).parser, "getMetadata").mockReturnValue({
+				chapterCount: 1,
+			});
+
+			expect(service.isAtBookEnd()).toBe(false);
 		} finally {
 			service.destroy();
 		}

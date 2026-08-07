@@ -210,6 +210,34 @@ export function resolveScreenPageRange(input: ResolveScreenPageRangeInput): Scre
 	};
 }
 
+export function overrideScreenPaginationSectionPageCount(
+	state: ScreenPaginationState,
+	sectionIndex: number,
+	pageCount: number
+): ScreenPaginationState {
+	const normalizedPageCount = Math.max(1, Math.round(positiveNumber(pageCount, 1)));
+	let pageStart = 1;
+	const sections = state.sections.map((section) => {
+		const nextSection = {
+			...section,
+			pageStart,
+			pageCount: section.index === sectionIndex ? normalizedPageCount : section.pageCount,
+		};
+		pageStart += nextSection.pageCount;
+		return nextSection;
+	});
+	const sectionByHref = new Map<string, ScreenPaginationSectionIndex>();
+	for (const section of sections) {
+		sectionByHref.set(normalizeHref(section.href), section);
+	}
+	return {
+		...state,
+		totalPages: Math.max(0, pageStart - 1),
+		sections,
+		sectionByHref,
+	};
+}
+
 export function cloneTocItemsWithScreenPages(
 	items: TocItem[],
 	resolvePage: (item: TocItem) => number | undefined
