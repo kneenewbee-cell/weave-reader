@@ -124,4 +124,14 @@ describe("EpubReaderApp semantic presentation refresh", () => {
 			/shouldIgnoreDuplicateAiReadingRequest\([\s\S]*currentPath,[\s\S]*requestedScopeIds,[\s\S]*requestedOpenNoteOptions[\s\S]*\)/
 		);
 	});
+
+	it("passes screen page labels to every bottom navigation instance", () => {
+		const source = readReaderAppSource();
+		const bottomNavBlocks = source.match(/<BottomNav[\s\S]*?\/>/g) || [];
+
+		expect(bottomNavBlocks).toHaveLength(2);
+		for (const block of bottomNavBlocks) {
+			expect(block).toContain("pageLabel={paginationInfo.pageLabel}");
+		}
+	});
 });

@@ -8725,6 +8725,7 @@
 					onJumpToPage={handleJumpToPage}
 					currentPage={paginationInfo.currentPage}
 					totalPages={paginationInfo.totalPages}
+					pageLabel={paginationInfo.pageLabel}
 					vertical={true}
 					statusText={getBottomNavStatusText()}
 					statusDetail={getBottomNavStatusDetail()}
@@ -9058,6 +9059,7 @@
 					onJumpToPage={handleJumpToPage}
 					currentPage={paginationInfo.currentPage}
 					totalPages={paginationInfo.totalPages}
+					pageLabel={paginationInfo.pageLabel}
 					vertical={false}
 					statusText={getBottomNavStatusText()}
 					statusDetail={getBottomNavStatusDetail()}
