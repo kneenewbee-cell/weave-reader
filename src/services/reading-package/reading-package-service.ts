@@ -2,6 +2,7 @@ import type { App } from "obsidian";
 import { normalizePath } from "obsidian";
 import JSZip from "jszip";
 import { resolveEpubAiReadingNotePath } from "../epub/epub-ai-reading";
+import { generateUniqueVaultFilePath } from "../epub/epub-markdown-path-resolver";
 import { resolveEpubPortableBookDataLocation } from "../epub/epub-portable-data-location";
 import {
 	resolvePdfPortableBookDataLocation,
@@ -18,6 +19,7 @@ import {
 	type ReadingPackageManifestV2,
 	type ReadingPackageModuleSelection,
 } from "./reading-package-types";
+import { hasSelectedReadingPackageModule } from "./reading-package-modules";
 import {
 	readReadingPackageManifest,
 	writeReadingPackageManifest,
@@ -29,6 +31,7 @@ type AdapterLike = {
 	read?: (path: string) => Promise<string>;
 	readBinary?: (path: string) => Promise<ArrayBuffer | Uint8Array>;
 	write?: (path: string, data: string) => Promise<void>;
+	writeBinary?: (path: string, data: ArrayBuffer) => Promise<void>;
 	mkdir?: (path: string) => Promise<void>;
 };
 
@@ -228,6 +231,29 @@ async function writeVaultTextWithBackup(
 	await adapter.write(normalizedPath, text);
 }
 
+async function writeVaultBinary(app: App, filePath: string, binary: ArrayBuffer): Promise<void> {
+	const adapter = getAdapter(app);
+	if (!adapter.writeBinary) {
+		throw new Error("vault-binary-write-unavailable");
+	}
+	const normalizedPath = normalizeVaultPath(filePath);
+	await ensureFolderForFile(app, normalizedPath);
+	await adapter.writeBinary(normalizedPath, binary);
+}
+
+async function vaultPathExists(app: App, filePath: string): Promise<boolean> {
+	const adapter = getAdapter(app);
+	const normalizedPath = normalizeVaultPath(filePath);
+	if (!normalizedPath || !adapter.exists) {
+		return false;
+	}
+	try {
+		return await adapter.exists(normalizedPath);
+	} catch {
+		return false;
+	}
+}
+
 function retargetJsonDocument(value: unknown, bookId: string, bookPath: string): unknown {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		return value;
@@ -311,18 +337,19 @@ async function addBookFileIfRequested(
 	includeBook: boolean,
 	bookPath: string,
 	fallbackName: string,
-): Promise<void> {
+): Promise<boolean> {
 	if (!includeBook) {
-		return;
+		return false;
 	}
 	const binary = await readVaultBinary(app, bookPath);
 	if (!binary) {
-		return;
+		return false;
 	}
 	zip.file(
 		`book/${getFileName(bookPath, fallbackName)}`,
 		binary instanceof Uint8Array ? binary : new Uint8Array(binary),
 	);
+	return true;
 }
 
 async function addVersionsDirectory(app: App, zip: JSZip, bookDir: string): Promise<void> {
@@ -401,7 +428,10 @@ async function createEpubReadingPackage(
 		modules: options.modules,
 	});
 	writeReadingPackageManifest(zip, manifest);
-	await addBookFileIfRequested(app, zip, manifest.includeBook, bookPath, "book.epub");
+	const includedBook = await addBookFileIfRequested(app, zip, manifest.includeBook, bookPath, "book.epub");
+	if (manifest.includeBook && !includedBook) {
+		throw new Error("reading-package-book-file-unavailable");
+	}
 
 	const bookJson = await readVaultText(app, location.bookMetadataPath);
 	const bookRecord = parseJsonObject(bookJson);
@@ -465,7 +495,10 @@ async function createPdfReadingPackage(
 		modules: options.modules,
 	});
 	writeReadingPackageManifest(zip, manifest);
-	await addBookFileIfRequested(app, zip, manifest.includeBook, bookPath, "document.pdf");
+	const includedBook = await addBookFileIfRequested(app, zip, manifest.includeBook, bookPath, "document.pdf");
+	if (manifest.includeBook && !includedBook) {
+		throw new Error("reading-package-book-file-unavailable");
+	}
 
 	await addTextFileIfPresent(app, zip, location.bookMetadataPath, "data/book.json");
 	if (options.modules.annotationSystem) {
@@ -497,10 +530,62 @@ export async function createReadingPackage(
 	app: App,
 	options: CreateReadingPackageOptions,
 ): Promise<ReadingPackageResult> {
+	if (!hasSelectedReadingPackageModule(options.modules)) {
+		throw new Error("reading-package-empty-selection");
+	}
 	if (options.bookFormat === "pdf") {
 		return createPdfReadingPackage(app, options);
 	}
 	return createEpubReadingPackage(app, options);
+}
+
+function getPackageBookEntry(zip: JSZip) {
+	return Object.values(zip.files).find((entry) => {
+		const entryName = normalizeVaultPath(entry.name);
+		return !entry.dir && entryName.startsWith("book/");
+	}) || null;
+}
+
+function getPackageBookImportFileName(
+	entryName: string,
+	manifest: ReadingPackageManifestV2,
+	fallbackName: string,
+): string {
+	return sanitizePackageFileName(
+		manifest.bookFileName || getFileName(entryName, fallbackName),
+		fallbackName,
+	);
+}
+
+async function resolveImportBookPath(options: {
+	app: App;
+	zip: JSZip;
+	manifest: ReadingPackageManifestV2;
+	importOptions: ImportReadingPackageOptions;
+	fallbackName: string;
+}): Promise<{ bookPath: string; importedBook: boolean }> {
+	const targetBookPath = normalizeVaultPath(options.importOptions.targetBookPath);
+	if (targetBookPath) {
+		return { bookPath: targetBookPath, importedBook: false };
+	}
+
+	const bookEntry = getPackageBookEntry(options.zip);
+	if (bookEntry) {
+		const bookPath = await generateUniqueVaultFilePath(
+			options.app,
+			options.importOptions.defaultBookFolder || "/",
+			getPackageBookImportFileName(bookEntry.name, options.manifest, options.fallbackName),
+		);
+		await writeVaultBinary(options.app, bookPath, await bookEntry.async("arraybuffer"));
+		return { bookPath, importedBook: true };
+	}
+
+	const manifestBookPath = normalizeVaultPath(options.manifest.bookPath);
+	if (manifestBookPath && await vaultPathExists(options.app, manifestBookPath)) {
+		return { bookPath: manifestBookPath, importedBook: false };
+	}
+
+	throw new Error("reading-package-target-book-required");
 }
 
 async function importTextFromZip(options: {
@@ -643,9 +728,16 @@ async function importEpubReadingPackage(
 	options: ImportReadingPackageOptions,
 ): Promise<ReadingPackageImportResult> {
 	const bookId = normalizeVaultPath(options.preferredBookId || manifest.bookId);
-	const bookPath = normalizeVaultPath(options.targetBookPath || manifest.bookPath);
+	const importTarget = await resolveImportBookPath({
+		app,
+		zip,
+		manifest,
+		importOptions: options,
+		fallbackName: "book.epub",
+	});
+	const bookPath = importTarget.bookPath;
 	const location = resolveEpubPortableBookDataLocation(bookId);
-	const importedModules: string[] = [];
+	const importedModules: string[] = importTarget.importedBook ? ["book"] : [];
 	const backupPaths: string[] = [];
 
 	if (manifest.modules.annotationSystem) {
@@ -786,9 +878,16 @@ async function importPdfReadingPackage(
 	manifest: ReadingPackageManifestV2,
 	options: ImportReadingPackageOptions,
 ): Promise<ReadingPackageImportResult> {
-	const bookPath = normalizeVaultPath(options.targetBookPath || manifest.bookPath);
+	const importTarget = await resolveImportBookPath({
+		app,
+		zip,
+		manifest,
+		importOptions: options,
+		fallbackName: "document.pdf",
+	});
+	const bookPath = importTarget.bookPath;
 	const location = getPdfLocation(options.preferredBookId || "", bookPath);
-	const importedModules: string[] = [];
+	const importedModules: string[] = importTarget.importedBook ? ["book"] : [];
 	const backupPaths: string[] = [];
 
 	if (manifest.modules.annotationSystem) {

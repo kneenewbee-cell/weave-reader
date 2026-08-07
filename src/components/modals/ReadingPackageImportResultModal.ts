@@ -2,6 +2,7 @@ import { App, Modal, Setting } from "obsidian";
 import type { ReadingPackageImportResult } from "../../services/reading-package";
 
 const MODULE_LABELS: Record<string, string> = {
+	book: "原书文件",
 	annotationSystem: "标注体系",
 	ink: "手写/墨迹",
 	navigationState: "书签与进度",

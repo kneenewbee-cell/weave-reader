@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	BOOK_PACKAGE_V2_FORMAT,
 	getReadingPackageExportModules,
+	hasSelectedReadingPackageModule,
 	normalizeReadingPackageManifest,
 } from "../../reading-package";
 
@@ -71,5 +72,27 @@ describe("reading package modules", () => {
 				aiReadingNote: true,
 			},
 		});
+	});
+
+	it("checks only known reading package module keys when detecting a selection", () => {
+		const circular: Record<string, unknown> = {};
+		circular.window = circular;
+
+		expect(hasSelectedReadingPackageModule({
+			book: false,
+			annotationSystem: false,
+			ink: false,
+			navigationState: false,
+			aiReadingNote: false,
+			window: circular,
+		} as never)).toBe(false);
+
+		expect(hasSelectedReadingPackageModule({
+			book: true,
+			annotationSystem: false,
+			ink: false,
+			navigationState: false,
+			aiReadingNote: false,
+		})).toBe(true);
 	});
 });

@@ -101,6 +101,7 @@
                 createReadingPackage,
                 downloadReadingPackage,
                 formatReadingPackageErrorLogArgs,
+                hasSelectedReadingPackageModule,
                 importReadingPackage,
                 pickReadingPackageArrayBuffer,
                 type ReadingPackageBookFormat,
@@ -1690,7 +1691,7 @@
         function hasAnyReadingPackageSelection(
                 modules: ReadingPackageModuleSelection
         ): boolean {
-                return Object.values(modules).some(Boolean);
+                return hasSelectedReadingPackageModule(modules);
         }
 
         function getElectronShell(): {
@@ -1896,6 +1897,37 @@
                 } catch (error) {
                         logger.error('Failed to import reading package:', error);
                         new Notice(`阅读包导入失败：${error instanceof Error ? error.message : String(error)}`);
+                }
+        }
+
+        function getReadingPackageImportNoticeMessage(error: unknown): string {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message === 'reading-package-target-book-required') {
+                        return '该阅读包不包含原书，请先把原书加入书架，或在对应书籍上右键导入阅读包到此书';
+                }
+                if (message === 'vault-binary-write-unavailable') {
+                        return '当前仓库暂不支持写入原书文件';
+                }
+                return message;
+        }
+
+        async function importReadingPackageToBookshelf(): Promise<void> {
+                const arrayBuffer = await pickReadingPackageArrayBuffer();
+                if (!arrayBuffer) {
+                        return;
+                }
+                try {
+                        const result = await importReadingPackage(app, arrayBuffer, {
+                                defaultBookFolder: '/',
+                        });
+                        await storageService.addBooksToBookshelf([result.bookPath]);
+                        dispatchBookshelfDataChanged();
+                        await refreshBookshelf();
+                        showReadingPackageImportResultModal(app, result);
+                        new Notice('阅读包导入完成');
+                } catch (error) {
+                        logger.error('Failed to import reading package from bookshelf:', error);
+                        new Notice(`阅读包导入失败：${getReadingPackageImportNoticeMessage(error)}`);
                 }
         }
 
@@ -2862,10 +2894,10 @@
                                 });
                 });
                 menu.addItem((item) => {
-                        item.setTitle(t('epub.bookshelf.menu.importAnnotatedBookPackage'))
+                        item.setTitle('导入阅读包')
                                 .setIcon('archive')
                                 .onClick(() => {
-                                        void importAnnotatedBookPackageToShelf('annotated-book-package');
+                                        void importReadingPackageToBookshelf();
                                 });
                 });
                 menu.showAtMouseEvent(event);

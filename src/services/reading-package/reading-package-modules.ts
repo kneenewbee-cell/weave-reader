@@ -9,6 +9,20 @@ export interface ReadingPackageExportModule {
 	defaultSelected: boolean;
 }
 
+const READING_PACKAGE_EXPORT_MODULE_KEYS: ReadingPackageModuleKey[] = [
+	"book",
+	"annotationSystem",
+	"ink",
+	"navigationState",
+	"aiReadingNote",
+];
+
+export function hasSelectedReadingPackageModule(
+	modules: Partial<Record<ReadingPackageModuleKey, unknown>> | null | undefined,
+): boolean {
+	return READING_PACKAGE_EXPORT_MODULE_KEYS.some((key) => modules?.[key] === true);
+}
+
 export function getReadingPackageExportModules(
 	format: ReadingPackageBookFormat,
 ): ReadingPackageExportModule[] {
