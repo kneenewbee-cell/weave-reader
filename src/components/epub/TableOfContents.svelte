@@ -106,6 +106,10 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		onNavigate(item.href);
 	}
 
+	function getDisplayPageNumber(item: TocItem): number | undefined {
+		return item.screenPageNumber || item.pageNumber;
+	}
+
 	function handleKeydown(event: KeyboardEvent, item: TocItem) {
 		if (event.key === 'Enter' || event.key === ' ') {
 			event.preventDefault();
@@ -332,8 +336,9 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 								<span class="toc-last-read-badge">{t('epub.toc.lastReadBadge')}</span>
 							</span>
 						{/if}
-						{#if item.pageNumber}
-							<span class="toc-page">{item.pageNumber}</span>
+						{@const displayPageNumber = getDisplayPageNumber(item)}
+						{#if displayPageNumber}
+							<span class="toc-page">{displayPageNumber}</span>
 						{/if}
 					</span>
 				</div>

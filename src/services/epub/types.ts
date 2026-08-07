@@ -134,12 +134,17 @@ export interface TocItem {
 	href: string;
 	level: number;
 	pageNumber?: number;
+	screenPageNumber?: number;
 	subitems?: TocItem[];
 }
 
 export interface PaginationInfo {
 	currentPage: number;
 	totalPages: number;
+	screenStartPage?: number;
+	screenEndPage?: number;
+	screenTotalPages?: number;
+	pageLabel?: string;
 }
 
 export type EpubWidthMode = "standard" | "full" | "fit" | "edge";

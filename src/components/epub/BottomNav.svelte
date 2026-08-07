@@ -10,6 +10,7 @@
 		onJumpToPage?: (pageNumber: number) => void | Promise<void>;
 		currentPage?: number;
 		totalPages?: number;
+		pageLabel?: string;
 		vertical?: boolean;
 		statusText?: string;
 		statusDetail?: string;
@@ -22,6 +23,7 @@
 		onJumpToPage,
 		currentPage = 0,
 		totalPages = 0,
+		pageLabel = '',
 		vertical = false,
 		statusText = '',
 		statusDetail = '',
@@ -57,6 +59,10 @@
 
 	function hasStatusDetail() {
 		return statusDetail.trim().length > 0;
+	}
+
+	function getPageStatusLabel() {
+		return pageLabel.trim() || t('epub.bottomNav.pageStatus', { current: currentPage, total: totalPages });
 	}
 
 	function getPrevLabel() {
@@ -191,7 +197,7 @@
 				onclick={handleStatusClick}
 				onkeydown={handleStatusKeydown}
 			>
-				<span class="epub-nav-status-label">{t('epub.bottomNav.pageStatus', { current: currentPage, total: totalPages })}</span>
+				<span class="epub-nav-status-label">{getPageStatusLabel()}</span>
 			</button>
 			{#if hasStatusDetail()}
 				<span class="epub-nav-status-detail" title={statusDetail}>{statusDetail}</span>
@@ -205,7 +211,7 @@
 					<span class="epub-nav-status-divider"></span>
 					<span class="epub-nav-status-total">{totalPages}</span>
 				{:else}
-					<span class="epub-nav-status-label">{t('epub.bottomNav.pageStatus', { current: currentPage, total: totalPages })}</span>
+					<span class="epub-nav-status-label">{getPageStatusLabel()}</span>
 				{/if}
 			{:else}
 				<EpubLoadingState variant="compact" message={t('epub.bottomNav.locating')} />
