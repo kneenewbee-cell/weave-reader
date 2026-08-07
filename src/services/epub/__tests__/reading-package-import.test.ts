@@ -218,6 +218,45 @@ describe("reading package import", () => {
 		expect(files.get(location.annotationsMarkdownPath)).toBe("# Existing local note");
 	});
 
+	it("imports PDF reading data into the path-derived data directory when the preferred id is stale", async () => {
+		const zip = new JSZip();
+		writeReadingPackageManifest(zip, {
+			format: BOOK_PACKAGE_V2_FORMAT,
+			version: 2,
+			bookFormat: "pdf",
+			bookId: "pdf-book-old",
+			bookPath: "Old/demo.pdf",
+			title: "Demo PDF",
+			includeBook: false,
+			modules: {
+				book: false,
+				annotationSystem: false,
+				ink: true,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+			exportedAt: 1785950000000,
+		});
+		zip.file("data/ink.json", "{\"sourcePath\":\"Old/demo.pdf\",\"strokes\":[{\"id\":\"s1\"}]}");
+		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
+		const staleInkPath = "weave/pdf-data/books/epub-book-stale/ink.json";
+		const files = new Map<string, string | Uint8Array>();
+
+		const result = await importReadingPackage(
+			createWritableMockApp(files),
+			await zip.generateAsync({ type: "arraybuffer" }),
+			{
+				preferredBookId: "epub-book-stale",
+				targetBookPath: "Books/demo.pdf",
+			},
+		);
+
+		expect(result.bookId).toBe(location.bookId);
+		expect(files.has(location.inkPath)).toBe(true);
+		expect(files.has(staleInkPath)).toBe(false);
+		expect(String(files.get(location.inkPath))).toContain("s1");
+	});
+
 	it("merges PDF ink strokes by keeping identical strokes once and preserving conflicting strokes", async () => {
 		const zip = new JSZip();
 		writeReadingPackageManifest(zip, {

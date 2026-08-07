@@ -884,13 +884,18 @@ function assertReadingPackageHasActualContent(modules: ReadingPackageModuleSelec
 
 function getPdfLocation(bookId: string, filePath: string): PdfPortableBookDataLocation {
 	const resolved = resolvePdfPortableBookDataLocation(filePath);
-	if (!bookId || resolved.bookId === bookId) {
+	const normalizedBookId = normalizeVaultPath(bookId);
+	if (
+		!normalizedBookId ||
+		resolved.bookId === normalizedBookId ||
+		!normalizedBookId.startsWith("pdf-book-")
+	) {
 		return resolved;
 	}
-	const bookDir = normalizeVaultPath(`weave/pdf-data/books/${bookId}`);
+	const bookDir = normalizeVaultPath(`weave/pdf-data/books/${normalizedBookId}`);
 	return {
 		...resolved,
-		bookId,
+		bookId: normalizedBookId,
 		bookDir,
 		bookMetadataPath: `${bookDir}/book.json`,
 		annotationsPath: `${bookDir}/annotations.json`,

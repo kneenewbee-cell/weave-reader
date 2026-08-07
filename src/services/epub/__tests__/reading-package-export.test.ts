@@ -6,6 +6,7 @@ import {
 	createReadingPackage,
 	readReadingPackageManifest,
 } from "../../reading-package";
+import { resolvePdfPortableBookDataLocation } from "../../pdf/pdf-portable-data-location";
 
 function createMockApp(files: Map<string, string | Uint8Array>): App {
 	const normalize = (path: string) => String(path || "").replace(/\\/g, "/");
@@ -334,6 +335,35 @@ describe("reading package export", () => {
 		expect(await zip.file("data/ink.json")?.async("string")).toContain("s1");
 		expect(zip.file("data/annotations.json")).toBeNull();
 		expect(zip.file("data/reading-state.json")).toBeNull();
+	});
+
+	it("exports PDF reading data from the path-derived data directory when the shelf id is stale", async () => {
+		const location = resolvePdfPortableBookDataLocation("Books/demo.pdf");
+		const files = new Map<string, string | Uint8Array>([
+			["Books/demo.pdf", new Uint8Array([9, 8, 7])],
+			[location.inkPath, "{\"strokes\":[{\"id\":\"s1\"}]}"],
+		]);
+
+		const result = await createReadingPackage(createMockApp(files), {
+			bookFormat: "pdf",
+			bookId: "epub-book-stale",
+			filePath: "Books/demo.pdf",
+			displayName: "Demo PDF",
+			modules: {
+				book: false,
+				annotationSystem: false,
+				ink: true,
+				navigationState: false,
+				aiReadingNote: false,
+			},
+		});
+
+		const zip = await JSZip.loadAsync(result.arrayBuffer);
+		const manifest = await readReadingPackageManifest(zip);
+
+		expect(result.bookId).toBe(location.bookId);
+		expect(manifest?.bookId).toBe(location.bookId);
+		expect(await zip.file("data/ink.json")?.async("string")).toContain("s1");
 	});
 
 	it("exports grouped PDF reading data without AI reading note", async () => {
