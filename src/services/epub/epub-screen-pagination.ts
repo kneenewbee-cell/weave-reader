@@ -20,6 +20,7 @@ export interface ScreenPaginationSectionMetric {
 	href: string;
 	textLength: number;
 	fallbackPositionCount: number;
+	measuredPageCount?: number;
 	fixedLayout?: boolean;
 }
 
@@ -55,6 +56,14 @@ export interface ScreenPageEstimateInput {
 	flowMode: EpubFlowMode;
 	fallbackPositionCount: number;
 	fixedLayout?: boolean;
+}
+
+function normalizePageCount(value: number | undefined): number | null {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return null;
+	}
+	const normalized = Math.round(value);
+	return normalized > 0 ? normalized : null;
 }
 
 export interface BuildScreenPaginationStateInput {
@@ -151,18 +160,21 @@ export function buildScreenPaginationState(
 	let pageStart = 1;
 
 	for (const section of input.sections) {
-		const pageCount = estimateScreenPageCount({
-			textLength: section.textLength,
-			viewportHeight: input.layout.viewportHeight,
-			inlineWidthPx: input.layout.inlineWidthPx,
-			fontSizePx: input.layout.fontSizePx,
-			lineHeight: input.layout.lineHeight,
-			letterSpacing: input.layout.letterSpacing,
-			layoutMode: input.layout.layoutMode,
-			flowMode: input.layout.flowMode,
-			fallbackPositionCount: section.fallbackPositionCount,
-			fixedLayout: section.fixedLayout,
-		});
+		const measuredPageCount = normalizePageCount(section.measuredPageCount);
+		const pageCount =
+			measuredPageCount ??
+			estimateScreenPageCount({
+				textLength: section.textLength,
+				viewportHeight: input.layout.viewportHeight,
+				inlineWidthPx: input.layout.inlineWidthPx,
+				fontSizePx: input.layout.fontSizePx,
+				lineHeight: input.layout.lineHeight,
+				letterSpacing: input.layout.letterSpacing,
+				layoutMode: input.layout.layoutMode,
+				flowMode: input.layout.flowMode,
+				fallbackPositionCount: section.fallbackPositionCount,
+				fixedLayout: section.fixedLayout,
+			});
 		const indexedSection = {
 			index: section.index,
 			href: section.href,
@@ -258,16 +270,20 @@ export function overrideScreenPaginationSectionPageCount(
 
 export function cloneTocItemsWithScreenPages(
 	items: TocItem[],
-	resolvePage: (item: TocItem) => number | undefined
+	resolvePage: (item: TocItem) => number | undefined,
+	options: { clearLegacyPageNumbers?: boolean } = {}
 ): TocItemWithScreenPage[] {
 	return items.map((item) => {
 		const pageNumber = resolvePage(item);
 		const cloned: TocItemWithScreenPage = {
 			...item,
 			subitems: item.subitems
-				? cloneTocItemsWithScreenPages(item.subitems, resolvePage)
+				? cloneTocItemsWithScreenPages(item.subitems, resolvePage, options)
 				: undefined,
 		};
+		if (options.clearLegacyPageNumbers) {
+			delete cloned.pageNumber;
+		}
 		if (typeof pageNumber === "number" && Number.isFinite(pageNumber) && pageNumber > 0) {
 			cloned.screenPageNumber = Math.round(pageNumber);
 		}

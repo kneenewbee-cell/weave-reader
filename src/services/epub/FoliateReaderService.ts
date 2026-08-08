@@ -57,9 +57,11 @@ import {
 	buildScreenPaginationLayoutKey,
 	buildScreenPaginationState,
 	cloneTocItemsWithScreenPages,
+	overrideScreenPaginationSectionPageCount,
 	resolveScreenPageRange,
 	type ScreenPageRange,
 	type ScreenPaginationLayoutInput,
+	type ScreenPaginationSectionMetric,
 	type ScreenPaginationState,
 } from "./epub-screen-pagination";
 import {
@@ -172,6 +174,7 @@ type VisibleFrameWithIndex = {
 type FoliateRenderer = HTMLElement & {
 	setStyles?: (styles: string | [string, string]) => void;
 	render?: () => void;
+	goTo?: (...args: unknown[]) => unknown;
 	getContents?: () => Array<{ index?: number; doc?: Document | null }>;
 	flow?: string;
 	viewSize?: number;
@@ -185,7 +188,15 @@ type FoliateRelocateDetail = {
 	index?: number;
 	fraction?: number;
 	size?: number;
-	location?: unknown;
+	section?: {
+		current?: number;
+		total?: number;
+	};
+	location?: {
+		current?: number;
+		next?: number;
+		total?: number;
+	};
 	range?: unknown;
 };
 
@@ -194,6 +205,7 @@ type FoliateViewElement = HTMLElement & {
 	close: () => void;
 	addAnnotation: (...args: unknown[]) => unknown;
 	deleteAnnotation: (...args: unknown[]) => unknown;
+	goTo?: (...args: unknown[]) => unknown;
 	goLeft?: () => unknown;
 	goRight?: () => unknown;
 	prev?: () => unknown;
@@ -421,7 +433,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private static readonly FOOTNOTE_PREVIEW_RESOLVE_TIMEOUT_MS = 2200;
 	private static readonly FOOTNOTE_PREVIEW_CANDIDATE_TIMEOUT_MS = 480;
 	private static readonly NAVIGATION_TIMEOUT_MS = 5000;
-	private static readonly WHEEL_GESTURE_IDLE_MS = 360;
+	private static readonly WHEEL_GESTURE_IDLE_MS = 650;
 
 	private readonly app: App;
 	private readonly parser: FoliateVaultPublicationParser;
@@ -437,7 +449,12 @@ export class FoliateReaderService implements EpubReaderEngine {
 	};
 	private currentPaginationInfo: PaginationInfo = { currentPage: 0, totalPages: 0 };
 	private screenPaginationState: ScreenPaginationState | null = null;
+	private screenPaginationStateIsMeasured = false;
 	private screenPaginationLayoutKey = "";
+	private measuredScreenPaginationStates = new Map<string, ScreenPaginationState>();
+	private screenPaginationMeasurementTask: Promise<void> | null = null;
+	private screenPaginationMeasurementLayoutKey = "";
+	private screenPaginationMeasurementToken = 0;
 	private renderContainer: HTMLElement | null = null;
 	private foliateView: FoliateViewElement | null = null;
 	private layoutChangeInFlight = false;
@@ -1047,9 +1064,16 @@ export class FoliateReaderService implements EpubReaderEngine {
 		if (!this.screenPaginationState) {
 			return items;
 		}
+		if (!this.screenPaginationStateIsMeasured) {
+			return cloneTocItemsWithScreenPages(items, () => undefined, {
+				clearLegacyPageNumbers: true,
+			});
+		}
 		const pageByItemId = new Map<string, number>();
 		await this.hydrateTocScreenPageMap(items, pageByItemId);
-		return cloneTocItemsWithScreenPages(items, (item) => pageByItemId.get(item.id));
+		return cloneTocItemsWithScreenPages(items, (item) => pageByItemId.get(item.id), {
+			clearLegacyPageNumbers: true,
+		});
 	}
 
 	private async hydrateTocScreenPageMap(
@@ -1899,11 +1923,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 			}
 			if (typeof this.foliateView.goLeft === "function") {
 				await this.foliateView.goLeft();
-				this.syncPaginationAfterPageTurn("prev");
 				return;
 			}
 			await this.foliateView.prev();
-			this.syncPaginationAfterPageTurn("prev");
 		}, "prevPage");
 	}
 
@@ -1918,66 +1940,22 @@ export class FoliateReaderService implements EpubReaderEngine {
 			}
 			if (typeof this.foliateView.goRight === "function") {
 				await this.foliateView.goRight();
-				this.syncPaginationAfterPageTurn("next");
 				return;
 			}
 			await this.foliateView.next();
-			this.syncPaginationAfterPageTurn("next");
 		}, "nextPage");
-	}
-
-	private syncPaginationAfterPageTurn(direction: "next" | "prev"): void {
-		if (
-			typeof this.currentPaginationInfo.screenTotalPages === "number" &&
-			Number.isFinite(this.currentPaginationInfo.screenTotalPages) &&
-			this.currentPaginationInfo.screenTotalPages > 0
-		) {
-			return;
-		}
-		const totalPages =
-			this.currentPaginationInfo.screenTotalPages ||
-			this.currentPaginationInfo.totalPages ||
-			this.parser.getTotalPositions();
-		if (totalPages <= 0) {
-			return;
-		}
-		const currentPage = this.normalizeCurrentPage(totalPages);
-		const visiblePageCount = this.getCurrentScreenVisiblePageCount();
-		const step = visiblePageCount > 1 ? visiblePageCount : 1;
-		const delta = direction === "next" ? step : -step;
-		const nextPage = Math.round(this.clamp(currentPage + delta, 1, totalPages));
-		if (nextPage === this.currentPaginationInfo.currentPage) {
-			return;
-		}
-		const nextEndPage = Math.min(totalPages, nextPage + visiblePageCount - 1);
-		const nextInfo: PaginationInfo = {
-			currentPage: nextPage,
-			totalPages,
-			screenStartPage: nextPage,
-			screenEndPage: nextEndPage,
-			screenTotalPages: totalPages,
-		};
-		nextInfo.pageLabel = this.formatScreenPageLabel({
-			startPage: nextPage,
-			endPage: nextEndPage,
-			totalPages,
-			label: nextPage === nextEndPage ? String(nextPage) : `${nextPage}-${nextEndPage}`,
-		});
-		if (totalPages > 1) {
-			this.currentPosition = {
-				...this.currentPosition,
-				percent: this.clamp(((nextPage - 1) / (totalPages - 1)) * 100, 0, 100),
-			};
-			if (this.currentBook) {
-				this.currentBook.currentPosition = { ...this.currentPosition };
-			}
-		}
-		this.publishPaginationInfo(nextInfo);
 	}
 
 	async goToPage(pageNumber: number): Promise<void> {
 		await this.enqueueNavigation(async (positionOperationToken) => {
 			this.clearSelections();
+			const screenTarget = this.resolveScreenPageNavigationTarget(pageNumber);
+			if (
+				screenTarget &&
+				(await this.goToScreenPageNavigationTarget(screenTarget, positionOperationToken))
+			) {
+				return;
+			}
 			const canonical = await this.parser.resolveCfiForPage(
 				this.resolveLegacyPositionPageForScreenPage(pageNumber)
 			);
@@ -1991,6 +1969,88 @@ export class FoliateReaderService implements EpubReaderEngine {
 			);
 			await this.syncCurrentPositionFromTarget(canonical, undefined, positionOperationToken);
 		}, "goToPage");
+	}
+
+	private resolveScreenPageNavigationTarget(pageNumber: number): {
+		index: number;
+		href: string;
+		anchor: number;
+		pageCount: number;
+		localPage: number;
+	} | null {
+		this.refreshScreenPaginationState();
+		const state = this.screenPaginationState;
+		if (!state || state.totalPages <= 0) {
+			return null;
+		}
+		const normalizedPage = Math.round(this.clamp(pageNumber, 1, state.totalPages));
+		const section =
+			state.sections.find(
+				(candidate) =>
+					normalizedPage >= candidate.pageStart &&
+					normalizedPage < candidate.pageStart + candidate.pageCount
+			) || state.sections[state.sections.length - 1];
+		if (!section) {
+			return null;
+		}
+		const pageCount = Math.max(1, Math.round(section.pageCount));
+		const localPage = Math.round(
+			this.clamp(normalizedPage - section.pageStart + 1, 1, pageCount)
+		);
+		const anchor = pageCount > 1 ? (localPage - 1) / Math.max(pageCount - 1, 1) : 0;
+		return {
+			index: section.index,
+			href: section.href,
+			anchor: this.clamp(anchor, 0, 1),
+			pageCount,
+			localPage,
+		};
+	}
+
+	private async goToScreenPageNavigationTarget(
+		target: {
+			index: number;
+			href: string;
+			anchor: number;
+			pageCount: number;
+			localPage: number;
+		},
+		positionOperationToken?: number
+	): Promise<boolean> {
+		if (
+			this.currentFlowMode !== "paginated" ||
+			!this.foliateView ||
+			!this.sessionGuard.canApplyPositionOperation(this.foliateView, positionOperationToken)
+		) {
+			return false;
+		}
+		const view = this.foliateView;
+		const renderer = view.renderer as FoliateRenderer | undefined;
+		if (!isFoliatePaginatorRenderer(renderer) || typeof renderer.goTo !== "function") {
+			return false;
+		}
+		this.applyRendererLayout();
+		await renderer.goTo({ index: target.index, anchor: target.anchor });
+		if (
+			!this.sessionGuard.canApplyPositionOperation(
+				this.foliateView,
+				positionOperationToken,
+				undefined,
+				view
+			)
+		) {
+			return true;
+		}
+		this.applyRendererLayout();
+		await this.stabilizeViewAfterNavigation(undefined, positionOperationToken, undefined, {
+			retarget: false,
+		});
+		await this.syncCurrentPositionFromTarget(target.href, undefined, positionOperationToken, {
+			index: target.index,
+			fraction: target.anchor,
+			size: 1 / Math.max(target.pageCount, 1),
+		});
+		return true;
 	}
 
 	private resolveLegacyPositionPageForScreenPage(pageNumber: number): number {
@@ -6586,11 +6646,23 @@ export class FoliateReaderService implements EpubReaderEngine {
 		const layout = this.buildScreenPaginationLayoutInput();
 		if (!layout) {
 			this.screenPaginationState = null;
+			this.screenPaginationStateIsMeasured = false;
 			this.screenPaginationLayoutKey = "";
+			this.screenPaginationMeasurementToken += 1;
+			this.screenPaginationMeasurementTask = null;
+			this.screenPaginationMeasurementLayoutKey = "";
 			return;
 		}
 		const layoutKey = buildScreenPaginationLayoutKey(layout);
+		const measuredState = this.measuredScreenPaginationStates.get(layoutKey);
+		if (measuredState) {
+			this.screenPaginationState = measuredState;
+			this.screenPaginationStateIsMeasured = true;
+			this.screenPaginationLayoutKey = measuredState.layoutKey;
+			return;
+		}
 		if (this.screenPaginationState && this.screenPaginationLayoutKey === layoutKey) {
+			this.scheduleScreenPaginationMeasurement(layout, layoutKey);
 			return;
 		}
 		const fixedLayout = this.parser.isFixedLayout();
@@ -6603,7 +6675,244 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}));
 		const state = buildScreenPaginationState({ layout, sections });
 		this.screenPaginationState = state;
+		this.screenPaginationStateIsMeasured = false;
 		this.screenPaginationLayoutKey = state.layoutKey;
+		this.scheduleScreenPaginationMeasurement(layout, layoutKey);
+	}
+
+	private scheduleScreenPaginationMeasurement(
+		layout: ScreenPaginationLayoutInput,
+		layoutKey: string
+	): void {
+		if (!this.currentBook || this.currentFlowMode !== "paginated") {
+			return;
+		}
+		try {
+			this.parser.getBook();
+		} catch {
+			return;
+		}
+		if (this.parser.isFixedLayout() || this.measuredScreenPaginationStates.has(layoutKey)) {
+			return;
+		}
+		if (
+			this.screenPaginationMeasurementTask &&
+			this.screenPaginationMeasurementLayoutKey === layoutKey
+		) {
+			return;
+		}
+
+		const token = ++this.screenPaginationMeasurementToken;
+		const layoutSnapshot = { ...layout };
+		this.screenPaginationMeasurementLayoutKey = layoutKey;
+		this.screenPaginationMeasurementTask = this.measureScreenPaginationState(
+			layoutSnapshot,
+			token
+		)
+			.then((state) => {
+				if (
+					!state ||
+					token !== this.screenPaginationMeasurementToken ||
+					state.layoutKey !== this.screenPaginationMeasurementLayoutKey
+				) {
+					return;
+				}
+				this.measuredScreenPaginationStates.set(state.layoutKey, state);
+				this.screenPaginationState = state;
+				this.screenPaginationStateIsMeasured = true;
+				this.screenPaginationLayoutKey = state.layoutKey;
+			})
+			.catch((error) => {
+				if (token === this.screenPaginationMeasurementToken) {
+					logger.warn("[FoliateReaderService] Failed to measure Foliate screen pagination:", error);
+				}
+			})
+			.finally(() => {
+				if (token === this.screenPaginationMeasurementToken) {
+					this.screenPaginationMeasurementTask = null;
+					this.screenPaginationMeasurementLayoutKey = "";
+				}
+			});
+	}
+
+	private async measureScreenPaginationState(
+		layout: ScreenPaginationLayoutInput,
+		token: number
+	): Promise<ScreenPaginationState | null> {
+		const currentBook = this.currentBook;
+		if (!currentBook || !currentBook.filePath) {
+			return null;
+		}
+
+		await this.ensureFoliateViewRegistered();
+		if (token !== this.screenPaginationMeasurementToken) {
+			return null;
+		}
+		await this.waitForScreenPaginationMeasurementIdleSlot();
+		if (token !== this.screenPaginationMeasurementToken) {
+			return null;
+		}
+
+		const measurementParser = new FoliateVaultPublicationParser(this.app);
+		let measureContainer: HTMLElement | null = null;
+		let measureView: FoliateViewElement | null = null;
+
+		try {
+			await measurementParser.load(currentBook.filePath, { skipCoverImage: true });
+			if (token !== this.screenPaginationMeasurementToken) {
+				return null;
+			}
+
+			const metrics = measurementParser.getAllSectionReadingMetrics();
+			if (metrics.length === 0) {
+				return null;
+			}
+
+			measureContainer = this.createScreenPaginationMeasurementContainer(layout);
+			measureView = activeWindow.createEl("foliate-view") as FoliateViewElement;
+			measureView.classList.add("weave-epub-reader-host", "weave-epub-reader-measurement-host");
+			measureContainer.appendChild(measureView);
+
+			await measureView.open(measurementParser.getBook());
+			const renderer = measureView.renderer as FoliateRenderer | undefined;
+			if (!isFoliatePaginatorRenderer(renderer)) {
+				return null;
+			}
+			this.applyScreenPaginationMeasurementRendererLayout(renderer, layout);
+			renderer.setStyles?.(this.buildReaderStyles());
+			renderer.render?.();
+			await this.waitForAnimationFrame();
+
+			const sections: ScreenPaginationSectionMetric[] = [];
+			for (const metric of metrics) {
+				if (token !== this.screenPaginationMeasurementToken) {
+					return null;
+				}
+				if (typeof measureView.goTo !== "function") {
+					return null;
+				}
+				await measureView.goTo({ index: metric.index, anchor: 0 });
+				this.applyScreenPaginationMeasurementRendererLayout(renderer, layout);
+				renderer.setStyles?.(this.buildReaderStyles());
+				renderer.render?.();
+				await this.waitForAnimationFrame();
+				await this.waitForAnimationFrame();
+				sections.push({
+					index: metric.index,
+					href: metric.href,
+					textLength: metric.textLength,
+					fallbackPositionCount: metric.positionCount,
+					measuredPageCount: this.readMeasuredPaginatorSectionPageCount(
+						renderer,
+						metric.positionCount
+					),
+					fixedLayout: false,
+				});
+			}
+
+			return buildScreenPaginationState({ layout, sections });
+		} finally {
+			try {
+				measureView?.close();
+			} catch {
+				// Hidden measurement views are best-effort; cleanup should not disturb the reader.
+			}
+			measureView?.remove();
+			measureContainer?.remove();
+			measurementParser.dispose();
+		}
+	}
+
+	private createScreenPaginationMeasurementContainer(
+		layout: ScreenPaginationLayoutInput
+	): HTMLElement {
+		const container = activeDocument.createElement("div");
+		container.className = "weave-epub-reader-measurement-container";
+		Object.assign(container.style, {
+			position: "fixed",
+			left: "-100000px",
+			top: "0",
+			width: `${Math.max(1, Math.round(layout.viewportWidth))}px`,
+			height: `${Math.max(1, Math.round(layout.viewportHeight))}px`,
+			overflow: "hidden",
+			opacity: "0",
+			pointerEvents: "none",
+			contain: "layout size style",
+			zIndex: "-1",
+		});
+		activeDocument.body.appendChild(container);
+		return container;
+	}
+
+	private async waitForScreenPaginationMeasurementIdleSlot(): Promise<void> {
+		await this.waitForAnimationFrame();
+		await new Promise<void>((resolve) => window.setTimeout(resolve, 160));
+	}
+
+	private applyScreenPaginationMeasurementRendererLayout(
+		renderer: FoliateRenderer,
+		layout: ScreenPaginationLayoutInput
+	): void {
+		const metrics = computePaginatorLayoutMetrics({
+			renderContainerWidth: Math.max(1, Math.round(layout.viewportWidth)),
+			rendererClientWidth: Math.max(1, Math.round(layout.viewportWidth)),
+			currentWidthMode: layout.widthMode,
+			currentLayoutMode: layout.layoutMode,
+			currentFlowMode: layout.flowMode,
+			currentPageMargin: layout.pageMargin,
+		});
+		applyRendererLayoutAttributes(
+			renderer,
+			metrics,
+			layout.flowMode,
+			layout.layoutMode,
+			layout.widthMode
+		);
+	}
+
+	private readMeasuredPaginatorSectionPageCount(
+		renderer: FoliateRenderer,
+		fallbackPageCount: number
+	): number {
+		const rawPages = Number(renderer.pages);
+		if (Number.isFinite(rawPages) && rawPages > 2) {
+			return Math.max(1, Math.round(rawPages - 2));
+		}
+		return Math.max(1, Math.round(fallbackPageCount || 1));
+	}
+
+	private isScreenPaginationMeasurementPending(): boolean {
+		if (this.screenPaginationStateIsMeasured || !this.screenPaginationMeasurementTask) {
+			return false;
+		}
+		const layout = this.buildScreenPaginationLayoutInput();
+		if (!layout) {
+			return false;
+		}
+		return buildScreenPaginationLayoutKey(layout) === this.screenPaginationMeasurementLayoutKey;
+	}
+
+	private publishCurrentScreenPaginationFromState(): void {
+		if (!this.screenPaginationState || !this.currentBook) {
+			return;
+		}
+		const totalPositions = this.parser.getTotalPositions();
+		const currentPage = this.normalizeCurrentPage(totalPositions);
+		const range = this.resolveCurrentScreenPageRange(
+			this.currentPosition.chapterIndex,
+			currentPage
+		);
+		if (!range) {
+			return;
+		}
+		this.publishPaginationInfo({
+			currentPage: range.startPage,
+			totalPages: range.totalPages,
+			screenStartPage: range.startPage,
+			screenEndPage: range.endPage,
+			screenTotalPages: range.totalPages,
+			pageLabel: this.formatScreenPageLabel(range),
+		});
 	}
 
 	private getCurrentScreenVisiblePageCount(): number {
@@ -6667,7 +6976,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 		detail?: FoliateRelocateDetail
 	): ScreenPageRange | null {
 		this.refreshScreenPaginationState();
-		const state = this.screenPaginationState;
+		let state = this.screenPaginationState;
 		if (!state || state.totalPages <= 0) {
 			return null;
 		}
@@ -6678,6 +6987,17 @@ export class FoliateReaderService implements EpubReaderEngine {
 			sectionLocalPage: renderedPageDetail.sectionLocalPage ?? relocatePageDetail.sectionLocalPage,
 			sectionPageCount: renderedPageDetail.sectionPageCount ?? relocatePageDetail.sectionPageCount,
 		};
+		const hasFoliateScreenDetail =
+			typeof screenPageDetail.sectionLocalPage === "number" ||
+			typeof screenPageDetail.sectionPageCount === "number";
+		if (!this.screenPaginationStateIsMeasured && !hasFoliateScreenDetail) {
+			return null;
+		}
+		this.rememberObservedScreenSectionPageCount(
+			sectionIndex,
+			screenPageDetail.sectionPageCount
+		);
+		state = this.screenPaginationState ?? state;
 
 		const sectionMetrics = this.parser.getSectionReadingMetrics(sectionIndex);
 		const fallbackSectionPage = sectionMetrics
@@ -6690,6 +7010,34 @@ export class FoliateReaderService implements EpubReaderEngine {
 			visiblePageCount: this.getCurrentScreenVisiblePageCount(),
 			sectionPageCountOverride: screenPageDetail.sectionPageCount,
 		});
+	}
+
+	private rememberObservedScreenSectionPageCount(
+		sectionIndex: number,
+		pageCount: number | undefined
+	): void {
+		if (typeof pageCount !== "number" || !Number.isFinite(pageCount) || pageCount <= 0) {
+			return;
+		}
+		const state = this.screenPaginationState;
+		if (!state) {
+			return;
+		}
+		const section = state.sections.find((item) => item.index === sectionIndex);
+		const normalizedPageCount = Math.max(1, Math.round(pageCount));
+		if (!section || normalizedPageCount <= section.pageCount) {
+			return;
+		}
+		const nextState = overrideScreenPaginationSectionPageCount(
+			state,
+			sectionIndex,
+			normalizedPageCount
+		);
+		this.screenPaginationState = nextState;
+		this.screenPaginationLayoutKey = nextState.layoutKey;
+		if (this.screenPaginationStateIsMeasured) {
+			this.measuredScreenPaginationStates.set(nextState.layoutKey, nextState);
+		}
 	}
 
 	private formatScreenPageLabel(range: ScreenPageRange): string {
@@ -8297,7 +8645,11 @@ export class FoliateReaderService implements EpubReaderEngine {
 		this.currentPosition = { chapterIndex: 0, cfi: "", percent: 0 };
 		this.currentPaginationInfo = { currentPage: 0, totalPages: 0 };
 		this.screenPaginationState = null;
+		this.screenPaginationStateIsMeasured = false;
 		this.screenPaginationLayoutKey = "";
+		this.screenPaginationMeasurementToken += 1;
+		this.screenPaginationMeasurementTask = null;
+		this.screenPaginationMeasurementLayoutKey = "";
 		this.currentChapterTitle = "";
 		this.currentChapterHref = "";
 	}

@@ -209,6 +209,8 @@
 		{:else}
 			{#if hasStatusText()}
 				<span class="epub-nav-status-label epub-nav-status-custom">{statusText}</span>
+			{:else if hasPageLabel()}
+				<span class="epub-nav-status-label epub-nav-status-custom">{getPageStatusLabel()}</span>
 			{:else if hasPageInfo()}
 				{#if vertical && hasPageLabel()}
 					<span class="epub-nav-status-label epub-nav-status-screen-label">{getPageStatusLabel()}</span>

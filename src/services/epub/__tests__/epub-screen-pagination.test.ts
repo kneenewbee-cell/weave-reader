@@ -104,6 +104,90 @@ describe("epub screen pagination", () => {
 		expect(state.totalPages).toBe(3);
 	});
 
+	it("prefers measured Foliate page counts over text estimates", () => {
+		const state = buildScreenPaginationState({
+			sections: [
+				{
+					index: 0,
+					href: "chapter-1.xhtml",
+					textLength: 100_000,
+					fallbackPositionCount: 1,
+					measuredPageCount: 5,
+				},
+				{
+					index: 1,
+					href: "chapter-2.xhtml",
+					textLength: 100_000,
+					fallbackPositionCount: 1,
+					measuredPageCount: 7,
+				},
+			],
+			layout: {
+				bookId: "book",
+				viewportWidth: 720,
+				viewportHeight: 720,
+				inlineWidthPx: 720,
+				fontSizePx: 18,
+				lineHeight: 1.6,
+				letterSpacing: 0,
+				pageMargin: 48,
+				gap: "7%",
+				widthMode: "standard",
+				layoutMode: "paginated",
+				flowMode: "paginated",
+			},
+		});
+
+		expect(state.sections.map((section) => section.pageCount)).toEqual([5, 7]);
+		expect(state.sections.map((section) => section.pageStart)).toEqual([1, 6]);
+		expect(state.totalPages).toBe(12);
+	});
+
+	it("maps TOC anchors against measured section page starts", () => {
+		const state = buildScreenPaginationState({
+			sections: [
+				{
+					index: 0,
+					href: "chapter-1.xhtml",
+					textLength: 100_000,
+					fallbackPositionCount: 1,
+					measuredPageCount: 5,
+				},
+				{
+					index: 1,
+					href: "chapter-2.xhtml",
+					textLength: 100_000,
+					fallbackPositionCount: 1,
+					measuredPageCount: 9,
+				},
+			],
+			layout: {
+				bookId: "book",
+				viewportWidth: 720,
+				viewportHeight: 720,
+				inlineWidthPx: 720,
+				fontSizePx: 18,
+				lineHeight: 1.6,
+				letterSpacing: 0,
+				pageMargin: 48,
+				gap: "7%",
+				widthMode: "standard",
+				layoutMode: "paginated",
+				flowMode: "paginated",
+			},
+		});
+
+		const range = resolveScreenPageRange({
+			state,
+			sectionIndex: 1,
+			sectionLocalPage: 4,
+			visiblePageCount: 1,
+		});
+
+		expect(range.startPage).toBe(9);
+		expect(range.totalPages).toBe(14);
+	});
+
 	it("includes layout-affecting settings in the layout key", () => {
 		const base = {
 			bookId: "book",
