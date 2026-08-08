@@ -25,6 +25,7 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		loading?: boolean;
 		loadFailed?: boolean;
 		activeHref?: string | null;
+		activePageNumber?: number | null;
 		lastReadHref?: string | null;
 		chapterMarks?: EpubTocChapterMarkMap;
 		tocChapterMarkSettings?: EpubTocChapterMarkSettings;
@@ -45,6 +46,7 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		loading = false,
 		loadFailed = false,
 		activeHref = null,
+		activePageNumber = null,
 		lastReadHref = null,
 		chapterMarks = {},
 		tocChapterMarkSettings = {},
@@ -106,7 +108,20 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		onNavigate(item.href);
 	}
 
-	function getDisplayPageNumber(item: TocItem): number | undefined {
+	function normalizePageNumber(value: number | null | undefined): number | undefined {
+		if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+			return undefined;
+		}
+		return Math.round(value);
+	}
+
+	function getDisplayPageNumber(item: TocItem, isActive = false): number | undefined {
+		if (isActive) {
+			const activePage = normalizePageNumber(activePageNumber);
+			if (activePage) {
+				return activePage;
+			}
+		}
 		return item.screenPageNumber || item.pageNumber;
 	}
 
@@ -336,8 +351,8 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 								<span class="toc-last-read-badge">{t('epub.toc.lastReadBadge')}</span>
 							</span>
 						{/if}
-						{#if getDisplayPageNumber(item)}
-							<span class="toc-page">{getDisplayPageNumber(item)}</span>
+						{#if getDisplayPageNumber(item, isActive)}
+							<span class="toc-page">{getDisplayPageNumber(item, isActive)}</span>
 						{/if}
 					</span>
 				</div>

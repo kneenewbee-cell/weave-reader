@@ -61,21 +61,40 @@ export interface FormattingConfig {
   customActions?: CustomFormatAction[];
 }
 
+export interface AIProviderCredentialConfig {
+  apiKey?: string;
+  model?: string;
+  verified?: boolean;
+  lastVerified?: string;
+  baseUrl?: string;
+}
+
+export interface KimiAIProviderCredentialConfig extends AIProviderCredentialConfig {
+  platform?: AIProviderCredentialConfig;
+  code?: AIProviderCredentialConfig;
+}
+
 /**
  * AI配置总接口
  */
 export interface AIConfig {
   /**
    * API密钥配置（多服务商）
-   * 支持的提供商：openai, gemini, anthropic, deepseek, zhipu, siliconflow, xai
+   * 支持的提供商：kimi, openai, gemini, anthropic, deepseek, zhipu, siliconflow, xai
    */
-  apiKeys?: Partial<Record<'openai' | 'gemini' | 'anthropic' | 'deepseek' | 'zhipu' | 'siliconflow' | 'xai', {
-    apiKey: string;
-    model: string;
-    verified: boolean;
-    lastVerified?: string;
-    baseUrl?: string;
-  }>>;
+  apiKeys?: Partial<Record<'openai' | 'gemini' | 'anthropic' | 'deepseek' | 'zhipu' | 'siliconflow' | 'xai', AIProviderCredentialConfig>> & {
+    kimi?: KimiAIProviderCredentialConfig;
+    moonshot?: AIProviderCredentialConfig;
+  };
+
+  /**
+   * EPUB AI reading model selection.
+   */
+  epubAiReading?: {
+    provider?: 'kimi' | 'deepseek' | 'openai';
+    kimiMode?: 'platform' | 'code';
+    model?: string;
+  };
   
   /**
    * 默认AI服务提供商
@@ -91,6 +110,11 @@ export interface AIConfig {
    * 上次使用的 AI 模型（用于持久化用户选择）
    */
   lastUsedModel?: string;
+
+  /**
+   * Last Kimi endpoint used by EPUB AI reading.
+   */
+  lastUsedKimiMode?: 'platform' | 'code';
   
   /**
    * 卡片拆分配置

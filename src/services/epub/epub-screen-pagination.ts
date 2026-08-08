@@ -67,6 +67,7 @@ export interface ResolveScreenPageRangeInput {
 	sectionIndex: number;
 	sectionLocalPage: number;
 	visiblePageCount: number;
+	sectionPageCountOverride?: number;
 }
 
 export type TocItemWithScreenPage = TocItem & {
@@ -139,7 +140,7 @@ export function estimateScreenPageCount(input: ScreenPageEstimateInput): number 
 	const averageCharWidth = Math.max(fontSizePx * 0.56 + Math.max(0, input.letterSpacing), 4);
 	const charsPerLine = Math.max(1, Math.floor(inlineWidthPx / averageCharWidth));
 	const capacity = clamp(usableLines * charsPerLine, MIN_SCREEN_CAPACITY_CHARS, MAX_SCREEN_CAPACITY_CHARS);
-	return Math.max(1, Math.ceil(textLength / capacity));
+	return Math.max(fallback, Math.ceil(textLength / capacity));
 }
 
 export function buildScreenPaginationState(
@@ -183,24 +184,37 @@ export function buildScreenPaginationState(
 
 export function resolveScreenPageRange(input: ResolveScreenPageRangeInput): ScreenPageRange {
 	const section = input.state.sections.find((item) => item.index === input.sectionIndex);
-	const totalPages = Math.max(0, input.state.totalPages);
-	if (!section || totalPages <= 0) {
+	const baseTotalPages = Math.max(0, input.state.totalPages);
+	if (!section || baseTotalPages <= 0) {
 		return {
 			startPage: 0,
 			endPage: 0,
-			totalPages,
+			totalPages: baseTotalPages,
 			label: "0",
 		};
 	}
 
+	const sectionPageCountOverride =
+		typeof input.sectionPageCountOverride === "number" &&
+		Number.isFinite(input.sectionPageCountOverride)
+			? Math.round(input.sectionPageCountOverride)
+			: 0;
+	const effectiveSectionPageCount = Math.max(
+		1,
+		section.pageCount,
+		sectionPageCountOverride
+	);
 	const localPage = clamp(
 		Math.round(positiveNumber(input.sectionLocalPage, 1)),
 		1,
-		Math.max(1, section.pageCount)
+		effectiveSectionPageCount
 	);
 	const visiblePageCount = Math.max(1, Math.round(positiveNumber(input.visiblePageCount, 1)));
-	const startPage = clamp(section.pageStart + localPage - 1, 1, totalPages);
-	const endPage = clamp(startPage + visiblePageCount - 1, startPage, totalPages);
+	const rawStartPage = section.pageStart + localPage - 1;
+	const rawEndPage = rawStartPage + visiblePageCount - 1;
+	const totalPages = Math.max(baseTotalPages, rawEndPage);
+	const startPage = clamp(rawStartPage, 1, totalPages);
+	const endPage = clamp(rawEndPage, startPage, totalPages);
 
 	return {
 		startPage,
@@ -218,10 +232,14 @@ export function overrideScreenPaginationSectionPageCount(
 	const normalizedPageCount = Math.max(1, Math.round(positiveNumber(pageCount, 1)));
 	let pageStart = 1;
 	const sections = state.sections.map((section) => {
+		const nextPageCount =
+			section.index === sectionIndex
+				? Math.max(section.pageCount, normalizedPageCount)
+				: section.pageCount;
 		const nextSection = {
 			...section,
 			pageStart,
-			pageCount: section.index === sectionIndex ? normalizedPageCount : section.pageCount,
+			pageCount: nextPageCount,
 		};
 		pageStart += nextSection.pageCount;
 		return nextSection;

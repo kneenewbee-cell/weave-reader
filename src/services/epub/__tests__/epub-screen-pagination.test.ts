@@ -25,6 +25,23 @@ describe("epub screen pagination", () => {
 		).toBeGreaterThan(2);
 	});
 
+	it("does not shrink below the existing reader position count", () => {
+		expect(
+			estimateScreenPageCount({
+				textLength: 20000,
+				viewportHeight: 1200,
+				inlineWidthPx: 1200,
+				fontSizePx: 16,
+				lineHeight: 1.4,
+				letterSpacing: 0,
+				layoutMode: "paginated",
+				flowMode: "paginated",
+				fallbackPositionCount: 108,
+				fixedLayout: false,
+			})
+		).toBe(108);
+	});
+
 	it("keeps dual-page display as two page numbers rather than halving the book total", () => {
 		const state = buildScreenPaginationState({
 			sections: [

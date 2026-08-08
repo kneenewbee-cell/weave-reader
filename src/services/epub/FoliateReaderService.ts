@@ -57,7 +57,6 @@ import {
 	buildScreenPaginationLayoutKey,
 	buildScreenPaginationState,
 	cloneTocItemsWithScreenPages,
-	overrideScreenPaginationSectionPageCount,
 	resolveScreenPageRange,
 	type ScreenPageRange,
 	type ScreenPaginationLayoutInput,
@@ -177,6 +176,8 @@ type FoliateRenderer = HTMLElement & {
 	flow?: string;
 	viewSize?: number;
 	end?: number;
+	page?: number;
+	pages?: number;
 };
 
 type FoliateRelocateDetail = {
@@ -420,6 +421,7 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private static readonly FOOTNOTE_PREVIEW_RESOLVE_TIMEOUT_MS = 2200;
 	private static readonly FOOTNOTE_PREVIEW_CANDIDATE_TIMEOUT_MS = 480;
 	private static readonly NAVIGATION_TIMEOUT_MS = 5000;
+	private static readonly WHEEL_GESTURE_IDLE_MS = 360;
 
 	private readonly app: App;
 	private readonly parser: FoliateVaultPublicationParser;
@@ -493,6 +495,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 	private readonly paginatedLayoutRecovery = new ReaderPaginatedLayoutRecoveryScheduler();
 	private readonly sessionGuard = new FoliateSessionGuard<FoliateViewElement>();
 	private wheelTurnInFlight = false;
+	private wheelGestureLocked = false;
+	private wheelGestureUnlockTimer: ReturnType<typeof window.setTimeout> | null = null;
 	private wheelDeltaAccumulator = 0;
 	private lastWheelEventAt = 0;
 	private bookEndAdvanceHandler: (() => boolean | Promise<boolean>) | null = null;
@@ -1061,12 +1065,53 @@ export class FoliateReaderService implements EpubReaderEngine {
 			if (typeof sectionIndex === "number") {
 				const section = state.sections.find((candidate) => candidate.index === sectionIndex);
 				if (section) {
-					pageByItemId.set(item.id, section.pageStart);
+					pageByItemId.set(item.id, await this.resolveTocScreenPageNumber(item, section));
 				}
 			}
 			if (item.subitems?.length) {
 				await this.hydrateTocScreenPageMap(item.subitems, pageByItemId);
 			}
+		}
+	}
+
+	private async resolveTocScreenPageNumber(
+		item: TocItem,
+		section: ScreenPaginationState["sections"][number]
+	): Promise<number> {
+		const fallbackPage = section.pageStart;
+		try {
+			const resolved = await this.parser.resolveNavigationTarget(item.href);
+			if (!resolved || resolved.index !== section.index) {
+				return fallbackPage;
+			}
+			const legacyPage = this.parser.resolvePageNumberForResolvedTarget(resolved);
+			const metrics = this.parser.getSectionReadingMetrics(section.index);
+			if (
+				typeof legacyPage !== "number" ||
+				!Number.isFinite(legacyPage) ||
+				!metrics ||
+				metrics.positionCount <= 1 ||
+				section.pageCount <= 1
+			) {
+				return fallbackPage;
+			}
+
+			const sectionLegacyPage = legacyPage - metrics.positionStart;
+			const progression = this.clamp(
+				(sectionLegacyPage - 1) / Math.max(metrics.positionCount - 1, 1),
+				0,
+				1
+			);
+			const localScreenPage =
+				Math.round(progression * Math.max(section.pageCount - 1, 0)) + 1;
+			const sectionEndPage = section.pageStart + Math.max(section.pageCount - 1, 0);
+			return Math.round(this.clamp(section.pageStart + localScreenPage - 1, section.pageStart, sectionEndPage));
+		} catch (error) {
+			logger.debugWithTag("FoliateReaderService", "Failed to resolve TOC screen page", {
+				error,
+				href: item.href,
+			});
+			return fallbackPage;
 		}
 	}
 
@@ -1882,6 +1927,13 @@ export class FoliateReaderService implements EpubReaderEngine {
 	}
 
 	private syncPaginationAfterPageTurn(direction: "next" | "prev"): void {
+		if (
+			typeof this.currentPaginationInfo.screenTotalPages === "number" &&
+			Number.isFinite(this.currentPaginationInfo.screenTotalPages) &&
+			this.currentPaginationInfo.screenTotalPages > 0
+		) {
+			return;
+		}
 		const totalPages =
 			this.currentPaginationInfo.screenTotalPages ||
 			this.currentPaginationInfo.totalPages ||
@@ -6073,9 +6125,15 @@ export class FoliateReaderService implements EpubReaderEngine {
 		event.preventDefault();
 		event.stopPropagation();
 
+		if (this.wheelGestureLocked) {
+			this.scheduleWheelGestureUnlock();
+			return;
+		}
+
 		if (hasDiscreteTurnIntent) {
 			const direction: "next" | "prev" = deltaY > 0 ? "next" : "prev";
-			this.resetWheelPageTurnState();
+			this.resetWheelDeltaAccumulator();
+			this.lockWheelGestureUntilIdle();
 			void this.performWheelPageTurn(direction);
 			return;
 		}
@@ -6092,7 +6150,8 @@ export class FoliateReaderService implements EpubReaderEngine {
 		}
 
 		const direction: "next" | "prev" = this.wheelDeltaAccumulator > 0 ? "next" : "prev";
-		this.resetWheelPageTurnState();
+		this.resetWheelDeltaAccumulator();
+		this.lockWheelGestureUntilIdle();
 		void this.performWheelPageTurn(direction);
 	}
 
@@ -6179,8 +6238,36 @@ export class FoliateReaderService implements EpubReaderEngine {
 	}
 
 	private resetWheelPageTurnState(): void {
+		this.resetWheelDeltaAccumulator();
+		this.clearWheelGestureLock();
+	}
+
+	private resetWheelDeltaAccumulator(): void {
 		this.wheelDeltaAccumulator = 0;
 		this.lastWheelEventAt = 0;
+	}
+
+	private lockWheelGestureUntilIdle(): void {
+		this.wheelGestureLocked = true;
+		this.scheduleWheelGestureUnlock();
+	}
+
+	private scheduleWheelGestureUnlock(): void {
+		if (this.wheelGestureUnlockTimer) {
+			window.clearTimeout(this.wheelGestureUnlockTimer);
+		}
+		this.wheelGestureUnlockTimer = window.setTimeout(() => {
+			this.wheelGestureLocked = false;
+			this.wheelGestureUnlockTimer = null;
+		}, FoliateReaderService.WHEEL_GESTURE_IDLE_MS);
+	}
+
+	private clearWheelGestureLock(): void {
+		this.wheelGestureLocked = false;
+		if (this.wheelGestureUnlockTimer) {
+			window.clearTimeout(this.wheelGestureUnlockTimer);
+			this.wheelGestureUnlockTimer = null;
+		}
 	}
 
 	private isWheelEventOnInteractiveElement(target: EventTarget | null): boolean {
@@ -6545,26 +6632,52 @@ export class FoliateReaderService implements EpubReaderEngine {
 		};
 	}
 
+	private readRenderedPaginatorScreenPageDetail(): {
+		sectionLocalPage?: number;
+		sectionPageCount?: number;
+	} {
+		if (this.currentFlowMode !== "paginated") {
+			return {};
+		}
+		const renderer = this.foliateView?.renderer as FoliateRenderer | undefined;
+		if (!isFoliatePaginatorRenderer(renderer)) {
+			return {};
+		}
+
+		const rawPages = Number(renderer.pages);
+		if (!Number.isFinite(rawPages) || rawPages <= 2) {
+			return {};
+		}
+
+		const sectionPageCount = Math.max(1, Math.round(rawPages - 2));
+		const rawPage = Number(renderer.page);
+		const sectionLocalPage = Number.isFinite(rawPage)
+			? Math.max(1, Math.min(sectionPageCount, Math.round(rawPage)))
+			: undefined;
+
+		return {
+			sectionLocalPage,
+			sectionPageCount,
+		};
+	}
+
 	private resolveCurrentScreenPageRange(
 		sectionIndex: number,
 		fallbackCurrentPage: number,
 		detail?: FoliateRelocateDetail
 	): ScreenPageRange | null {
 		this.refreshScreenPaginationState();
-		let state = this.screenPaginationState;
+		const state = this.screenPaginationState;
 		if (!state || state.totalPages <= 0) {
 			return null;
 		}
 
+		const renderedPageDetail = this.readRenderedPaginatorScreenPageDetail();
 		const relocatePageDetail = this.readRelocateScreenPageDetail(detail);
-		if (typeof relocatePageDetail.sectionPageCount === "number") {
-			state = overrideScreenPaginationSectionPageCount(
-				state,
-				sectionIndex,
-				relocatePageDetail.sectionPageCount
-			);
-			this.screenPaginationState = state;
-		}
+		const screenPageDetail = {
+			sectionLocalPage: renderedPageDetail.sectionLocalPage ?? relocatePageDetail.sectionLocalPage,
+			sectionPageCount: renderedPageDetail.sectionPageCount ?? relocatePageDetail.sectionPageCount,
+		};
 
 		const sectionMetrics = this.parser.getSectionReadingMetrics(sectionIndex);
 		const fallbackSectionPage = sectionMetrics
@@ -6573,8 +6686,9 @@ export class FoliateReaderService implements EpubReaderEngine {
 		return resolveScreenPageRange({
 			state,
 			sectionIndex,
-			sectionLocalPage: relocatePageDetail.sectionLocalPage || fallbackSectionPage,
+			sectionLocalPage: screenPageDetail.sectionLocalPage || fallbackSectionPage,
 			visiblePageCount: this.getCurrentScreenVisiblePageCount(),
+			sectionPageCountOverride: screenPageDetail.sectionPageCount,
 		});
 	}
 

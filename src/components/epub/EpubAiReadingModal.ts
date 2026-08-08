@@ -9,10 +9,22 @@ import {
 import type { App, TFile } from "obsidian";
 import { openFileWithExistingLeaf } from "../../utils/workspace-navigation";
 import {
+	getEpubAiReadingProviderDefinition,
+	getEpubAiReadingProviderDefinitions,
+	getEpubAiReadingKimiModeDefinition,
+	getEpubAiReadingKimiModeDefinitions,
+	loadEpubAiReadingRuntimeEnv,
+	normalizeEpubAiReadingProvider,
+	normalizeEpubAiReadingKimiMode,
 	requestEpubAiReading,
+	resolveEpubAiReadingConfig,
+	resolveEpubAiReadingSelection,
 	upsertEpubAiReadingNote,
+	type EpubAiReadingConfig,
 	type EpubAiReadingConfigHost,
 	type EpubAiReadingInput,
+	type EpubAiReadingKimiMode,
+	type EpubAiReadingProvider,
 	type EpubAiReadingResult,
 } from "../../services/epub/epub-ai-reading";
 import {
@@ -295,6 +307,124 @@ function getLatestUnsavedDraftExcept(
 	return fallback;
 }
 
+type PersistedEpubAiProviderConfig = {
+	apiKey?: string;
+	model?: string;
+	baseUrl?: string;
+	verified?: boolean;
+	lastVerified?: string;
+};
+
+type PersistedKimiProviderConfig = PersistedEpubAiProviderConfig & {
+	platform?: PersistedEpubAiProviderConfig;
+	code?: PersistedEpubAiProviderConfig;
+};
+
+type MutableEpubAiConfig = NonNullable<
+	NonNullable<EpubAiReadingConfigHost["settings"]>["aiConfig"]
+>;
+
+function isAiReadingAuthError(error: unknown): boolean {
+	const message = String(error instanceof Error ? error.message : error || "")
+		.toLowerCase()
+		.trim();
+	return (
+		/\bhttp\s*(401|403)\b/.test(message) ||
+		message.includes("unauthorized") ||
+		message.includes("invalid api key") ||
+		message.includes("invalid_api_key") ||
+		message.includes("authentication") ||
+		message.includes("forbidden")
+	);
+}
+
+class EpubAiReadingApiKeyModal extends Modal {
+	private readonly providerLabel: string;
+	private readonly reason: string;
+	private resolver: ((value: string | null) => void) | null = null;
+
+	constructor(
+		app: App,
+		options: { providerLabel: string; reason?: string },
+	) {
+		super(app);
+		this.providerLabel = options.providerLabel;
+		this.reason = options.reason || "";
+	}
+
+	waitForInput(): Promise<string | null> {
+		return new Promise((resolve) => {
+			this.resolver = resolve;
+			this.open();
+		});
+	}
+
+	onOpen(): void {
+		this.contentEl.empty();
+		this.contentEl.addClass("weave-epub-ai-key-modal");
+		this.contentEl.createEl("h2", { text: "填写 API Key" });
+		this.contentEl.createEl("p", {
+			text:
+				this.reason ||
+				`首次使用 ${this.providerLabel} 生成 AI 阅读笔记，需要先保存 API Key。`,
+		});
+		const input = this.contentEl.createEl("input", {
+			type: "password",
+			cls: "weave-epub-ai-key-input",
+			attr: {
+				placeholder: `${this.providerLabel} API Key`,
+				autocomplete: "off",
+			},
+		});
+		const actions = this.contentEl.createDiv({
+			cls: "weave-epub-ai-key-actions",
+		});
+		const cancelButton = actions.createEl("button", { text: "取消" });
+		const saveButton = actions.createEl("button", {
+			text: "保存",
+			cls: "mod-cta",
+		});
+		const updateSaveState = () => {
+			saveButton.disabled = !input.value.trim();
+		};
+		const submit = () => {
+			const apiKey = input.value.trim();
+			if (!apiKey) {
+				return;
+			}
+			this.finish(apiKey);
+		};
+		input.addEventListener("input", updateSaveState);
+		input.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				submit();
+			}
+		});
+		cancelButton.addEventListener("click", () => this.finish(null));
+		saveButton.addEventListener("click", submit);
+		updateSaveState();
+		window.setTimeout(() => input.focus(), 0);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		this.finish(null, false);
+	}
+
+	private finish(value: string | null, shouldClose = true): void {
+		const resolver = this.resolver;
+		if (!resolver) {
+			return;
+		}
+		this.resolver = null;
+		resolver(value);
+		if (shouldClose) {
+			this.close();
+		}
+	}
+}
+
 export class EpubAiReadingModal extends Modal {
 	private readonly input: EpubAiReadingInput;
 	private readonly configHost: EpubAiReadingConfigHost | null;
@@ -305,6 +435,8 @@ export class EpubAiReadingModal extends Modal {
 	private readonly sessionKey: string;
 	private readonly sessionState: EpubAiReadingSessionState;
 	private selectedScopeIds: string[];
+	private selectedProvider: EpubAiReadingProvider;
+	private selectedModel: string;
 	private mode: "selecting-scope" | "reading" = "reading";
 	private activeInput: EpubAiReadingInput;
 	private activeSessionKey: string;
@@ -313,7 +445,9 @@ export class EpubAiReadingModal extends Modal {
 	private resultEl: HTMLElement | null = null;
 	private statusEl: HTMLElement | null = null;
 	private warningEl: HTMLElement | null = null;
+	private modelControlsEl: HTMLElement | null = null;
 	private actionsEl: HTMLElement | null = null;
+	private selectedKimiMode: EpubAiReadingKimiMode;
 	private noteFile: TFile | null = null;
 	private markdownRenderComponent: Component | null = null;
 	private streamingPreviewEl: HTMLPreElement | null = null;
@@ -347,6 +481,12 @@ export class EpubAiReadingModal extends Modal {
 			);
 		this.sessionKey = getEpubAiReadingSessionKey(this.input);
 		this.sessionState = getEpubAiReadingSessionState(app);
+		const selection = resolveEpubAiReadingSelection(
+			this.configHost?.settings?.aiConfig,
+		);
+		this.selectedProvider = selection.provider;
+		this.selectedModel = selection.model;
+		this.selectedKimiMode = selection.kimiMode;
 		this.activeInput = this.input;
 		this.activeSessionKey = this.sessionKey;
 	}
@@ -367,7 +507,7 @@ export class EpubAiReadingModal extends Modal {
 		);
 		this.renderShell();
 		if (this.shouldShowScopeSelection()) {
-			const restorableSession = this.getLatestRestorableSessionForBook();
+			const restorableSession = this.getRestorableSessionForInitialScope();
 			if (restorableSession?.generation) {
 				this.attachGenerationSession(restorableSession.generation);
 				return;
@@ -408,26 +548,25 @@ export class EpubAiReadingModal extends Modal {
 		);
 	}
 
-	private getLatestRestorableSessionForBook(): {
+	private getRestorableSessionForInitialScope(): {
 		generation?: EpubAiReadingGenerationSession;
 		draft?: EpubAiReadingSessionDraft;
 	} | null {
-		const bookKey = getEpubAiReadingBookKey(this.input);
-		const latestKey = this.sessionState.latestSessionKeyByBook.get(bookKey);
-		if (latestKey) {
-			const generation = this.sessionState.generations.get(latestKey);
-			if (generation) {
-				return { generation };
-			}
-			const draft = this.sessionState.drafts.get(latestKey);
-			if (draft) {
-				return { draft };
-			}
+		const selection = resolveEpubAiReadingScopeSelection(
+			this.tocItems,
+			this.selectedScopeIds,
+		);
+		if (!selection.canGenerate) {
+			return null;
 		}
-		for (const generation of this.sessionState.generations.values()) {
-			if (generation.bookKey === bookKey) {
-				return { generation };
-			}
+		const scopeSessionKey = getEpubAiReadingSessionKey(this.input, selection);
+		const generation = this.sessionState.generations.get(scopeSessionKey);
+		if (generation?.state === "generating") {
+			return { generation };
+		}
+		const draft = this.sessionState.drafts.get(scopeSessionKey);
+		if (draft && !draft.savedToNote) {
+			return { draft };
 		}
 		return null;
 	}
@@ -489,7 +628,7 @@ export class EpubAiReadingModal extends Modal {
 				this.resultEl.empty();
 				this.resultEl.createDiv({
 					cls: "weave-epub-ai-reading-error",
-					text: "AI 阅读生成失败，请检查 .env 中的 Kimi API Key、网络连接或模型配置。",
+					text: "AI 阅读生成失败，请检查 API Key、网络连接或模型配置。",
 				});
 			}
 			this.renderActions();
@@ -547,6 +686,11 @@ export class EpubAiReadingModal extends Modal {
 		setIcon(closeButton, "x");
 		closeButton.addEventListener("click", () => this.close());
 
+		this.modelControlsEl = this.contentEl.createDiv({
+			cls: "weave-epub-ai-reading-model-controls",
+		});
+		this.renderModelControls();
+
 		this.statusEl = this.contentEl.createDiv({
 			cls: "weave-epub-ai-reading-status",
 		});
@@ -580,6 +724,486 @@ export class EpubAiReadingModal extends Modal {
 			cls: "weave-epub-ai-reading-actions",
 		});
 		this.renderActions();
+	}
+
+	private renderModelControls(): void {
+		if (!this.modelControlsEl) {
+			return;
+		}
+		this.modelControlsEl.empty();
+		const providerLabel = this.modelControlsEl.createEl("label", {
+			cls: "weave-epub-ai-reading-model-field",
+		});
+		providerLabel.createSpan({ text: "模型来源" });
+		const providerSelect = providerLabel.createEl("select", {
+			cls: "weave-epub-ai-reading-provider-select",
+		});
+		for (const definition of getEpubAiReadingProviderDefinitions()) {
+			const option = providerSelect.createEl("option", {
+				text: definition.label,
+			});
+			option.value = definition.id;
+		}
+		providerSelect.value = this.selectedProvider;
+		providerSelect.addEventListener("change", () => {
+			this.selectedProvider = normalizeEpubAiReadingProvider(
+				providerSelect.value,
+				this.selectedProvider,
+			);
+			if (this.selectedProvider === "kimi") {
+				this.selectedKimiMode = this.resolvePersistedKimiMode();
+			}
+			const persistedModel =
+				this.getPersistedProviderConfig(this.selectedProvider)?.model;
+			this.selectedModel = this.resolveModelForSelectedProvider(persistedModel);
+			void this.persistSelectedModelConfig();
+			this.renderModelControls();
+		});
+
+		if (this.selectedProvider === "kimi") {
+			const kimiModeLabel = this.modelControlsEl.createEl("label", {
+				cls: "weave-epub-ai-reading-model-field",
+			});
+			kimiModeLabel.createSpan({ text: "Kimi 接口" });
+			const kimiModeSelect = kimiModeLabel.createEl("select", {
+				cls: "weave-epub-ai-reading-kimi-mode-select",
+			});
+			for (const definition of getEpubAiReadingKimiModeDefinitions()) {
+				const option = kimiModeSelect.createEl("option", {
+					text: definition.label,
+				});
+				option.value = definition.id;
+			}
+			kimiModeSelect.value = this.selectedKimiMode;
+			kimiModeSelect.addEventListener("change", () => {
+				this.selectedKimiMode = normalizeEpubAiReadingKimiMode(
+					kimiModeSelect.value,
+					this.selectedKimiMode,
+				);
+				const persistedModel =
+					this.getPersistedProviderConfig(this.selectedProvider)?.model;
+				this.selectedModel = this.resolveModelForSelectedProvider(
+					persistedModel,
+				);
+				void this.persistSelectedModelConfig();
+				this.renderModelControls();
+			});
+			this.modelControlsEl.createDiv({
+				cls: "weave-epub-ai-reading-kimi-mode-hint",
+				text: getEpubAiReadingKimiModeDefinition(this.selectedKimiMode)
+					.description,
+			});
+		}
+
+		const modelLabel = this.modelControlsEl.createEl("label", {
+			cls: "weave-epub-ai-reading-model-field",
+		});
+		modelLabel.createSpan({ text: "模型" });
+		const modelSelect = modelLabel.createEl("select", {
+			cls: "weave-epub-ai-reading-model-select",
+		});
+		const definition = this.getSelectedModelDefinition();
+		this.selectedModel = this.resolveModelForSelectedProvider(this.selectedModel);
+		for (const model of definition.models) {
+			const option = modelSelect.createEl("option", { text: model });
+			option.value = model;
+		}
+		modelSelect.value = this.selectedModel;
+		modelSelect.addEventListener("change", () => {
+			this.selectedModel = this.resolveModelForSelectedProvider(
+				modelSelect.value,
+			);
+			void this.persistSelectedModelConfig();
+		});
+
+		const apiKeyButton = this.modelControlsEl.createEl("button", {
+			text: this.getSavedProviderApiKey(this.selectedProvider)
+				? "更换 API Key"
+				: "填写 API Key",
+			cls: "weave-epub-ai-reading-api-key-button",
+		});
+		apiKeyButton.addEventListener("click", () => {
+			void this.promptAndSaveSelectedProviderApiKey();
+		});
+	}
+
+	private getSelectedModelDefinition(): {
+		label: string;
+		defaultBaseUrl: string;
+		defaultModel: string;
+		models: string[];
+	} {
+		return this.selectedProvider === "kimi"
+			? getEpubAiReadingKimiModeDefinition(this.selectedKimiMode)
+			: getEpubAiReadingProviderDefinition(this.selectedProvider);
+	}
+
+	private getSelectedProviderLabel(): string {
+		if (this.selectedProvider === "kimi") {
+			const kimiMode = getEpubAiReadingKimiModeDefinition(
+				this.selectedKimiMode,
+			);
+			return `Kimi ${kimiMode.label}`;
+		}
+		return getEpubAiReadingProviderDefinition(this.selectedProvider).label;
+	}
+
+	private resolveModelForSelectedProvider(model: unknown): string {
+		const definition = this.getSelectedModelDefinition();
+		const normalized = normalizeSessionValue(model);
+		return definition.models.includes(normalized)
+			? normalized
+			: definition.defaultModel;
+	}
+
+	private getMutableAiConfig(): MutableEpubAiConfig | null {
+		const settings = this.configHost?.settings;
+		if (!settings) {
+			return null;
+		}
+		if (!settings.aiConfig) {
+			settings.aiConfig = { apiKeys: {} } as MutableEpubAiConfig;
+		}
+		if (!settings.aiConfig.apiKeys) {
+			settings.aiConfig.apiKeys = {};
+		}
+		return settings.aiConfig as MutableEpubAiConfig;
+	}
+
+	private isPersistedProviderConfig(
+		value: unknown,
+	): value is PersistedEpubAiProviderConfig {
+		if (!value || typeof value !== "object" || Array.isArray(value)) {
+			return false;
+		}
+		const config = value as PersistedEpubAiProviderConfig;
+		return Boolean(
+			normalizeSessionValue(config.apiKey) ||
+				normalizeSessionValue(config.model) ||
+				normalizeSessionValue(config.baseUrl),
+		);
+	}
+
+	private inferKimiModeFromConfig(
+		config: PersistedEpubAiProviderConfig | undefined,
+		fallback: EpubAiReadingKimiMode = "platform",
+	): EpubAiReadingKimiMode {
+		const baseUrl = normalizeSessionValue(config?.baseUrl).toLowerCase();
+		const model = normalizeSessionValue(config?.model).toLowerCase();
+		if (
+			baseUrl.includes("api.kimi.com/coding") ||
+			model === "k3" ||
+			model.startsWith("k3-") ||
+			model.startsWith("kimi-for-coding")
+		) {
+			return "code";
+		}
+		return fallback;
+	}
+
+	private resolvePersistedKimiMode(): EpubAiReadingKimiMode {
+		const aiConfig = this.configHost?.settings?.aiConfig;
+		const explicitMode = normalizeEpubAiReadingKimiMode(
+			aiConfig?.epubAiReading?.kimiMode || aiConfig?.lastUsedKimiMode,
+			this.selectedKimiMode || "platform",
+		);
+		const legacyConfig = this.getLegacyPersistedKimiConfig();
+		return this.inferKimiModeFromConfig(legacyConfig, explicitMode);
+	}
+
+	private getLegacyPersistedKimiConfig():
+		| PersistedEpubAiProviderConfig
+		| undefined {
+		const apiKeys = (this.configHost?.settings?.aiConfig?.apiKeys || {}) as Record<
+			string,
+			PersistedKimiProviderConfig | PersistedEpubAiProviderConfig | undefined
+		>;
+		if (this.isPersistedProviderConfig(apiKeys.kimi)) {
+			return apiKeys.kimi;
+		}
+		if (this.isPersistedProviderConfig(apiKeys.moonshot)) {
+			return apiKeys.moonshot;
+		}
+		return undefined;
+	}
+
+	private getPersistedKimiConfig(
+		mode = this.selectedKimiMode,
+	): PersistedEpubAiProviderConfig | undefined {
+		const apiKeys = (this.configHost?.settings?.aiConfig?.apiKeys || {}) as Record<
+			string,
+			PersistedKimiProviderConfig | PersistedEpubAiProviderConfig | undefined
+		>;
+		const kimiConfig = apiKeys.kimi;
+		if (kimiConfig && typeof kimiConfig === "object" && !Array.isArray(kimiConfig)) {
+			const nestedConfig = (kimiConfig as PersistedKimiProviderConfig)[mode];
+			if (this.isPersistedProviderConfig(nestedConfig)) {
+				return nestedConfig;
+			}
+			if (this.isPersistedProviderConfig(kimiConfig)) {
+				const inferredMode = this.inferKimiModeFromConfig(kimiConfig);
+				if (inferredMode === mode) {
+					return kimiConfig;
+				}
+			}
+		}
+		if (mode === "platform" && this.isPersistedProviderConfig(apiKeys.moonshot)) {
+			return apiKeys.moonshot;
+		}
+		return undefined;
+	}
+
+	private getPersistedProviderConfig(
+		provider: EpubAiReadingProvider,
+	): PersistedEpubAiProviderConfig | undefined {
+		if (provider === "kimi") {
+			return this.getPersistedKimiConfig();
+		}
+		const apiKeys = (this.configHost?.settings?.aiConfig?.apiKeys || {}) as Record<
+			string,
+			PersistedEpubAiProviderConfig | undefined
+		>;
+		return apiKeys[provider];
+	}
+
+	private getSavedProviderApiKey(provider: EpubAiReadingProvider): string {
+		return normalizeSessionValue(this.getPersistedProviderConfig(provider)?.apiKey);
+	}
+
+	private setSelectedProviderConfig(
+		aiConfig: MutableEpubAiConfig,
+		config: PersistedEpubAiProviderConfig,
+	): void {
+		const apiKeys = aiConfig.apiKeys as Record<
+			string,
+			PersistedKimiProviderConfig | PersistedEpubAiProviderConfig | undefined
+		>;
+		if (this.selectedProvider !== "kimi") {
+			apiKeys[this.selectedProvider] = config;
+			return;
+		}
+		const existing =
+			apiKeys.kimi && typeof apiKeys.kimi === "object" && !Array.isArray(apiKeys.kimi)
+				? ({ ...apiKeys.kimi } as PersistedKimiProviderConfig)
+				: {};
+		delete existing.apiKey;
+		delete existing.model;
+		delete existing.baseUrl;
+		delete existing.verified;
+		delete existing.lastVerified;
+		existing[this.selectedKimiMode] = config;
+		apiKeys.kimi = existing;
+		delete apiKeys.moonshot;
+	}
+
+	private async persistSelectedModelConfig(): Promise<void> {
+		const aiConfig = this.getMutableAiConfig();
+		if (!aiConfig) {
+			return;
+		}
+		const definition = this.getSelectedModelDefinition();
+		const current =
+			this.getPersistedProviderConfig(this.selectedProvider) || {};
+		this.setSelectedProviderConfig(aiConfig, {
+			...current,
+			model: this.selectedModel,
+			baseUrl: normalizeSessionValue(current.baseUrl) || definition.defaultBaseUrl,
+		});
+		aiConfig.epubAiReading = {
+			provider: this.selectedProvider,
+			...(this.selectedProvider === "kimi"
+				? { kimiMode: this.selectedKimiMode }
+				: {}),
+			model: this.selectedModel,
+		};
+		aiConfig.lastUsedProvider = this.selectedProvider;
+		aiConfig.lastUsedModel = this.selectedModel;
+		if (this.selectedProvider === "kimi") {
+			aiConfig.lastUsedKimiMode = this.selectedKimiMode;
+		}
+		await this.configHost?.saveSettings?.();
+	}
+
+	private async saveSelectedProviderConfig(
+		patch: PersistedEpubAiProviderConfig,
+	): Promise<void> {
+		const aiConfig = this.getMutableAiConfig();
+		if (!aiConfig) {
+			return;
+		}
+		const definition = this.getSelectedModelDefinition();
+		const current =
+			this.getPersistedProviderConfig(this.selectedProvider) || {};
+		this.setSelectedProviderConfig(aiConfig, {
+			...current,
+			model: this.selectedModel,
+			baseUrl: normalizeSessionValue(current.baseUrl) || definition.defaultBaseUrl,
+			...patch,
+		});
+		aiConfig.epubAiReading = {
+			provider: this.selectedProvider,
+			...(this.selectedProvider === "kimi"
+				? { kimiMode: this.selectedKimiMode }
+				: {}),
+			model: this.selectedModel,
+		};
+		aiConfig.lastUsedProvider = this.selectedProvider;
+		aiConfig.lastUsedModel = this.selectedModel;
+		if (this.selectedProvider === "kimi") {
+			aiConfig.lastUsedKimiMode = this.selectedKimiMode;
+		}
+		await this.configHost?.saveSettings?.();
+		this.renderModelControls();
+	}
+
+	private getSelectedProviderAuthRetryReason(): string {
+		if (this.selectedProvider !== "kimi") {
+			return "当前 API Key 无效或已过期，请重新输入。";
+		}
+		if (this.selectedKimiMode === "platform") {
+			return "当前 Kimi API Platform Key 无法调用所选模型。如果这是 Kimi Code Key，请切换到 Kimi Code；如果要使用 kimi-k2.6 / kimi-k3，请输入 Kimi API Platform Key。";
+		}
+		return "当前 Kimi Code Key 无法调用所选模型。如果这是 Kimi API Platform Key，请切换到 API Platform；如果要使用 k3 / kimi-for-coding，请输入 Kimi Code Key。";
+	}
+
+	private async promptAndSaveSelectedProviderApiKey(
+		reason?: string,
+	): Promise<string | null> {
+		const apiKey = await new EpubAiReadingApiKeyModal(this.app, {
+			providerLabel: this.getSelectedProviderLabel(),
+			reason,
+		}).waitForInput();
+		if (!apiKey) {
+			return null;
+		}
+		await this.saveSelectedProviderConfig({
+			apiKey,
+			verified: false,
+			lastVerified: undefined,
+		});
+		return apiKey;
+	}
+
+	private async migrateSelectedProviderConfigFromRuntimeEnv(): Promise<string> {
+		const runtimeEnv = await loadEpubAiReadingRuntimeEnv(
+			this.app,
+			this.envPathCandidates,
+		);
+		const runtimeConfig = resolveEpubAiReadingConfig(
+			{
+				provider: this.selectedProvider,
+			},
+			runtimeEnv,
+		);
+		if (!runtimeConfig.apiKey) {
+			return "";
+		}
+		if (this.selectedProvider === "kimi") {
+			this.selectedKimiMode = this.inferKimiModeFromConfig(
+				{
+					baseUrl: runtimeConfig.baseUrl,
+					model: runtimeConfig.model,
+				},
+				this.selectedKimiMode,
+			);
+		}
+		this.selectedModel = this.resolveModelForSelectedProvider(
+			runtimeConfig.model,
+		);
+		await this.saveSelectedProviderConfig({
+			apiKey: runtimeConfig.apiKey,
+			baseUrl: runtimeConfig.baseUrl,
+			model: this.selectedModel,
+			verified: false,
+			lastVerified: undefined,
+		});
+		new Notice(
+			`已将 ${this.getSelectedProviderLabel()} API Key 迁移到插件设置。`,
+		);
+		return runtimeConfig.apiKey;
+	}
+
+	private async resolveSelectedProviderRequestConfig(
+		forcePrompt = false,
+	): Promise<Partial<EpubAiReadingConfig> | null> {
+		if (!this.configHost?.settings) {
+			return null;
+		}
+		await this.persistSelectedModelConfig();
+		let apiKey = this.getSavedProviderApiKey(this.selectedProvider);
+		if (!apiKey && !forcePrompt) {
+			apiKey = await this.migrateSelectedProviderConfigFromRuntimeEnv();
+		}
+		if (!apiKey || forcePrompt) {
+			apiKey =
+				(await this.promptAndSaveSelectedProviderApiKey(
+					forcePrompt ? this.getSelectedProviderAuthRetryReason() : undefined,
+				)) || "";
+		}
+		if (!apiKey) {
+			throw new Error("已取消 API Key 输入。");
+		}
+		const definition = this.getSelectedModelDefinition();
+		const persisted = this.getPersistedProviderConfig(this.selectedProvider);
+		return {
+			provider: this.selectedProvider,
+			apiKey,
+			baseUrl:
+				normalizeSessionValue(persisted?.baseUrl) || definition.defaultBaseUrl,
+			model: this.selectedModel,
+		};
+	}
+
+	private async markSelectedProviderVerified(verified: boolean): Promise<void> {
+		const apiKey = this.getSavedProviderApiKey(this.selectedProvider);
+		if (!apiKey) {
+			return;
+		}
+		await this.saveSelectedProviderConfig({
+			apiKey,
+			verified,
+			lastVerified: verified ? new Date().toISOString() : undefined,
+		});
+	}
+
+	private async requestReadingWithSelectedModel(
+		input: EpubAiReadingInput,
+		callbacks: {
+			onStage: (stage: string) => void;
+			onPartialContent: (content: string) => void;
+		},
+	): Promise<EpubAiReadingResult> {
+		const config = await this.resolveSelectedProviderRequestConfig(false);
+		const baseOptions = {
+			app: this.app,
+			configHost: this.configHost,
+			envPathCandidates: this.envPathCandidates,
+			onStage: callbacks.onStage,
+			onPartialContent: callbacks.onPartialContent,
+		};
+		if (!config) {
+			return await requestEpubAiReading(input, baseOptions);
+		}
+		try {
+			const result = await requestEpubAiReading(input, {
+				...baseOptions,
+				config,
+			});
+			await this.markSelectedProviderVerified(true);
+			return result;
+		} catch (error) {
+			if (!isAiReadingAuthError(error)) {
+				throw error;
+			}
+			await this.markSelectedProviderVerified(false);
+			const retryConfig = await this.resolveSelectedProviderRequestConfig(true);
+			const result = await requestEpubAiReading(input, {
+				...baseOptions,
+				config: retryConfig || undefined,
+			});
+			await this.markSelectedProviderVerified(true);
+			return result;
+		}
 	}
 
 	private setStatus(message: string): void {
@@ -782,7 +1406,7 @@ export class EpubAiReadingModal extends Modal {
 			return;
 		}
 		const cachedDraft = this.sessionState.drafts.get(this.sessionKey);
-		if (cachedDraft) {
+		if (cachedDraft && !cachedDraft.savedToNote) {
 			await this.restoreCachedReading(cachedDraft);
 			return;
 		}
@@ -816,6 +1440,15 @@ export class EpubAiReadingModal extends Modal {
 		}
 		const key = this.activeSessionKey || this.sessionKey;
 		const bookKey = getEpubAiReadingBookKey(this.activeInput);
+		if (savedToNote) {
+			this.sessionState.drafts.delete(key);
+			if (this.sessionState.latestUnsavedDraftKey === key) {
+				this.sessionState.latestUnsavedDraftKey = findLatestUnsavedDraftKey(
+					this.sessionState,
+				);
+			}
+			return;
+		}
 		this.sessionState.drafts.set(key, {
 			key,
 			bookKey,
@@ -826,14 +1459,6 @@ export class EpubAiReadingModal extends Modal {
 			updatedAt: Date.now(),
 		});
 		this.sessionState.latestSessionKeyByBook.set(bookKey, key);
-		if (savedToNote) {
-			if (this.sessionState.latestUnsavedDraftKey === key) {
-				this.sessionState.latestUnsavedDraftKey = findLatestUnsavedDraftKey(
-					this.sessionState,
-				);
-			}
-			return;
-		}
 		this.sessionState.latestUnsavedDraftKey = key;
 	}
 
@@ -859,7 +1484,7 @@ export class EpubAiReadingModal extends Modal {
 		this.noteFile = null;
 		this.streamingPreviewEl = null;
 		this.renderActions();
-		this.setStatus("正在提取所选范围并请求 Kimi 生成 AI 阅读结果...");
+		this.setStatus("正在提取所选范围并请求 AI 生成阅读结果...");
 		if (this.resultEl) {
 			this.resultEl.empty();
 			this.resultEl.createDiv({ text: "生成中..." });
@@ -895,7 +1520,7 @@ export class EpubAiReadingModal extends Modal {
 			bookKey,
 			input,
 			state: "generating",
-			status: "正在提取所选范围并请求 Kimi 生成 AI 阅读结果...",
+			status: "正在提取所选范围并请求 AI 生成阅读结果...",
 			partialContent: "",
 			result: null,
 			errorMessage: "",
@@ -907,10 +1532,7 @@ export class EpubAiReadingModal extends Modal {
 		};
 		this.sessionState.generations.set(sessionKey, session);
 		this.sessionState.latestSessionKeyByBook.set(bookKey, sessionKey);
-		session.request = requestEpubAiReading(input, {
-			app: this.app,
-			configHost: this.configHost,
-			envPathCandidates: this.envPathCandidates,
+		session.request = this.requestReadingWithSelectedModel(input, {
 			onStage: (stage) => {
 				session.status = stage;
 				session.updatedAt = Date.now();

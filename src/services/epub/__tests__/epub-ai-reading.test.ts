@@ -11,6 +11,7 @@ import {
 	extractKimiChatCompletionText,
 	parseEpubAiReadingEnv,
 	requestEpubAiReading,
+	resolveEpubAiReadingSelection,
 	resolveEpubAiReadingOutputPlan,
 	upsertEpubAiReadingNote,
 	validateEpubAiReadingUnitBatchContent,
@@ -742,6 +743,142 @@ describe("epub-ai-reading", () => {
 		expect(body.temperature).toBe(1);
 		expect(body.max_tokens).toBeUndefined();
 		expect(body.max_completion_tokens).toBe(16000);
+		expect(body.thinking).toBeUndefined();
+		expect(body.reasoning_effort).toBe("low");
+	});
+
+	it("uses DeepSeek chat options with disabled thinking mode", async () => {
+		const requester = vi.fn(async () => ({
+			json: {
+				choices: [
+					{
+						message: {
+							content: "AI reading result",
+						},
+					},
+				],
+			},
+		}));
+
+		await requestEpubAiReading(
+			{
+				bookTitle: "Demo",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Complete chapter text",
+				tocItems,
+			},
+			{
+				config: {
+					provider: "deepseek",
+					apiKey: "deepseek-key",
+					baseUrl: "https://api.deepseek.com",
+					model: "deepseek-v4-flash",
+				},
+				requester,
+			},
+		);
+
+		const request = requester.mock.calls[0]?.[0];
+		const body = JSON.parse(String(request.body));
+		expect(request.url).toBe("https://api.deepseek.com/chat/completions");
+		expect(body.max_tokens).toBe(16000);
+		expect(body.max_completion_tokens).toBeUndefined();
+		expect(body.thinking).toEqual({ type: "disabled" });
+	});
+
+	it("uses GPT chat options with disabled reasoning mode", async () => {
+		const requester = vi.fn(async () => ({
+			json: {
+				choices: [
+					{
+						message: {
+							content: "AI reading result",
+						},
+					},
+				],
+			},
+		}));
+
+		await requestEpubAiReading(
+			{
+				bookTitle: "Demo",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Complete chapter text",
+				tocItems,
+			},
+			{
+				config: {
+					provider: "openai",
+					apiKey: "openai-key",
+					baseUrl: "https://api.openai.com/v1",
+					model: "gpt-5.5",
+				},
+				requester,
+			},
+		);
+
+		const request = requester.mock.calls[0]?.[0];
+		const body = JSON.parse(String(request.body));
+		expect(request.url).toBe("https://api.openai.com/v1/chat/completions");
+		expect(body.max_completion_tokens).toBe(16000);
+		expect(body.max_tokens).toBeUndefined();
+		expect(body.reasoning_effort).toBe("none");
+		expect(body.temperature).toBeUndefined();
+	});
+
+	it("keeps kimi-k3 as a Kimi API Platform model", () => {
+		const selection = resolveEpubAiReadingSelection({
+			apiKeys: {
+				kimi: {
+					apiKey: "runtime-key",
+					model: "kimi-k3",
+				},
+			},
+			epubAiReading: {
+				provider: "kimi",
+				model: "kimi-k3",
+			},
+		});
+
+		expect(selection).toEqual({
+			provider: "kimi",
+			model: "kimi-k3",
+			kimiMode: "platform",
+		});
+	});
+
+	it("keeps Kimi Code credentials separate from Kimi API Platform credentials", () => {
+		const selection = resolveEpubAiReadingSelection({
+			apiKeys: {
+				kimi: {
+					platform: {
+						apiKey: "platform-key",
+						baseUrl: "https://api.moonshot.ai/v1",
+						model: "kimi-k2.6",
+					},
+					code: {
+						apiKey: "code-key",
+						baseUrl: "https://api.kimi.com/coding/v1",
+						model: "k3",
+					},
+				},
+			},
+			epubAiReading: {
+				provider: "kimi",
+				kimiMode: "code",
+				model: "k3",
+			},
+		});
+
+		expect(selection).toEqual({
+			provider: "kimi",
+			model: "k3",
+			kimiMode: "code",
+		});
 	});
 
 	it("ignores legacy max token env and sends a dynamic max_completion_tokens value", async () => {

@@ -14,6 +14,7 @@ type ParsedCard = {
 
 // ===== AI服务提供商 =====
 export type AIProvider =
+	| "kimi"
 	| "openai"
 	| "gemini"
 	| "anthropic"

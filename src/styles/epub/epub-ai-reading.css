@@ -92,6 +92,75 @@
 	display: none;
 }
 
+.weave-epub-ai-reading-model-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: 8px;
+	min-width: 0;
+	max-width: 100%;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.weave-epub-ai-reading-model-field {
+	display: flex;
+	flex: 1 1 180px;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 140px;
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+
+.weave-epub-ai-reading-provider-select,
+.weave-epub-ai-reading-kimi-mode-select,
+.weave-epub-ai-reading-model-select {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	min-height: 32px;
+}
+
+.weave-epub-ai-reading-kimi-mode-hint {
+	flex: 1 1 100%;
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.weave-epub-ai-reading-api-key-button {
+	flex: 0 0 auto;
+	min-height: 32px;
+	white-space: nowrap;
+}
+
+.weave-epub-ai-key-modal {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.weave-epub-ai-key-modal h2,
+.weave-epub-ai-key-modal p {
+	margin: 0;
+}
+
+.weave-epub-ai-key-input {
+	width: 100%;
+	min-height: 34px;
+}
+
+.weave-epub-ai-key-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
 .weave-epub-ai-reading-meta {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);

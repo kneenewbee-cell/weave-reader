@@ -152,6 +152,160 @@ describe("EpubAiReadingModal", () => {
 		expect(closeSpy).toHaveBeenCalled();
 	});
 
+	it("uses the saved AI reading provider and model configuration", async () => {
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "AI reading result",
+			model: "gpt-5.5",
+			generatedAt: 1710000000000,
+		});
+		const saveSettings = vi.fn(async () => undefined);
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			configHost: {
+				settings: {
+					aiConfig: {
+						apiKeys: {
+							openai: {
+								apiKey: "openai-key",
+								baseUrl: "https://api.openai.com/v1",
+								model: "gpt-5.5",
+								verified: true,
+							},
+						},
+						epubAiReading: {
+							provider: "openai",
+							model: "gpt-5.5",
+						},
+					},
+				},
+				saveSettings,
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			expect(mockedRequestEpubAiReading).toHaveBeenCalledWith(
+				expect.objectContaining({
+					filePath: "Books/demo.epub",
+				}),
+				expect.objectContaining({
+					config: expect.objectContaining({
+						provider: "openai",
+						apiKey: "openai-key",
+						baseUrl: "https://api.openai.com/v1",
+						model: "gpt-5.5",
+					}),
+				}),
+			);
+		});
+		expect(
+			modal.contentEl.querySelector<HTMLSelectElement>(
+				".weave-epub-ai-reading-provider-select",
+			)?.value,
+		).toBe("openai");
+		expect(
+			modal.contentEl.querySelector<HTMLSelectElement>(
+				".weave-epub-ai-reading-model-select",
+			)?.value,
+		).toBe("gpt-5.5");
+		expect(saveSettings).toHaveBeenCalled();
+	});
+
+	it("uses the saved Kimi Code sub-mode without mixing it with Kimi API Platform", async () => {
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: "Books/demo.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/chapter1.xhtml",
+			content: "AI reading result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const saveSettings = vi.fn(async () => undefined);
+		const modal = new EpubAiReadingModal(new App(), {
+			input: {
+				bookTitle: "Demo Book",
+				filePath: "Books/demo.epub",
+				chapterTitle: "Chapter 1",
+				chapterHref: "text/chapter1.xhtml",
+				chapterText: "Chapter text",
+				tocItems: [],
+			},
+			configHost: {
+				settings: {
+					aiConfig: {
+						apiKeys: {
+							kimi: {
+								platform: {
+									apiKey: "platform-key",
+									baseUrl: "https://api.moonshot.ai/v1",
+									model: "kimi-k2.6",
+								},
+								code: {
+									apiKey: "code-key",
+									baseUrl: "https://api.kimi.com/coding/v1",
+									model: "k3",
+								},
+							},
+						},
+						epubAiReading: {
+							provider: "kimi",
+							kimiMode: "code",
+							model: "k3",
+						},
+					},
+				},
+				saveSettings,
+			},
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(modal);
+
+		await waitFor(() => {
+			expect(mockedRequestEpubAiReading).toHaveBeenCalledWith(
+				expect.objectContaining({
+					filePath: "Books/demo.epub",
+				}),
+				expect.objectContaining({
+					config: expect.objectContaining({
+						provider: "kimi",
+						apiKey: "code-key",
+						baseUrl: "https://api.kimi.com/coding/v1",
+						model: "k3",
+					}),
+				}),
+			);
+		});
+		expect(
+			modal.contentEl.querySelector<HTMLSelectElement>(
+				".weave-epub-ai-reading-provider-select",
+			)?.value,
+		).toBe("kimi");
+		expect(
+			modal.contentEl.querySelector<HTMLSelectElement>(
+				".weave-epub-ai-reading-kimi-mode-select",
+			)?.value,
+		).toBe("code");
+		expect(
+			modal.contentEl.querySelector<HTMLSelectElement>(
+				".weave-epub-ai-reading-model-select",
+			)?.value,
+		).toBe("k3");
+		expect(saveSettings).toHaveBeenCalled();
+	});
+
 	it("shows scope selection first when TOC scopes are provided", () => {
 		mockedRequestEpubAiReading.mockResolvedValue({
 			bookTitle: "Demo Book",
@@ -431,6 +585,154 @@ describe("EpubAiReadingModal", () => {
 				"恢复后的最终结果",
 			);
 		});
+		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not restore a scoped result when reopening a different scope in the same book", async () => {
+		const app = new App();
+		const input = {
+			bookTitle: "Demo Book",
+			filePath: "Books/scoped-different.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/ch1.xhtml",
+			chapterText: "Chapter text",
+			tocItems: [],
+		};
+		const resolveScopedInput = vi.fn(async () => ({
+			bookTitle: "Demo Book",
+			filePath: input.filePath,
+			chapterTitle: "Setup",
+			chapterHref: "text/ch1.xhtml#setup",
+			chapterText: "Scoped text",
+			tocItems: createScopeToc(),
+		}));
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: input.filePath,
+			chapterTitle: "Setup",
+			chapterHref: "text/ch1.xhtml#setup",
+			content: "setup cached result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const firstModal = new EpubAiReadingModal(app, {
+			input,
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", "tools", "setup"],
+			resolveScopedInput,
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(firstModal);
+		firstModal.contentEl
+			.querySelector<HTMLButtonElement>(
+				".weave-epub-ai-reading-actions button.mod-cta",
+			)
+			?.click();
+
+		await waitFor(() => {
+			expect(firstModal.contentEl.textContent || "").toContain(
+				"setup cached result",
+			);
+		});
+		EpubAiReadingModal.prototype.onClose.call(firstModal);
+
+		const secondModal = new EpubAiReadingModal(app, {
+			input,
+			tocItems: createScopeToc(),
+			initialScopeIds: [
+				"chapter-1",
+				"tools",
+				EPUB_AI_READING_ALL_SCOPE_ID,
+			],
+			resolveScopedInput,
+		});
+
+		EpubAiReadingModal.prototype.onOpen.call(secondModal);
+
+		expect(
+			secondModal.contentEl.querySelector(".weave-epub-ai-reading-scope-picker"),
+		).not.toBeNull();
+		expect(secondModal.contentEl.textContent || "").not.toContain(
+			"setup cached result",
+		);
+		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not restore a scoped result after it has been saved to a note", async () => {
+		const app = new App();
+		const input = {
+			bookTitle: "Demo Book",
+			filePath: "Books/scoped-saved.epub",
+			chapterTitle: "Chapter 1",
+			chapterHref: "text/ch1.xhtml",
+			chapterText: "Chapter text",
+			tocItems: [],
+		};
+		const resolveScopedInput = vi.fn(async () => ({
+			bookTitle: "Demo Book",
+			filePath: input.filePath,
+			chapterTitle: "Setup",
+			chapterHref: "text/ch1.xhtml#setup",
+			chapterText: "Scoped text",
+			tocItems: createScopeToc(),
+		}));
+		const noteFile = createMockFile("AI阅读笔记/Demo Book - AI阅读.md");
+		mockedUpsertEpubAiReadingNote.mockResolvedValue(noteFile);
+		mockedRequestEpubAiReading.mockResolvedValue({
+			bookTitle: "Demo Book",
+			filePath: input.filePath,
+			chapterTitle: "Setup",
+			chapterHref: "text/ch1.xhtml#setup",
+			content: "saved scoped result",
+			model: "k3",
+			generatedAt: 1710000000000,
+		});
+		const options = {
+			input,
+			tocItems: createScopeToc(),
+			initialScopeIds: ["chapter-1", "tools", "setup"],
+			resolveScopedInput,
+		};
+		const firstModal = new EpubAiReadingModal(app, options);
+
+		EpubAiReadingModal.prototype.onOpen.call(firstModal);
+		firstModal.contentEl
+			.querySelector<HTMLButtonElement>(
+				".weave-epub-ai-reading-actions button.mod-cta",
+			)
+			?.click();
+
+		await waitFor(() => {
+			expect(firstModal.contentEl.textContent || "").toContain(
+				"saved scoped result",
+			);
+		});
+		firstModal.contentEl
+			.querySelector<HTMLButtonElement>(
+				".weave-epub-ai-reading-actions button.mod-cta",
+			)
+			?.click();
+
+		await waitFor(() => {
+			expect(mockedUpsertEpubAiReadingNote).toHaveBeenCalled();
+			expect(mockedOpenFileWithExistingLeaf).toHaveBeenCalledWith(
+				expect.any(Object),
+				noteFile,
+				expect.any(Object),
+			);
+		});
+		EpubAiReadingModal.prototype.onClose.call(firstModal);
+
+		const secondModal = new EpubAiReadingModal(app, options);
+
+		EpubAiReadingModal.prototype.onOpen.call(secondModal);
+
+		expect(
+			secondModal.contentEl.querySelector(".weave-epub-ai-reading-scope-picker"),
+		).not.toBeNull();
+		expect(secondModal.contentEl.textContent || "").not.toContain(
+			"saved scoped result",
+		);
 		expect(mockedRequestEpubAiReading).toHaveBeenCalledTimes(1);
 	});
 

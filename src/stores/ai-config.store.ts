@@ -21,6 +21,7 @@ interface AIConfigStoreHost extends AIConfigHost {
 type PersistedAIConfig = NonNullable<AIConfigStoreHost["settings"]["aiConfig"]>;
 
 const AI_PROVIDERS: AIProvider[] = [
+	"kimi",
 	"openai",
 	"gemini",
 	"anthropic",
@@ -54,7 +55,7 @@ export interface AIConfigState {
 
 	// 默认配置
 	defaultProvider: AIProvider;
-	apiKeys: Record<string, { apiKey: string; model?: string }>;
+	apiKeys: Record<string, { apiKey?: string; model?: string }>;
 
 	// 元数据
 	lastModified: number;

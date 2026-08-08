@@ -50,12 +50,35 @@ export interface EpubAiReadingInput {
 }
 
 export interface EpubAiReadingConfig {
+	provider: EpubAiReadingProvider;
 	apiKey: string;
 	baseUrl: string;
 	model: string;
 	temperature: number;
 	maxTokens?: number;
 	maxCompletionTokens?: number;
+}
+
+export type EpubAiReadingProvider = "kimi" | "deepseek" | "openai";
+export type EpubAiReadingKimiMode = "platform" | "code";
+
+export interface EpubAiReadingProviderDefinition {
+	id: EpubAiReadingProvider;
+	label: string;
+	defaultBaseUrl: string;
+	defaultModel: string;
+	models: string[];
+	maxTokenField: "max_completion_tokens" | "max_tokens";
+	supportsTemperature: boolean;
+}
+
+export interface EpubAiReadingKimiModeDefinition {
+	id: EpubAiReadingKimiMode;
+	label: string;
+	description: string;
+	defaultBaseUrl: string;
+	defaultModel: string;
+	models: string[];
 }
 
 export type EpubAiReadingOutputLevel = "leaf" | "section" | "chapter" | "book";
@@ -71,6 +94,7 @@ export interface EpubAiReadingConfigHost {
 	settings?: {
 		aiConfig?: AIConfig;
 	};
+	saveSettings?: () => Promise<void>;
 }
 
 export interface EpubAiReadingResult {
@@ -211,7 +235,13 @@ type StreamingChatState = {
 };
 
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
-const DEFAULT_KIMI_MODEL = "kimi-k3";
+const DEFAULT_KIMI_MODEL = "kimi-k2.6";
+const DEFAULT_KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
+const DEFAULT_KIMI_CODE_MODEL = "k3";
+const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_MODEL = "gpt-5.6-terra";
 const DEFAULT_KIMI_TEMPERATURE = 0.3;
 const DEFAULT_KIMI_CODE_TEMPERATURE = 1;
 const EPUB_AI_READING_LEAF_MAX_COMPLETION_TOKENS = 16000;
@@ -224,10 +254,233 @@ const EPUB_AI_READING_UNIT_BATCH_FALLBACK_CONCURRENCY = 4;
 const EPUB_AI_READING_UNIT_BATCH_RETRY_ATTEMPTS = 1;
 const EPUB_AI_READING_UNIT_BATCH_MAX_SOURCE_BLOCKS = 45;
 const EPUB_AI_READING_UNIT_BATCH_MAX_SOURCE_CHARS = 12000;
+const EPUB_AI_READING_PROVIDER_ORDER: EpubAiReadingProvider[] = [
+	"kimi",
+	"deepseek",
+	"openai",
+];
+
+const EPUB_AI_READING_PROVIDER_DEFINITIONS: Record<
+	EpubAiReadingProvider,
+	EpubAiReadingProviderDefinition
+> = {
+	kimi: {
+		id: "kimi",
+		label: "Kimi",
+		defaultBaseUrl: DEFAULT_KIMI_BASE_URL,
+		defaultModel: DEFAULT_KIMI_MODEL,
+		models: ["kimi-k2.6", "kimi-k2.5", "kimi-k3"],
+		maxTokenField: "max_completion_tokens",
+		supportsTemperature: true,
+	},
+	deepseek: {
+		id: "deepseek",
+		label: "DeepSeek",
+		defaultBaseUrl: DEFAULT_DEEPSEEK_BASE_URL,
+		defaultModel: DEFAULT_DEEPSEEK_MODEL,
+		models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+		maxTokenField: "max_tokens",
+		supportsTemperature: true,
+	},
+	openai: {
+		id: "openai",
+		label: "GPT",
+		defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
+		defaultModel: DEFAULT_OPENAI_MODEL,
+		models: [
+			"gpt-5.6-terra",
+			"gpt-5.6-luna",
+			"gpt-5.6-sol",
+			"gpt-5.5",
+			"gpt-5.2",
+		],
+		maxTokenField: "max_completion_tokens",
+		supportsTemperature: false,
+	},
+};
+
+const EPUB_AI_READING_KIMI_MODE_ORDER: EpubAiReadingKimiMode[] = [
+	"platform",
+	"code",
+];
+
+const EPUB_AI_READING_KIMI_MODE_DEFINITIONS: Record<
+	EpubAiReadingKimiMode,
+	EpubAiReadingKimiModeDefinition
+> = {
+	platform: {
+		id: "platform",
+		label: "API Platform",
+		description: "用于 kimi-k2.6 / kimi-k3，需要 Kimi API Platform Key",
+		defaultBaseUrl: DEFAULT_KIMI_BASE_URL,
+		defaultModel: DEFAULT_KIMI_MODEL,
+		models: ["kimi-k2.6", "kimi-k2.5", "kimi-k3"],
+	},
+	code: {
+		id: "code",
+		label: "Kimi Code",
+		description: "用于 k3 / k3-256k / kimi-for-coding，兼容旧 Kimi Code Key",
+		defaultBaseUrl: DEFAULT_KIMI_CODE_BASE_URL,
+		defaultModel: DEFAULT_KIMI_CODE_MODEL,
+		models: ["k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed"],
+	},
+};
 const DEFAULT_NOTE_FOLDER = "AI阅读笔记";
 
 function normalizeConfigValue(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveEpubAiReadingProviderId(
+	value: unknown,
+): EpubAiReadingProvider | null {
+	const normalized = normalizeConfigValue(value).toLowerCase();
+	if (normalized === "kimi" || normalized === "moonshot") {
+		return "kimi";
+	}
+	if (normalized === "deepseek") {
+		return "deepseek";
+	}
+	if (normalized === "openai" || normalized === "gpt") {
+		return "openai";
+	}
+	return null;
+}
+
+export function normalizeEpubAiReadingProvider(
+	value: unknown,
+	fallback: EpubAiReadingProvider = "kimi",
+): EpubAiReadingProvider {
+	return resolveEpubAiReadingProviderId(value) || fallback;
+}
+
+export function getEpubAiReadingProviderDefinitions(): EpubAiReadingProviderDefinition[] {
+	return EPUB_AI_READING_PROVIDER_ORDER.map(
+		(provider) => EPUB_AI_READING_PROVIDER_DEFINITIONS[provider],
+	);
+}
+
+export function getEpubAiReadingProviderDefinition(
+	provider: EpubAiReadingProvider,
+): EpubAiReadingProviderDefinition {
+	return EPUB_AI_READING_PROVIDER_DEFINITIONS[provider];
+}
+
+export function getEpubAiReadingKimiModeDefinitions(): EpubAiReadingKimiModeDefinition[] {
+	return EPUB_AI_READING_KIMI_MODE_ORDER.map(
+		(mode) => EPUB_AI_READING_KIMI_MODE_DEFINITIONS[mode],
+	);
+}
+
+export function getEpubAiReadingKimiModeDefinition(
+	mode: EpubAiReadingKimiMode,
+): EpubAiReadingKimiModeDefinition {
+	return EPUB_AI_READING_KIMI_MODE_DEFINITIONS[mode];
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizeEpubAiReadingKimiMode(
+	value: unknown,
+	fallback: EpubAiReadingKimiMode = "platform",
+): EpubAiReadingKimiMode {
+	const normalized = normalizeConfigValue(value).toLowerCase();
+	if (
+		normalized === "code" ||
+		normalized === "kimi-code" ||
+		normalized === "coding"
+	) {
+		return "code";
+	}
+	if (
+		normalized === "platform" ||
+		normalized === "api-platform" ||
+		normalized === "moonshot"
+	) {
+		return "platform";
+	}
+	return fallback;
+}
+
+function inferEpubAiReadingKimiMode(
+	baseUrl: unknown,
+	model: unknown,
+	fallback: EpubAiReadingKimiMode = "platform",
+): EpubAiReadingKimiMode {
+	return isKimiCodeConfig(
+		normalizeConfigValue(baseUrl),
+		normalizeConfigValue(model),
+	)
+		? "code"
+		: fallback;
+}
+
+function normalizeEpubAiReadingModelForKimiMode(
+	mode: EpubAiReadingKimiMode,
+	model: unknown,
+): string {
+	const definition = getEpubAiReadingKimiModeDefinition(mode);
+	const normalized = normalizeConfigValue(model);
+	return definition.models.includes(normalized)
+		? normalized
+		: definition.defaultModel;
+}
+
+function normalizeEpubAiReadingModelForProvider(
+	provider: EpubAiReadingProvider,
+	model: unknown,
+): string {
+	const definition = getEpubAiReadingProviderDefinition(provider);
+	const normalized = normalizeConfigValue(model);
+	return definition.models.includes(normalized)
+		? normalized
+		: definition.defaultModel;
+}
+
+export function resolveEpubAiReadingSelection(
+	aiConfig?: AIConfig,
+): {
+	provider: EpubAiReadingProvider;
+	model: string;
+	kimiMode: EpubAiReadingKimiMode;
+} {
+	const provider =
+		resolveEpubAiReadingProviderId(aiConfig?.epubAiReading?.provider) ||
+		resolveEpubAiReadingProviderId(aiConfig?.lastUsedProvider) ||
+		"kimi";
+	const explicitKimiMode = normalizeConfigValue(
+		aiConfig?.epubAiReading?.kimiMode,
+	);
+	const lastKimiMode = normalizeConfigValue(aiConfig?.lastUsedKimiMode);
+	let kimiMode = normalizeEpubAiReadingKimiMode(
+		explicitKimiMode || lastKimiMode,
+		"platform",
+	);
+	if (!explicitKimiMode && provider === "kimi") {
+		const legacyKimiConfig = getLegacyKimiProviderConfig(aiConfig);
+		kimiMode = inferEpubAiReadingKimiMode(
+			legacyKimiConfig?.baseUrl,
+			aiConfig?.epubAiReading?.model || legacyKimiConfig?.model,
+			kimiMode,
+		);
+	}
+	const providerConfig =
+		provider === "kimi"
+			? getKimiProviderConfig(aiConfig, kimiMode)
+			: getAIProviderConfig(aiConfig, provider);
+	const model =
+		provider === "kimi"
+			? normalizeEpubAiReadingModelForKimiMode(
+					kimiMode,
+					aiConfig?.epubAiReading?.model || providerConfig?.model,
+				)
+			: normalizeEpubAiReadingModelForProvider(
+					provider,
+					aiConfig?.epubAiReading?.model || providerConfig?.model,
+				);
+	return { provider, model, kimiMode };
 }
 
 function normalizeStringList(values: unknown): string[] {
@@ -652,6 +905,110 @@ function readEnvNumberValue(
 	return undefined;
 }
 
+function getProviderEnvKeys(
+	provider: EpubAiReadingProvider,
+	field:
+		| "apiKey"
+		| "baseUrl"
+		| "model"
+		| "temperature"
+		| "maxCompletionTokens",
+): string[] {
+	const keys: Record<
+		EpubAiReadingProvider,
+		Record<typeof field, string[]>
+	> = {
+		kimi: {
+			apiKey: [
+				"KIMI_API_KEY",
+				"MOONSHOT_API_KEY",
+				"VITE_KIMI_API_KEY",
+				"VITE_MOONSHOT_API_KEY",
+			],
+			baseUrl: [
+				"KIMI_API_BASE_URL",
+				"MOONSHOT_API_BASE_URL",
+				"VITE_KIMI_API_BASE_URL",
+				"VITE_MOONSHOT_API_BASE_URL",
+			],
+			model: [
+				"KIMI_MODEL",
+				"MOONSHOT_MODEL",
+				"VITE_KIMI_MODEL",
+				"VITE_MOONSHOT_MODEL",
+			],
+			temperature: [
+				"KIMI_TEMPERATURE",
+				"MOONSHOT_TEMPERATURE",
+				"VITE_KIMI_TEMPERATURE",
+				"VITE_MOONSHOT_TEMPERATURE",
+			],
+			maxCompletionTokens: [
+				"KIMI_MAX_COMPLETION_TOKENS",
+				"MOONSHOT_MAX_COMPLETION_TOKENS",
+				"VITE_KIMI_MAX_COMPLETION_TOKENS",
+				"VITE_MOONSHOT_MAX_COMPLETION_TOKENS",
+			],
+		},
+		deepseek: {
+			apiKey: ["DEEPSEEK_API_KEY", "VITE_DEEPSEEK_API_KEY"],
+			baseUrl: [
+				"DEEPSEEK_API_BASE_URL",
+				"DEEPSEEK_BASE_URL",
+				"VITE_DEEPSEEK_API_BASE_URL",
+				"VITE_DEEPSEEK_BASE_URL",
+			],
+			model: ["DEEPSEEK_MODEL", "VITE_DEEPSEEK_MODEL"],
+			temperature: ["DEEPSEEK_TEMPERATURE", "VITE_DEEPSEEK_TEMPERATURE"],
+			maxCompletionTokens: [
+				"DEEPSEEK_MAX_TOKENS",
+				"DEEPSEEK_MAX_COMPLETION_TOKENS",
+				"VITE_DEEPSEEK_MAX_TOKENS",
+				"VITE_DEEPSEEK_MAX_COMPLETION_TOKENS",
+			],
+		},
+		openai: {
+			apiKey: ["OPENAI_API_KEY", "VITE_OPENAI_API_KEY"],
+			baseUrl: [
+				"OPENAI_API_BASE_URL",
+				"OPENAI_BASE_URL",
+				"VITE_OPENAI_API_BASE_URL",
+				"VITE_OPENAI_BASE_URL",
+			],
+			model: [
+				"OPENAI_MODEL",
+				"OPENAI_CHAT_MODEL",
+				"VITE_OPENAI_MODEL",
+				"VITE_OPENAI_CHAT_MODEL",
+			],
+			temperature: ["OPENAI_TEMPERATURE", "VITE_OPENAI_TEMPERATURE"],
+			maxCompletionTokens: [
+				"OPENAI_MAX_COMPLETION_TOKENS",
+				"OPENAI_MAX_TOKENS",
+				"VITE_OPENAI_MAX_COMPLETION_TOKENS",
+				"VITE_OPENAI_MAX_TOKENS",
+			],
+		},
+	};
+	return keys[provider][field];
+}
+
+function readProviderEnvValue(
+	provider: EpubAiReadingProvider,
+	env: Record<string, string | undefined>,
+	field: "apiKey" | "baseUrl" | "model",
+): string {
+	return readEnvValue(env, getProviderEnvKeys(provider, field));
+}
+
+function readProviderEnvNumberValue(
+	provider: EpubAiReadingProvider,
+	env: Record<string, string | undefined>,
+	field: "temperature" | "maxCompletionTokens",
+): number | undefined {
+	return readEnvNumberValue(env, getProviderEnvKeys(provider, field));
+}
+
 export function parseEpubAiReadingEnv(content: string): Record<string, string> {
 	const env: Record<string, string> = {};
 	for (const rawLine of String(content || "").split(/\r?\n/g)) {
@@ -736,52 +1093,132 @@ type AIProviderConfig = {
 	apiKey?: string;
 	model?: string;
 	baseUrl?: string;
+	verified?: boolean;
+	lastVerified?: string;
 };
 
-function collectAIProviderConfigs(aiConfig?: AIConfig): AIProviderConfig[] {
+type KimiProviderConfigEntry = AIProviderConfig & {
+	platform?: AIProviderConfig;
+	code?: AIProviderConfig;
+};
+
+function hasProviderConfigValue(config: unknown): config is AIProviderConfig {
+	if (!isRecordValue(config)) {
+		return false;
+	}
+	return Boolean(
+		normalizeConfigValue(config.apiKey) ||
+			normalizeConfigValue(config.model) ||
+			normalizeConfigValue(config.baseUrl),
+	);
+}
+
+function getLegacyKimiProviderConfig(
+	aiConfig: AIConfig | undefined,
+): AIProviderConfig | undefined {
+	const apiKeys = (aiConfig?.apiKeys || {}) as Record<
+		string,
+		KimiProviderConfigEntry | AIProviderConfig | undefined
+	>;
+	const kimiConfig = apiKeys.kimi;
+	if (hasProviderConfigValue(kimiConfig)) {
+		return kimiConfig;
+	}
+	const moonshotConfig = apiKeys.moonshot;
+	return hasProviderConfigValue(moonshotConfig) ? moonshotConfig : undefined;
+}
+
+function getKimiProviderConfig(
+	aiConfig: AIConfig | undefined,
+	mode: EpubAiReadingKimiMode,
+): AIProviderConfig | undefined {
+	const apiKeys = (aiConfig?.apiKeys || {}) as Record<
+		string,
+		KimiProviderConfigEntry | AIProviderConfig | undefined
+	>;
+	const kimiConfig = apiKeys.kimi;
+	if (isRecordValue(kimiConfig)) {
+		const nestedConfig = kimiConfig[mode];
+		if (hasProviderConfigValue(nestedConfig)) {
+			return nestedConfig;
+		}
+		if (hasProviderConfigValue(kimiConfig)) {
+			const inferredMode = inferEpubAiReadingKimiMode(
+				kimiConfig.baseUrl,
+				kimiConfig.model,
+			);
+			if (inferredMode === mode) {
+				return kimiConfig;
+			}
+		}
+	}
+	const moonshotConfig = apiKeys.moonshot;
+	if (mode === "platform" && hasProviderConfigValue(moonshotConfig)) {
+		return moonshotConfig;
+	}
+	return undefined;
+}
+
+function getAIProviderConfig(
+	aiConfig: AIConfig | undefined,
+	provider: EpubAiReadingProvider,
+): AIProviderConfig | undefined {
+	if (provider === "kimi") {
+		return getKimiProviderConfig(
+			aiConfig,
+			resolveEpubAiReadingSelection(aiConfig).kimiMode,
+		);
+	}
 	const apiKeys = (aiConfig?.apiKeys || {}) as Record<
 		string,
 		AIProviderConfig | undefined
 	>;
-	const preferredProviders = [
-		"kimi",
-		"moonshot",
-		normalizeConfigValue(aiConfig?.lastUsedProvider),
-		normalizeConfigValue(aiConfig?.defaultProvider),
-		"openai",
-	].filter(Boolean);
-	const configs: AIProviderConfig[] = [];
-	for (const provider of preferredProviders) {
-		const config = apiKeys[provider];
-		if (config) {
-			configs.push(config);
-		}
-	}
-	for (const config of Object.values(apiKeys)) {
-		if (!config || configs.includes(config)) {
-			continue;
-		}
-		const baseUrl = normalizeConfigValue(config.baseUrl).toLowerCase();
-		const model = normalizeConfigValue(config.model).toLowerCase();
-		if (baseUrl.includes("moonshot") || model.includes("kimi")) {
-			configs.push(config);
-		}
-	}
-	return configs;
+	return apiKeys[provider];
 }
 
 export function resolveEpubAiReadingConfigFromHost(
 	host?: EpubAiReadingConfigHost | null,
 ): Partial<EpubAiReadingConfig> {
-	for (const config of collectAIProviderConfigs(host?.settings?.aiConfig)) {
-		const apiKey = normalizeConfigValue(config.apiKey);
+	const aiConfig = host?.settings?.aiConfig;
+	const selection = resolveEpubAiReadingSelection(aiConfig);
+	const providerOrder = Array.from(
+		new Set<EpubAiReadingProvider>([
+			selection.provider,
+			...EPUB_AI_READING_PROVIDER_ORDER,
+		]),
+	);
+	for (const provider of providerOrder) {
+		const definition = getEpubAiReadingProviderDefinition(provider);
+		const config = getAIProviderConfig(aiConfig, provider);
+		const apiKey = normalizeConfigValue(config?.apiKey);
 		if (!apiKey) {
 			continue;
 		}
+		if (provider === "kimi") {
+			const kimiMode =
+				provider === selection.provider
+					? selection.kimiMode
+					: inferEpubAiReadingKimiMode(config?.baseUrl, config?.model);
+			const kimiDefinition = getEpubAiReadingKimiModeDefinition(kimiMode);
+			return {
+				provider,
+				apiKey,
+				baseUrl:
+					normalizeConfigValue(config.baseUrl) || kimiDefinition.defaultBaseUrl,
+				model:
+					provider === selection.provider
+						? selection.model
+						: normalizeEpubAiReadingModelForKimiMode(kimiMode, config.model),
+			};
+		}
 		return {
+			provider,
 			apiKey,
-			baseUrl: normalizeConfigValue(config.baseUrl) || DEFAULT_KIMI_BASE_URL,
-			model: normalizeConfigValue(config.model) || DEFAULT_KIMI_MODEL,
+			baseUrl: normalizeConfigValue(config.baseUrl) || definition.defaultBaseUrl,
+			model:
+				provider === selection.provider
+					? selection.model
+					: normalizeEpubAiReadingModelForProvider(provider, config.model),
 		};
 	}
 	return {};
@@ -792,52 +1229,48 @@ export function resolveEpubAiReadingConfig(
 	runtimeEnv: Record<string, string | undefined> = {},
 ): EpubAiReadingConfig {
 	const env = { ...getProcessEnv(), ...runtimeEnv };
-	const baseUrl =
+	const provider = normalizeEpubAiReadingProvider(
+		overrides.provider ||
+			readEnvValue(env, [
+				"EPUB_AI_READING_PROVIDER",
+				"VITE_EPUB_AI_READING_PROVIDER",
+			]),
+	);
+	const definition = getEpubAiReadingProviderDefinition(provider);
+	const configuredBaseUrl =
 		normalizeConfigValue(overrides.baseUrl) ||
-		readEnvValue(env, [
-			"KIMI_API_BASE_URL",
-			"MOONSHOT_API_BASE_URL",
-			"VITE_KIMI_API_BASE_URL",
-			"VITE_MOONSHOT_API_BASE_URL",
-		]) ||
-		DEFAULT_KIMI_BASE_URL;
-	const model =
+		readProviderEnvValue(provider, env, "baseUrl");
+	const configuredModel =
 		normalizeConfigValue(overrides.model) ||
-		readEnvValue(env, [
-			"KIMI_MODEL",
-			"MOONSHOT_MODEL",
-			"VITE_KIMI_MODEL",
-			"VITE_MOONSHOT_MODEL",
-		]) ||
-		DEFAULT_KIMI_MODEL;
+		readProviderEnvValue(provider, env, "model");
+	const kimiMode =
+		provider === "kimi"
+			? inferEpubAiReadingKimiMode(configuredBaseUrl, configuredModel)
+			: "platform";
+	const kimiDefinition =
+		provider === "kimi"
+			? getEpubAiReadingKimiModeDefinition(kimiMode)
+			: null;
+	const baseUrl =
+		configuredBaseUrl ||
+		(kimiDefinition ? kimiDefinition.defaultBaseUrl : definition.defaultBaseUrl);
+	const model =
+		configuredModel ||
+		(kimiDefinition ? kimiDefinition.defaultModel : definition.defaultModel);
 	const temperature =
 		normalizeNumberValue(overrides.temperature) ??
-		readEnvNumberValue(env, [
-			"KIMI_TEMPERATURE",
-			"MOONSHOT_TEMPERATURE",
-			"VITE_KIMI_TEMPERATURE",
-			"VITE_MOONSHOT_TEMPERATURE",
-		]) ??
+		readProviderEnvNumberValue(provider, env, "temperature") ??
 		getDefaultEpubAiReadingTemperature(baseUrl, model);
 	const maxCompletionTokens =
 		normalizeNumberValue(overrides.maxCompletionTokens) ??
-		readEnvNumberValue(env, [
-			"KIMI_MAX_COMPLETION_TOKENS",
-			"MOONSHOT_MAX_COMPLETION_TOKENS",
-			"VITE_KIMI_MAX_COMPLETION_TOKENS",
-			"VITE_MOONSHOT_MAX_COMPLETION_TOKENS",
-		]) ??
+		readProviderEnvNumberValue(provider, env, "maxCompletionTokens") ??
 		normalizeNumberValue(overrides.maxTokens);
 
 	return {
+		provider,
 		apiKey:
 			normalizeConfigValue(overrides.apiKey) ||
-			readEnvValue(env, [
-				"KIMI_API_KEY",
-				"MOONSHOT_API_KEY",
-				"VITE_KIMI_API_KEY",
-				"VITE_MOONSHOT_API_KEY",
-			]),
+			readProviderEnvValue(provider, env, "apiKey"),
 		baseUrl,
 		model,
 		temperature,
@@ -1270,21 +1703,43 @@ function buildChatCompletionRequestBody(
 	input: EpubAiReadingInput,
 	options: { stream?: boolean; maxCompletionTokens?: number } = {},
 ): Record<string, unknown> {
+	const definition = getEpubAiReadingProviderDefinition(config.provider);
 	const outputPlan = resolveEpubAiReadingOutputPlan(input);
 	const maxCompletionTokens =
 		normalizeNumberValue(options.maxCompletionTokens) ||
 		normalizeNumberValue(config.maxCompletionTokens) ||
 		outputPlan.maxCompletionTokens;
-	return {
+	const body: Record<string, unknown> = {
 		model: config.model,
 		messages: [
 			{ role: "system", content: messages.system },
 			{ role: "user", content: messages.user },
 		],
-		temperature: config.temperature,
-		max_completion_tokens: maxCompletionTokens,
 		...(options.stream ? { stream: true } : {}),
 	};
+	if (definition.supportsTemperature) {
+		body.temperature = config.temperature;
+	}
+	body[definition.maxTokenField] = maxCompletionTokens;
+	if (config.provider === "kimi") {
+		const normalizedModel = normalizeConfigValue(config.model);
+		if (isKimiCodeConfig(config.baseUrl, normalizedModel)) {
+			if (normalizedModel === "k3" || normalizedModel === "k3-256k") {
+				body.reasoning_effort = "low";
+			}
+		} else if (normalizedModel === "kimi-k3") {
+			body.reasoning_effort = "low";
+		} else {
+			body.thinking = { type: "disabled" };
+		}
+	}
+	if (config.provider === "deepseek") {
+		body.thinking = { type: "disabled" };
+	}
+	if (config.provider === "openai") {
+		body.reasoning_effort = "none";
+	}
+	return body;
 }
 
 function getGlobalFetch(): EpubAiReadingFetch | null {
@@ -1457,10 +1912,10 @@ async function readStreamingChatCompletionText(
 	options: EpubAiReadingRequestOptions,
 ): Promise<string> {
 	if (!response.ok) {
-		throw new Error(`Kimi API 请求失败：HTTP ${response.status}`);
+		throw new Error(`AI API 请求失败：HTTP ${response.status}`);
 	}
 	if (!response.body?.getReader) {
-		throw new Error("当前环境不支持流式读取 Kimi 响应。");
+		throw new Error("当前环境不支持流式读取 AI 响应。");
 	}
 	const decoder = new TextDecoder();
 	const reader = response.body.getReader();
@@ -1553,7 +2008,7 @@ async function requestNodeStreamingChatCompletionText(
 						finish(() =>
 							reject(
 								new Error(
-									`Kimi API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP ${
+									`AI API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP ${
 										response.statusCode
 									}${details ? ` - ${details}` : ""}`,
 								),
@@ -1641,7 +2096,7 @@ async function requestNonStreamingChatCompletionText(
 
 	if (response.status && response.status >= 400) {
 		throw new Error(
-			"Kimi API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP " + response.status,
+			"AI API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP " + response.status,
 		);
 	}
 
@@ -1649,7 +2104,7 @@ async function requestNonStreamingChatCompletionText(
 	const content = extractKimiChatCompletionText(parsed);
 	if (!content) {
 		throw new Error(
-			"Kimi API \u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u9605\u8bfb\u7ed3\u679c\u3002",
+			"AI API \u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u9605\u8bfb\u7ed3\u679c\u3002",
 		);
 	}
 	return content;
@@ -1997,7 +2452,7 @@ export async function requestEpubAiReading(
 	);
 	if (!config.apiKey) {
 		throw new Error(
-			"\u7f3a\u5c11 Kimi API Key\u3002\u8bf7\u5728 .env \u4e2d\u914d\u7f6e KIMI_API_KEY \u6216 VITE_KIMI_API_KEY\u3002",
+			"\u7f3a\u5c11 AI API Key\u3002\u8bf7\u5728 AI \u9605\u8bfb\u754c\u9762\u4e2d\u9009\u62e9\u6a21\u578b\u5e76\u586b\u5199 API Key\u3002",
 		);
 	}
 	const chapterText = normalizeConfigValue(
@@ -2063,7 +2518,7 @@ export async function requestEpubAiReading(
 
 		if (response.status && response.status >= 400) {
 			throw new Error(
-				"Kimi API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP " + response.status,
+				"AI API \u8bf7\u6c42\u5931\u8d25\uff1aHTTP " + response.status,
 			);
 		}
 
@@ -2073,7 +2528,7 @@ export async function requestEpubAiReading(
 	}
 	if (!content) {
 		throw new Error(
-			"Kimi API \u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u9605\u8bfb\u7ed3\u679c\u3002",
+			"AI API \u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u9605\u8bfb\u7ed3\u679c\u3002",
 		);
 	}
 

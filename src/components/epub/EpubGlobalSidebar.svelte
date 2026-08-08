@@ -1173,6 +1173,7 @@
 						loading={tocLoading && tocItems.length === 0}
 						loadFailed={tocLoadFailed && !tocLoading}
 						activeHref={activeTocHref}
+						activePageNumber={sharedState?.paginationInfo?.currentPage ?? null}
 						lastReadHref={lastReadTocHref}
 						chapterMarks={sharedState?.tocChapterMarks ?? {}}
 						tocChapterMarkSettings={sharedState?.tocChapterMarkSettings ?? {}}
