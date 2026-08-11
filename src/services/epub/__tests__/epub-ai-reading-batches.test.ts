@@ -136,6 +136,24 @@ describe("epub-ai-reading batches", () => {
 		]);
 	});
 
+	it("uses current unit source ids in unit-detail prompt examples", () => {
+		const unit = createUnit(2);
+		const input = createInput(2);
+		const messages = buildEpubAiReadingMessages({
+			...input,
+			requestPurpose: "unit-detail",
+			closeReadingUnits: [unit],
+			sourceBlocks: [createBlock(unit.id, 1), createBlock(unit.id, 2)],
+			chapterText: "U002 paragraph 1\n\nU002 paragraph 2",
+			chapterMarkdown: "U002 paragraph 1\n\nU002 paragraph 2",
+		});
+
+		expect(messages.user).toContain("{{source:U002.P001}}");
+		expect(messages.user).toContain("{{source-range:U002.P001-U002.P002}}");
+		expect(messages.user).not.toContain("{{source:U001.P001}}");
+		expect(messages.user).not.toContain("{{source-range:U001.P001-U001.P003}}");
+	});
+
 	it("detects missing unit sections, missing fields and missing source references", () => {
 		const units = [createUnit(1), createUnit(2)];
 		const issues = validateEpubAiReadingUnitBatchContent(
@@ -246,7 +264,7 @@ describe("epub-ai-reading batches", () => {
 		expect(result.content).toContain("U004 摘要");
 	});
 
-	it("falls back to b1c1 when a batch omits required unit detail", async () => {
+	it("fills only missing unit details when a batch omits one unit", async () => {
 		const stages: string[] = [];
 		const requester = vi.fn(async (request) => {
 			const body = JSON.parse(String(request.body));
@@ -303,7 +321,7 @@ describe("epub-ai-reading batches", () => {
 			batch: { batchSize: 2, concurrency: 2, retryAttempts: 0 },
 		});
 
-		expect(requester).toHaveBeenCalledTimes(4);
+		expect(requester).toHaveBeenCalledTimes(3);
 		expect(stages.some((stage) => stage.includes("拆成单元重试"))).toBe(true);
 		expect(result.content).toContain("U001 摘要");
 		expect(result.content).toContain("U002 摘要");

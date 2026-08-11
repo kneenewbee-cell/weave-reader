@@ -219,7 +219,9 @@ describe("FoliateVaultPublicationParser", () => {
       parserAny.tocItems = [];
     });
     vi.spyOn(parserAny, "buildSectionDescriptors").mockResolvedValue(undefined);
-    vi.spyOn(parserAny, "hydrateTocPageNumbers").mockResolvedValue(undefined);
+    const hydrateLegacyTocPageSpy = vi
+      .spyOn(parserAny, "hydrateTocPageNumbers")
+      .mockResolvedValue(undefined);
     vi.spyOn(parserAny, "extractCoverDataUrl").mockResolvedValue(null);
 
     try {
@@ -233,6 +235,7 @@ describe("FoliateVaultPublicationParser", () => {
       expect(loaded.fileName).toBe("sample.cbz");
       expect(loaded.metadata.title).toBe("Sample CBZ");
       expect(loaded.book).toBe(fakeBook);
+      expect(hydrateLegacyTocPageSpy).not.toHaveBeenCalled();
     } finally {
       parser.dispose();
     }
@@ -267,7 +270,9 @@ describe("FoliateVaultPublicationParser", () => {
       parserAny.tocItems = [];
     });
     vi.spyOn(parserAny, "buildSectionDescriptors").mockResolvedValue(undefined);
-    vi.spyOn(parserAny, "hydrateTocPageNumbers").mockResolvedValue(undefined);
+    const hydrateLegacyTocPageSpy = vi
+      .spyOn(parserAny, "hydrateTocPageNumbers")
+      .mockResolvedValue(undefined);
     const coverSpy = vi
       .spyOn(parserAny, "extractCoverDataUrl")
       .mockRejectedValue(new Error("cover extraction should be skipped"));
@@ -278,6 +283,7 @@ describe("FoliateVaultPublicationParser", () => {
       expect(coverSpy).not.toHaveBeenCalled();
       expect(loaded.coverImage).toBeUndefined();
       expect(loaded.metadata.title).toBe("Sample CBZ");
+      expect(hydrateLegacyTocPageSpy).not.toHaveBeenCalled();
     } finally {
       parser.dispose();
     }

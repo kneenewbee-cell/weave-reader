@@ -9,76 +9,26 @@ vi.mock("obsidian", async () => {
 });
 
 describe("TableOfContents", () => {
-	it("uses the current bottom-nav page for the active toc item", () => {
+	it("hides item and active page numbers by default", () => {
 		render(TableOfContents, {
 			props: {
 				items: [
 					{
-						id: "chapter",
-						label: "Chapter",
-						href: "chapter.xhtml",
+						id: "chapter-11",
+						label: "第十一章",
+						href: "chapter-11.xhtml",
 						level: 1,
-						screenPageNumber: 1,
-						subitems: [
-							{
-								id: "current",
-								label: "Current section",
-								href: "chapter.xhtml#current",
-								level: 2,
-								screenPageNumber: 84,
-							},
-						],
+						pageNumber: 119,
+						screenPageNumber: 119,
 					},
 				],
-				activeHref: "chapter.xhtml#current",
-				activePageNumber: 104,
+				activeHref: "chapter-11.xhtml",
 				autoScrollToActive: false,
 				onNavigate: vi.fn(),
 			},
 		});
 
-		expect(screen.getByText("104")).toBeInTheDocument();
-		expect(screen.queryByText("84")).toBeNull();
-	});
-
-	it("keeps estimated page numbers for non-active toc items", () => {
-		const { container } = render(TableOfContents, {
-			props: {
-				items: [
-					{
-						id: "chapter",
-						label: "Chapter",
-						href: "chapter.xhtml",
-						level: 1,
-						screenPageNumber: 1,
-						subitems: [
-							{
-								id: "current",
-								label: "Current section",
-								href: "chapter.xhtml#current",
-								level: 2,
-								screenPageNumber: 84,
-							},
-							{
-								id: "next",
-								label: "Next section",
-								href: "chapter.xhtml#next",
-								level: 2,
-								screenPageNumber: 130,
-							},
-						],
-					},
-				],
-				activeHref: "chapter.xhtml#current",
-				activePageNumber: 104,
-				autoScrollToActive: false,
-				onNavigate: vi.fn(),
-			},
-		});
-
-		const pages = Array.from(container.querySelectorAll(".toc-page")).map((element) =>
-			element.textContent?.trim()
-		);
-		expect(pages).toEqual(["1", "104", "130"]);
+		expect(screen.getByText("第十一章")).toBeInTheDocument();
+		expect(screen.queryByText("119")).toBeNull();
 	});
 });

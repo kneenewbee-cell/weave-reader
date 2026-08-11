@@ -820,6 +820,48 @@ const EPUB_AI_READING_UNIT_DETAIL_FIELDS = [
 	"重要原文与解读",
 ];
 
+function resolveEpubAiReadingSourceReferenceExamples(
+	sourceBlocks: EpubAiReadingSourceBlock[],
+): {
+	sourceReferenceExample: string;
+	sourceRangeReferenceExample: string;
+	bareSourceIdExample: string;
+} {
+	const sourceIds = (sourceBlocks || [])
+		.map((block) => normalizeConfigValue(block.id))
+		.filter(Boolean);
+	if (sourceIds.length === 0) {
+		return {
+			sourceReferenceExample: "{{source:段001}}",
+			sourceRangeReferenceExample: "",
+			bareSourceIdExample: "段001",
+		};
+	}
+	const unitSourceIds = sourceIds.filter((id) => /^U\d{3}\.P\d{3}$/.test(id));
+	if (unitSourceIds.length === 0) {
+		const firstId = sourceIds[0];
+		const rangeEndId = sourceIds[1] || firstId;
+		return {
+			sourceReferenceExample: `{{source:${firstId}}}`,
+			sourceRangeReferenceExample:
+				rangeEndId !== firstId ? `{{source-range:${firstId}-${rangeEndId}}}` : "",
+			bareSourceIdExample: firstId,
+		};
+	}
+	const firstId = unitSourceIds[0];
+	const firstUnitId = firstId.match(/^(U\d{3})\./)?.[1] || "";
+	const rangeEndId =
+		unitSourceIds.find(
+			(id, index) =>
+				index > 0 && firstUnitId && id.startsWith(`${firstUnitId}.`),
+		) || firstId;
+	return {
+		sourceReferenceExample: `{{source:${firstId}}}`,
+		sourceRangeReferenceExample: `{{source-range:${firstId}-${rangeEndId}}}`,
+		bareSourceIdExample: firstId,
+	};
+}
+
 function findEpubAiReadingUnitSection(content: string, unitId: string): string {
 	const escaped = escapeRegExp(unitId);
 	const match = String(content || "").match(
@@ -1366,7 +1408,9 @@ function formatOptionalMisunderstandingContract(): string {
 	].join("\n");
 }
 
-function formatUnitDetailFieldContract(): string {
+function formatUnitDetailFieldContract(
+	sourceReferenceExample = "{{source:Uxxx.Pyyy}}",
+): string {
 	return [
 		"对每个 U 单元必须按以下必有标题输出，标题文字不要改：",
 		"## Uxxx 标题路径",
@@ -1375,7 +1419,7 @@ function formatUnitDetailFieldContract(): string {
 		"### 核心结论",
 		"### 关键知识点",
 		"### 重要原文与解读",
-		"重要原文与解读请写成普通文本行：原文/位置：短摘录或位置说明 {{source:U001.P001}}；为什么重要：...；读法：...。",
+		`重要原文与解读请写成普通文本行：原文/位置：短摘录或位置说明 ${sourceReferenceExample}；为什么重要：...；读法：...。`,
 		"不要用反引号包住原文/位置整行或原文按钮；只有术语、命令、代码片段本身需要反引号。",
 		"### 选择性内容",
 		"### 容易误解的点",
@@ -1401,12 +1445,8 @@ function buildEpubAiReadingUnitDetailMessages(input: EpubAiReadingInput): {
 	const usesUnitSourceBlocks = sourceBlocks.some((block) =>
 		/^U\d{3}\.P\d{3}$/.test(normalizeConfigValue(block.id)),
 	);
-	const sourceReferenceExample = usesUnitSourceBlocks
-		? "{{source:U001.P001}}"
-		: "{{source:段001}}";
-	const sourceRangeReferenceExample = usesUnitSourceBlocks
-		? "{{source-range:U001.P001-U001.P003}}"
-		: "";
+	const { sourceReferenceExample, sourceRangeReferenceExample } =
+		resolveEpubAiReadingSourceReferenceExamples(sourceBlocks);
 	const sourceReferenceRule = sourceBlockText
 		? usesUnitSourceBlocks
 			? `原文引用只允许使用占位符：单段写 ${sourceReferenceExample}，连续多段共同支撑同一句总结时必须合并写成一个范围 ${sourceRangeReferenceExample}，不要连续堆多个单段占位符。不要生成 Obsidian wikilink、EPUB URL、CFI、内部锚点或裸露 Uxxx.Pyyy。`
@@ -1431,7 +1471,7 @@ function buildEpubAiReadingUnitDetailMessages(input: EpubAiReadingInput): {
 		sourceReferenceRule,
 		"",
 		"# 固定输出模板",
-		formatUnitDetailFieldContract(),
+		formatUnitDetailFieldContract(sourceReferenceExample),
 		"",
 		"# 必须精析单元",
 		closeReadingUnitText,
@@ -1534,12 +1574,11 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 	const usesUnitSourceBlocks = sourceBlocks.some((block) =>
 		/^U\d{3}\.P\d{3}$/.test(normalizeConfigValue(block.id)),
 	);
-	const sourceReferenceExample = usesUnitSourceBlocks
-		? "{{source:U001.P001}}"
-		: "{{source:段001}}";
-	const sourceRangeReferenceExample = usesUnitSourceBlocks
-		? "{{source-range:U001.P001-U001.P003}}"
-		: "";
+	const {
+		sourceReferenceExample,
+		sourceRangeReferenceExample,
+		bareSourceIdExample,
+	} = resolveEpubAiReadingSourceReferenceExamples(sourceBlocks);
 	const sourceReferenceRule = sourceBlockText
 		? usesUnitSourceBlocks
 			? `请只使用来源占位符，不要生成 Obsidian wikilink、EPUB CFI、内部锚点或 URL。单段引用写 ${sourceReferenceExample}；连续多段共同支撑同一句总结时，必须合并写成一个范围引用 ${sourceRangeReferenceExample}，不要连续堆多个单段占位符。插件会把占位符转换成用户看到的“原文”按钮。`
@@ -1547,7 +1586,7 @@ export function buildEpubAiReadingMessages(input: EpubAiReadingInput): {
 		: "\u63d0\u53d6\u91cd\u8981\u539f\u6587\u65f6\uff0c\u7528\u201c\u4f4d\u7f6e\u8bf4\u660e + \u4e3a\u4ec0\u4e48\u91cd\u8981\u201d\u63cf\u8ff0\uff0c\u4e0d\u8981\u4f2a\u9020\u4e0d\u53ef\u70b9\u51fb\u7684\u951a\u70b9\u3002";
 	const sourceReferenceFormatRule =
 		sourceBlockText && usesUnitSourceBlocks
-			? "Do not write Obsidian wikilinks, EPUB URLs, or bare source ids such as U001.P001 in the answer text. Use {{source:U001.P001}} for one source paragraph and {{source-range:U001.P001-U001.P003}} for a continuous source range. If consecutive paragraphs support the same claim, merge them into one source-range placeholder instead of writing several source placeholders in a row. Do not show Uxxx.Pyyy to readers; the plugin will render every placeholder as an 原文 button with the range in the tooltip."
+			? `Do not write Obsidian wikilinks, EPUB URLs, or bare source ids such as ${bareSourceIdExample} in the answer text. Use ${sourceReferenceExample} for one source paragraph and ${sourceRangeReferenceExample} for a continuous source range. If consecutive paragraphs support the same claim, merge them into one source-range placeholder instead of writing several source placeholders in a row. Do not show Uxxx.Pyyy to readers; the plugin will render every placeholder as an 原文 button with the range in the tooltip.`
 			: "";
 	const system = [
 		"你是 EPUB AI 阅读助手。",
@@ -2199,6 +2238,8 @@ async function requestValidatedUnitBatchContent(
 	const maxCompletionTokens =
 		EPUB_AI_READING_LEAF_MAX_COMPLETION_TOKENS *
 		Math.max(1, batch.units.length);
+	let lastContent = "";
+	let lastIssues: EpubAiReadingUnitBatchValidationIssue[] = [];
 	for (let attempt = 0; attempt <= plan.retryAttempts; attempt += 1) {
 		const content = await requestNonStreamingChatCompletionText(
 			config,
@@ -2207,6 +2248,8 @@ async function requestValidatedUnitBatchContent(
 			maxCompletionTokens,
 		);
 		const issues = validateEpubAiReadingUnitBatchContent(content, batch.units);
+		lastContent = content;
+		lastIssues = issues;
 		if (issues.length === 0) {
 			return content;
 		}
@@ -2220,7 +2263,9 @@ async function requestValidatedUnitBatchContent(
 	if (batch.units.length <= 1) {
 		throw new Error(
 			`AI 阅读单元 ${formatBatchUnitRange(batch.units)} 内容不完整：${createValidationErrorMessage(
-				validateEpubAiReadingUnitBatchContent("", batch.units),
+				lastIssues.length > 0
+					? lastIssues
+					: validateEpubAiReadingUnitBatchContent("", batch.units),
 			)}`,
 		);
 	}
@@ -2228,8 +2273,22 @@ async function requestValidatedUnitBatchContent(
 		options,
 		`第 ${batch.index + 1}/${plan.batches.length} 批仍不完整，正在拆成单元重试`,
 	);
+	const incompleteUnitIds = new Set(
+		lastIssues.map((issue) => normalizeConfigValue(issue.unitId)).filter(Boolean),
+	);
 	const unitContents: string[] = [];
 	for (const unit of batch.units) {
+		const unitId = normalizeConfigValue(unit.id);
+		if (unitId && !incompleteUnitIds.has(unitId)) {
+			const existingSection = findEpubAiReadingUnitSection(lastContent, unitId);
+			if (
+				existingSection &&
+				validateEpubAiReadingUnitBatchContent(existingSection, [unit]).length === 0
+			) {
+				unitContents.push(existingSection.trim());
+				continue;
+			}
+		}
 		const sourceBlocks = getUnitSourceBlocks(unit, batch.sourceBlocks);
 		const unitBatch: EpubAiReadingUnitBatch = {
 			index: batch.index,

@@ -25,7 +25,6 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		loading?: boolean;
 		loadFailed?: boolean;
 		activeHref?: string | null;
-		activePageNumber?: number | null;
 		lastReadHref?: string | null;
 		chapterMarks?: EpubTocChapterMarkMap;
 		tocChapterMarkSettings?: EpubTocChapterMarkSettings;
@@ -46,7 +45,6 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		loading = false,
 		loadFailed = false,
 		activeHref = null,
-		activePageNumber = null,
 		lastReadHref = null,
 		chapterMarks = {},
 		tocChapterMarkSettings = {},
@@ -106,23 +104,6 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 
 	function handleClick(item: TocItem) {
 		onNavigate(item.href);
-	}
-
-	function normalizePageNumber(value: number | null | undefined): number | undefined {
-		if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-			return undefined;
-		}
-		return Math.round(value);
-	}
-
-	function getDisplayPageNumber(item: TocItem, isActive = false): number | undefined {
-		if (isActive) {
-			const activePage = normalizePageNumber(activePageNumber);
-			if (activePage) {
-				return activePage;
-			}
-		}
-		return item.screenPageNumber || item.pageNumber;
 	}
 
 	function handleKeydown(event: KeyboardEvent, item: TocItem) {
@@ -351,9 +332,6 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 								<span class="toc-last-read-badge">{t('epub.toc.lastReadBadge')}</span>
 							</span>
 						{/if}
-						{#if getDisplayPageNumber(item, isActive)}
-							<span class="toc-page">{getDisplayPageNumber(item, isActive)}</span>
-						{/if}
 					</span>
 				</div>
 			{/each}
@@ -459,20 +437,6 @@ import { flattenTocItems, isTocHrefActive, type FlatTocItem } from '../../utils/
 		margin-left: auto;
 		padding-left: 10px;
 		white-space: nowrap;
-	}
-
-	.toc-page {
-		flex: 0 0 auto;
-		min-width: 2ch;
-		text-align: right;
-		color: var(--text-faint);
-		font-size: 12px;
-		line-height: 1;
-		font-variant-numeric: tabular-nums;
-	}
-
-	.epub-toc-item.active .toc-page {
-		color: color-mix(in srgb, var(--interactive-accent) 72%, var(--text-muted) 28%);
 	}
 
 	.toc-last-read-marker {

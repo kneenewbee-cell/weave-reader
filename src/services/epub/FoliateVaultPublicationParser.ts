@@ -414,10 +414,6 @@ export class FoliateVaultPublicationParser {
 		void this.hydrateSectionDescriptorMetrics().catch((error) => {
 			logger.warn("[FoliateVaultPublicationParser] Failed to hydrate section metrics:", error);
 		});
-		// TOC page numbers are non-critical for first paint; hydrate in the background.
-		void this.hydrateTocPageNumbers().catch((error) => {
-			logger.warn("[FoliateVaultPublicationParser] Failed to hydrate TOC page numbers:", error);
-		});
 
 		return {
 			filePath,

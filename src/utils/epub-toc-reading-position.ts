@@ -6,6 +6,7 @@ export interface TocScreenPaginationReloadKeyInput {
 	bookId?: string | null;
 	filePath?: string | null;
 	screenTotalPages?: number | null;
+	screenPaginationPending?: boolean | null;
 	currentPage?: number | null;
 }
 
@@ -18,7 +19,12 @@ export function buildTocScreenPaginationReloadKey(
 		typeof input.screenTotalPages === "number" && Number.isFinite(input.screenTotalPages)
 			? Math.round(input.screenTotalPages)
 			: 0;
-	const screenKey = rawScreenTotal > 0 ? `screen:${rawScreenTotal}` : "legacy";
+	const screenKey =
+		rawScreenTotal > 0
+			? `screen:${rawScreenTotal}`
+			: input.screenPaginationPending
+				? "screen:pending"
+				: "legacy";
 	return [bookId, filePath, screenKey].join("::");
 }
 

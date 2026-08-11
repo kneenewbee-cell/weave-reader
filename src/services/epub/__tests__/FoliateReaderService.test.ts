@@ -467,6 +467,10 @@ describe("FoliateReaderService", () => {
 			expect(currentPosition.cfi.startsWith("epubcfi(")).toBe(true);
 			expect(currentPosition.cfi).not.toBe("");
 			expect(currentPosition.cfi).not.toBe(service.getSectionHrefForCfi?.(currentPosition.cfi) || "");
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 0,
+				totalPages: 0,
+			});
 		} finally {
 			service.destroy();
 		}
@@ -488,7 +492,8 @@ describe("FoliateReaderService", () => {
 			expect(pageSpy).not.toHaveBeenCalled();
 			expect(service.getCurrentPosition().cfi).toMatch(/^epubcfi\(/);
 			await expect(service.getPaginationInfo()).resolves.toMatchObject({
-				currentPage: 1,
+				currentPage: 0,
+				totalPages: 0,
 			});
 		} finally {
 			service.destroy();
@@ -523,6 +528,10 @@ describe("FoliateReaderService", () => {
 				chapterIndex: 0,
 				cfi: restoredCfi,
 				percent: 50,
+			});
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 0,
+				totalPages: 0,
 			});
 		} finally {
 			service.destroy();
@@ -654,14 +663,19 @@ describe("FoliateReaderService", () => {
 			expect(book.metadata.series).toBe("阅读器测试系列");
 			expect(book.metadata.chapterCount).toBe(1);
 
+			const hydrateLegacyTocPageSpy = vi.spyOn(
+				(service as any).parser,
+				"hydrateTocPageNumbersForCurrentBook"
+			);
 			const toc = await service.getTableOfContents();
 			expect(toc).toHaveLength(1);
 			expect(toc[0]?.label).toBe("Chapter 1");
 			expect(toc[0]?.level).toBe(1);
-			expect(toc[0]?.pageNumber).toBe(1);
+			expect(toc[0]?.pageNumber).toBeUndefined();
 			expect(toc[0]?.subitems?.[0]?.label).toBe("Section 1");
 			expect(toc[0]?.subitems?.[0]?.level).toBe(2);
-			expect(toc[0]?.subitems?.[0]?.pageNumber).toBe(1);
+			expect(toc[0]?.subitems?.[0]?.pageNumber).toBeUndefined();
+			expect(hydrateLegacyTocPageSpy).not.toHaveBeenCalled();
 
 			const results = await service.searchText("Selection text for testing");
 			expect(results).toHaveLength(1);
@@ -691,7 +705,7 @@ describe("FoliateReaderService", () => {
 
 			const canonical = await service.canonicalizeLocation(legacyLocation, "Chapter 1");
 			expect(canonical?.startsWith("epubcfi(")).toBe(true);
-			expect(await service.getPageNumberFromCfi(canonical as string)).toBe(1);
+			expect(await service.getPageNumberFromCfi(canonical as string)).toBeUndefined();
 		} finally {
 			service.destroy();
 		}
@@ -724,7 +738,7 @@ describe("FoliateReaderService", () => {
 			const stableStartCfi = service.getCurrentPosition().cfi;
 
 			await expect(service.canonicalizeLocation(malformedCfi)).resolves.toBe(stableStartCfi);
-			await expect(service.getPageNumberFromCfi(malformedCfi)).resolves.toBe(1);
+			await expect(service.getPageNumberFromCfi(malformedCfi)).resolves.toBeUndefined();
 		} finally {
 			service.destroy();
 		}
@@ -784,7 +798,7 @@ describe("FoliateReaderService", () => {
 			expect(canonical).toBeTruthy();
 			expect(canonical).not.toBe(baseCfi);
 			expect(String(canonical)).toContain("!");
-			expect(await service.getPageNumberFromCfi(String(canonical))).toBe(1);
+			expect(await service.getPageNumberFromCfi(String(canonical))).toBeUndefined();
 		} finally {
 			service.destroy();
 		}
@@ -1297,7 +1311,7 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
-	it("does not show estimated TOC screen page numbers before Foliate measurement finishes", async () => {
+	it("does not attach screen page numbers to TOC items", async () => {
 		const service = new FoliateReaderService(createMockApp(await createSampleEpubBuffer()) as any);
 		const container = document.createElement("div");
 		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
@@ -1337,7 +1351,7 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
-	it("maps anchored TOC entries to their measured screen inside the section", async () => {
+	it("clears measured TOC screen page numbers instead of exposing them", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		const container = document.createElement("div");
 		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
@@ -1436,8 +1450,10 @@ describe("FoliateReaderService", () => {
 
 			const toc = await service.getTableOfContents();
 
-			expect(toc[0]?.screenPageNumber).toBe(1);
-			expect(toc[0]?.subitems?.[0]?.screenPageNumber).toBe(11);
+			expect(toc[0]?.screenPageNumber).toBeUndefined();
+			expect(toc[0]?.pageNumber).toBeUndefined();
+			expect(toc[0]?.subitems?.[0]?.screenPageNumber).toBeUndefined();
+			expect(toc[0]?.subitems?.[0]?.pageNumber).toBeUndefined();
 		} finally {
 			service.destroy();
 		}
@@ -1580,7 +1596,7 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
-	it("turns only once during a long continuous touchpad wheel gesture", async () => {
+	it("allows wheel pagination again after the navigation cooldown", async () => {
 		vi.useFakeTimers();
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {
@@ -1602,26 +1618,6 @@ describe("FoliateReaderService", () => {
 			expect(nextPageSpy).toHaveBeenCalledTimes(1);
 
 			await vi.advanceTimersByTimeAsync(220);
-			(service as any).handleWheelPageTurn(
-				new WheelEvent("wheel", { deltaY: 70, cancelable: true })
-			);
-			await Promise.resolve();
-			await Promise.resolve();
-			await Promise.resolve();
-			await Promise.resolve();
-			expect(nextPageSpy).toHaveBeenCalledTimes(1);
-
-			await vi.advanceTimersByTimeAsync(520);
-			(service as any).handleWheelPageTurn(
-				new WheelEvent("wheel", { deltaY: 70, cancelable: true })
-			);
-			await Promise.resolve();
-			await Promise.resolve();
-			await Promise.resolve();
-			await Promise.resolve();
-			expect(nextPageSpy).toHaveBeenCalledTimes(1);
-
-			await vi.advanceTimersByTimeAsync(700);
 			(service as any).handleWheelPageTurn(
 				new WheelEvent("wheel", { deltaY: 70, cancelable: true })
 			);
@@ -1691,7 +1687,7 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
-	it("keeps fallback pagination visible while screen pagination measurement is pending", async () => {
+	it("does not show exact measurement pending state when lazy pagination has no range", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		try {
 			vi.spyOn(service as any, "resolveCurrentScreenPageRange").mockReturnValue(null);
@@ -1708,8 +1704,10 @@ describe("FoliateReaderService", () => {
 			await (service as any).syncCurrentPositionFromTarget("chapter.xhtml");
 
 			await expect(service.getPaginationInfo()).resolves.toMatchObject({
-				currentPage: 7,
-				totalPages: 49,
+				currentPage: 0,
+				totalPages: 0,
+				screenPaginationMeasured: false,
+				screenPaginationPending: false,
 				pageLabel: undefined,
 			});
 		} finally {
@@ -1717,7 +1715,7 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
-	it("uses Foliate screen detail instead of Foliate location units while measurement is pending", async () => {
+	it("uses Foliate screen detail to refine lazy pagination instead of Foliate location units", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		const container = document.createElement("div");
 		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
@@ -1780,7 +1778,6 @@ describe("FoliateReaderService", () => {
 				positionCount: 105,
 				positionStart: 3,
 			});
-
 			await (service as any).syncCurrentPositionFromTarget("chapter-2.xhtml", undefined, undefined, {
 				index: 1,
 				cfi: "epubcfi(/6/4!/4/2)",
@@ -1793,7 +1790,11 @@ describe("FoliateReaderService", () => {
 				currentPage: 6,
 				totalPages: 108,
 				screenStartPage: 6,
-				pageLabel: "第 6 / 108 页",
+				screenEndPage: 6,
+				screenTotalPages: 108,
+				screenPaginationMeasured: true,
+				screenPaginationPending: false,
+				pageLabel: "\u7b2c 6 / 108 \u9875",
 			});
 		} finally {
 			service.destroy();
@@ -1820,8 +1821,8 @@ describe("FoliateReaderService", () => {
 			});
 
 			await expect(service.getPaginationInfo()).resolves.toMatchObject({
-				currentPage: 3,
-				totalPages: 108,
+				currentPage: 0,
+				totalPages: 0,
 				screenStartPage: undefined,
 				screenEndPage: undefined,
 				screenTotalPages: undefined,
@@ -1832,7 +1833,7 @@ describe("FoliateReaderService", () => {
 		}
 	});
 
-	it("carries observed section screen counts into following section starts", async () => {
+	it("uses observed section screen counts to refine lazy totals immediately", async () => {
 		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
 		const container = document.createElement("div");
 		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
@@ -1890,7 +1891,6 @@ describe("FoliateReaderService", () => {
 			vi.spyOn((service as any).parser, "getSectionReadingMetrics").mockImplementation(
 				(index: number) => sections[index] ?? null
 			);
-
 			await (service as any).syncCurrentPositionFromTarget(
 				"chapter-3.xhtml",
 				undefined,
@@ -1905,7 +1905,13 @@ describe("FoliateReaderService", () => {
 
 			await expect(service.getPaginationInfo()).resolves.toMatchObject({
 				currentPage: 65,
+				totalPages: 75,
 				screenStartPage: 65,
+				screenEndPage: 65,
+				screenTotalPages: 75,
+				screenPaginationMeasured: true,
+				screenPaginationPending: false,
+				pageLabel: "\u7b2c 65 / 75 \u9875",
 			});
 
 			await (service as any).syncCurrentPositionFromTarget(
@@ -1922,7 +1928,13 @@ describe("FoliateReaderService", () => {
 
 			await expect(service.getPaginationInfo()).resolves.toMatchObject({
 				currentPage: 66,
+				totalPages: 75,
 				screenStartPage: 66,
+				screenEndPage: 66,
+				screenTotalPages: 75,
+				screenPaginationMeasured: true,
+				screenPaginationPending: false,
+				pageLabel: "\u7b2c 66 / 75 \u9875",
 			});
 		} finally {
 			service.destroy();
@@ -2286,12 +2298,337 @@ describe("FoliateReaderService", () => {
 				.spyOn((service as any).parser, "resolveCfiForPage")
 				.mockResolvedValue("epubcfi(/6/4)");
 			vi.spyOn(service as any, "syncCurrentPositionFromTarget").mockResolvedValue(undefined);
+			(service as any).refreshScreenPaginationState();
+			(service as any).screenPaginationStateIsMeasured = true;
 
 			await service.goToPage(76);
 
 			expect(resolveCfiSpy).not.toHaveBeenCalled();
 			expect(viewGoToSpy).not.toHaveBeenCalled();
 			expect(rendererGoToSpy).toHaveBeenCalledWith({ index: 1, anchor: 25 / 49 });
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("uses lazy screen pagination for page input without waiting for measurement", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		try {
+			const container = document.createElement("div");
+			vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+				x: 0,
+				y: 0,
+				left: 0,
+				top: 0,
+				right: 1200,
+				bottom: 720,
+				width: 1200,
+				height: 720,
+				toJSON: () => ({}),
+			});
+			(service as any).currentBook = {
+				id: "book",
+				filePath: "Books/book.epub",
+				metadata: { title: "Book", author: "", chapterCount: 2 },
+				currentPosition: { chapterIndex: 0, cfi: "", percent: 0 },
+				readingStats: { totalReadTime: 0, lastReadTime: 0, createdTime: 0 },
+			};
+			(service as any).renderContainer = container;
+			(service as any).currentFlowMode = "paginated";
+			const rendererGoToSpy = vi.fn().mockResolvedValue(undefined);
+			const renderer = document.createElement("foliate-paginator") as HTMLElement & {
+				goTo: typeof rendererGoToSpy;
+				render: () => void;
+			};
+			renderer.goTo = rendererGoToSpy;
+			renderer.render = vi.fn();
+			const view = document.createElement("foliate-view") as HTMLElement & {
+				renderer: typeof renderer;
+			};
+			Object.defineProperty(view, "renderer", { value: renderer, configurable: true });
+			(service as any).foliateView = view;
+			vi.spyOn(service as any, "stabilizeViewAfterNavigation").mockResolvedValue(undefined);
+			vi.spyOn((service as any).parser, "isFixedLayout").mockReturnValue(false);
+			vi.spyOn((service as any).parser, "getAllSectionReadingMetrics").mockReturnValue([
+				{
+					index: 0,
+					href: "chapter-1.xhtml",
+					title: "Chapter 1",
+					textLength: 1,
+					wordCount: 1,
+					positionCount: 50,
+					positionStart: 0,
+				},
+				{
+					index: 1,
+					href: "chapter-2.xhtml",
+					title: "Chapter 2",
+					textLength: 1,
+					wordCount: 1,
+					positionCount: 50,
+					positionStart: 50,
+				},
+			]);
+			const resolveCfiSpy = vi
+				.spyOn((service as any).parser, "resolveCfiForPage")
+				.mockResolvedValue("epubcfi(/6/4)");
+			vi.spyOn(service as any, "syncCurrentPositionFromTarget").mockResolvedValue(undefined);
+			(service as any).refreshScreenPaginationState();
+			(service as any).screenPaginationStateIsMeasured = false;
+
+			await service.goToPage(76);
+
+			expect(rendererGoToSpy).toHaveBeenCalledWith({ index: 1, anchor: 25 / 49 });
+			expect(resolveCfiSpy).not.toHaveBeenCalled();
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("exposes lazy screen pagination when exact measurement is not running", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		const container = document.createElement("div");
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+			x: 0,
+			y: 0,
+			left: 0,
+			top: 0,
+			right: 1200,
+			bottom: 720,
+			width: 1200,
+			height: 720,
+			toJSON: () => ({}),
+		});
+		try {
+			(service as any).currentBook = {
+				id: "screen-book",
+				filePath: "Books/screen-book.epub",
+				metadata: { title: "Screen Book", author: "", chapterCount: 1 },
+				currentPosition: { chapterIndex: 0, cfi: "", percent: 0 },
+				readingStats: { totalReadTime: 0, lastReadTime: 0, createdTime: 0 },
+			};
+			(service as any).renderContainer = container;
+			(service as any).currentFlowMode = "paginated";
+			(service as any).currentLayoutMode = "single";
+			vi.spyOn((service as any).parser, "resolveNavigationTarget").mockResolvedValue({
+				index: 0,
+				href: "chapter.xhtml",
+				cfi: "epubcfi(/6/2!/4/2)",
+			});
+			vi.spyOn((service as any).parser, "resolvePageNumberForResolvedTarget").mockReturnValue(7);
+			vi.spyOn((service as any).parser, "getTotalPositions").mockReturnValue(49);
+			vi.spyOn((service as any).parser, "getSectionTitleByIndex").mockReturnValue("Chapter");
+			vi.spyOn((service as any).parser, "isFixedLayout").mockReturnValue(false);
+			vi.spyOn((service as any).parser, "getAllSectionReadingMetrics").mockReturnValue([
+				{
+					index: 0,
+					href: "chapter.xhtml",
+					title: "Chapter",
+					textLength: 1,
+					wordCount: 1,
+					positionCount: 49,
+					positionStart: 0,
+				},
+			]);
+			vi.spyOn((service as any).parser, "getSectionReadingMetrics").mockReturnValue({
+				index: 0,
+				href: "chapter.xhtml",
+				title: "Chapter",
+				textLength: 1,
+				wordCount: 1,
+				positionCount: 49,
+				positionStart: 0,
+			});
+			(service as any).refreshScreenPaginationState();
+			(service as any).screenPaginationStateIsMeasured = false;
+			(service as any).screenPaginationMeasurementTask = null;
+			(service as any).screenPaginationMeasurementLayoutKey = "";
+
+			await (service as any).syncCurrentPositionFromTarget("chapter.xhtml");
+
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 7,
+				totalPages: 49,
+				screenStartPage: 7,
+				screenEndPage: 7,
+				screenTotalPages: 49,
+				screenPaginationMeasured: true,
+				screenPaginationPending: false,
+				pageLabel: "\u7b2c 7 / 49 \u9875",
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("does not start exact screen measurement before showing lazy pagination", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		const container = document.createElement("div");
+		vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+			x: 0,
+			y: 0,
+			left: 0,
+			top: 0,
+			right: 1200,
+			bottom: 720,
+			width: 1200,
+			height: 720,
+			toJSON: () => ({}),
+		});
+		try {
+			(service as any).currentBook = {
+				id: "screen-book",
+				filePath: "Books/screen-book.epub",
+				metadata: { title: "Screen Book", author: "", chapterCount: 1 },
+				currentPosition: { chapterIndex: 0, cfi: "", percent: 0 },
+				readingStats: { totalReadTime: 0, lastReadTime: 0, createdTime: 0 },
+			};
+			(service as any).renderContainer = container;
+			(service as any).currentFlowMode = "paginated";
+			(service as any).currentLayoutMode = "single";
+			const measureSpy = vi.spyOn(service as any, "measureScreenPaginationState").mockReturnValue(
+				new Promise(() => {
+					/* keep pending */
+				})
+			);
+			vi.spyOn((service as any).parser, "resolveNavigationTarget").mockResolvedValue({
+				index: 0,
+				href: "chapter.xhtml",
+				cfi: "epubcfi(/6/2!/4/2)",
+			});
+			vi.spyOn((service as any).parser, "resolvePageNumberForResolvedTarget").mockReturnValue(7);
+			vi.spyOn((service as any).parser, "getTotalPositions").mockReturnValue(49);
+			vi.spyOn((service as any).parser, "getSectionTitleByIndex").mockReturnValue("Chapter");
+			vi.spyOn((service as any).parser, "getBook").mockReturnValue({});
+			vi.spyOn((service as any).parser, "isFixedLayout").mockReturnValue(false);
+			vi.spyOn((service as any).parser, "getAllSectionReadingMetrics").mockReturnValue([
+				{
+					index: 0,
+					href: "chapter.xhtml",
+					title: "Chapter",
+					textLength: 1,
+					wordCount: 1,
+					positionCount: 49,
+					positionStart: 0,
+				},
+			]);
+			vi.spyOn((service as any).parser, "getSectionReadingMetrics").mockReturnValue({
+				index: 0,
+				href: "chapter.xhtml",
+				title: "Chapter",
+				textLength: 1,
+				wordCount: 1,
+				positionCount: 49,
+				positionStart: 0,
+			});
+
+			(service as any).refreshScreenPaginationState();
+			await (service as any).syncCurrentPositionFromTarget("chapter.xhtml");
+
+			expect(measureSpy).not.toHaveBeenCalled();
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 7,
+				totalPages: 49,
+				screenStartPage: 7,
+				screenPaginationMeasured: true,
+				screenPaginationPending: false,
+				screenPaginationFailed: false,
+				pageLabel: "\u7b2c 7 / 49 \u9875",
+			});
+		} finally {
+			service.destroy();
+		}
+	});
+
+	it("does not wait for slow exact screen pagination before publishing lazy pages", async () => {
+		const service = new FoliateReaderService(createMockApp(new ArrayBuffer(0)) as any);
+		const container = document.createElement("div");
+		vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+			x: 0,
+			y: 0,
+			left: 0,
+			top: 0,
+			right: 1200,
+			bottom: 720,
+			width: 1200,
+			height: 720,
+			toJSON: () => ({}),
+		});
+		try {
+			(service as any).currentBook = {
+				id: "large-book",
+				filePath: "Books/large-book.epub",
+				metadata: { title: "Large Book", author: "", chapterCount: 1 },
+				currentPosition: { chapterIndex: 0, cfi: "", percent: 0 },
+				readingStats: { totalReadTime: 0, lastReadTime: 0, createdTime: 0 },
+			};
+			(service as any).renderContainer = container;
+			(service as any).currentFlowMode = "paginated";
+			(service as any).currentLayoutMode = "single";
+			vi.spyOn((service as any).parser, "resolveNavigationTarget").mockResolvedValue({
+				index: 0,
+				href: "chapter.xhtml",
+				cfi: "epubcfi(/6/2!/4/2)",
+			});
+			vi.spyOn((service as any).parser, "resolvePageNumberForResolvedTarget").mockReturnValue(1);
+			vi.spyOn((service as any).parser, "getTotalPositions").mockReturnValue(100);
+			vi.spyOn((service as any).parser, "getSectionTitleByIndex").mockReturnValue("Chapter");
+			vi.spyOn((service as any).parser, "getBook").mockReturnValue({});
+			vi.spyOn((service as any).parser, "isFixedLayout").mockReturnValue(false);
+			vi.spyOn((service as any).parser, "getAllSectionReadingMetrics").mockReturnValue([
+				{
+					index: 0,
+					href: "chapter.xhtml",
+					title: "Chapter",
+					textLength: 1,
+					wordCount: 1,
+					positionCount: 100,
+					positionStart: 0,
+				},
+			]);
+			vi.spyOn((service as any).parser, "getSectionReadingMetrics").mockReturnValue({
+				index: 0,
+				href: "chapter.xhtml",
+				title: "Chapter",
+				textLength: 1,
+				wordCount: 1,
+				positionCount: 100,
+				positionStart: 0,
+			});
+			const layout = (service as any).buildScreenPaginationLayoutInput();
+			const measuredState = buildScreenPaginationState({
+				layout,
+				sections: [
+					{
+						index: 0,
+						href: "chapter.xhtml",
+						textLength: 1,
+						fallbackPositionCount: 100,
+						measuredPageCount: 24,
+					},
+				],
+			});
+			const measureSpy = vi.spyOn(service as any, "measureScreenPaginationState").mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						window.setTimeout(() => resolve(measuredState), 35_000);
+					})
+			);
+
+			(service as any).refreshScreenPaginationState();
+			await (service as any).syncCurrentPositionFromTarget("chapter.xhtml");
+
+			expect(measureSpy).not.toHaveBeenCalled();
+			await expect(service.getPaginationInfo()).resolves.toMatchObject({
+				currentPage: 1,
+				totalPages: 100,
+				screenPaginationMeasured: true,
+				screenPaginationPending: false,
+				screenPaginationFailed: false,
+				pageLabel: "\u7b2c 1 / 100 \u9875",
+			});
 		} finally {
 			service.destroy();
 		}

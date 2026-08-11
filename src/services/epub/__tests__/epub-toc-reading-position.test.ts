@@ -115,6 +115,23 @@ describe("epub-toc-reading-position", () => {
 		expect(screenKey).toContain("screen:214");
 	});
 
+	it("changes the toc reload key when screen pagination enters pending measurement", () => {
+		const legacyKey = buildTocScreenPaginationReloadKey({
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			screenTotalPages: undefined,
+		});
+		const pendingKey = buildTocScreenPaginationReloadKey({
+			bookId: "book-1",
+			filePath: "Books/demo.epub",
+			screenTotalPages: undefined,
+			screenPaginationPending: true,
+		});
+
+		expect(pendingKey).not.toBe(legacyKey);
+		expect(pendingKey).toContain("screen:pending");
+	});
+
 	it("keeps the toc reload key stable during ordinary page turns", () => {
 		expect(
 			buildTocScreenPaginationReloadKey({

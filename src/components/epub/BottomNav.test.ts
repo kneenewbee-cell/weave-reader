@@ -44,4 +44,25 @@ describe("BottomNav", () => {
 		expect(screen.queryByText("10")).toBeNull();
 		expect(screen.queryByText("214")).toBeNull();
 	});
+
+	it("shows pending screen page text without enabling page input", async () => {
+		const onJumpToPage = vi.fn();
+
+		render(BottomNav, {
+			props: {
+				onPrev: vi.fn(),
+				onNext: vi.fn(),
+				onJumpToPage,
+				currentPage: 0,
+				totalPages: 0,
+				pageLabel: "\u7cbe\u786e\u9875\u7801\u8ba1\u7b97\u4e2d",
+			},
+		});
+
+		expect(screen.getByText("\u7cbe\u786e\u9875\u7801\u8ba1\u7b97\u4e2d")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "\u7cbe\u786e\u9875\u7801\u8ba1\u7b97\u4e2d" })
+		).toBeNull();
+		expect(screen.queryByLabelText("\u8df3\u8f6c\u9875\u6570")).toBeNull();
+	});
 });

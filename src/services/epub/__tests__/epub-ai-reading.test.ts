@@ -277,8 +277,8 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).toContain("每个 U 单元最多输出 1-3 条容易误解的点");
 		expect(messages.user).not.toContain("与上下文关系");
 		expect(messages.user).not.toContain("章节关系");
-		expect(messages.user).toContain("{{source:U001.P001}}");
-		expect(messages.user).toContain("{{source-range:U001.P001-U001.P003}}");
+		expect(messages.user).toContain("{{source:U016.P001}}");
+		expect(messages.user).toContain("{{source-range:U016.P001-U016.P001}}");
 		expect(messages.user).toContain("不要生成 Obsidian wikilink");
 		expect(messages.user).toContain("不要把 Uxxx.Pyyy 显示给读者");
 		expect(messages.user).toContain("[U016.P001]");
@@ -388,8 +388,8 @@ describe("epub-ai-reading", () => {
 		expect(messages.user).toContain("每个 U 单元最多输出 1-3 条容易误解的点");
 		expect(messages.user).not.toContain("与上下文关系");
 		expect(messages.user).not.toContain("章节关系");
-		expect(messages.user).toContain("{{source:U001.P001}}");
-		expect(messages.user).toContain("{{source-range:U001.P001-U001.P003}}");
+		expect(messages.user).toContain("{{source:U016.P001}}");
+		expect(messages.user).toContain("{{source-range:U016.P001-U016.P001}}");
 		expect(messages.user).toContain("不要生成 Obsidian wikilink");
 		expect(messages.user).toContain("裸露 Uxxx.Pyyy");
 		expect(messages.user).not.toContain("严格保留 Uxxx.Pyyy 来源编号");

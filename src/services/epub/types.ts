@@ -144,6 +144,9 @@ export interface PaginationInfo {
 	screenStartPage?: number;
 	screenEndPage?: number;
 	screenTotalPages?: number;
+	screenPaginationMeasured?: boolean;
+	screenPaginationPending?: boolean;
+	screenPaginationFailed?: boolean;
 	pageLabel?: string;
 }
 

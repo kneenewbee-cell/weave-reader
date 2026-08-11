@@ -4157,10 +4157,18 @@
 				chapterIndex: pos.chapterIndex,
 				percent: pos.percent,
 				chapterTitle,
-				pageNumber: settings.flowMode !== 'scrolled' && paginationInfo.currentPage > 0
+				pageNumber: settings.flowMode !== 'scrolled'
+					&& paginationInfo.currentPage > 0
+					&& paginationInfo.screenPaginationMeasured === true
+					&& paginationInfo.screenPaginationPending !== true
+					&& paginationInfo.screenPaginationFailed !== true
 					? paginationInfo.currentPage
 					: undefined,
-				totalPages: settings.flowMode !== 'scrolled' && paginationInfo.totalPages > 0
+				totalPages: settings.flowMode !== 'scrolled'
+					&& paginationInfo.totalPages > 0
+					&& paginationInfo.screenPaginationMeasured === true
+					&& paginationInfo.screenPaginationPending !== true
+					&& paginationInfo.screenPaginationFailed !== true
 					? paginationInfo.totalPages
 					: undefined,
 				createdAt: Date.now(),
