@@ -60,6 +60,18 @@ describe("EPUB tutorial locales", () => {
 		expect(EPUB_TUTORIAL_TABS_BY_LANG["zh-TW"][0]?.label).toBe("基礎閱讀");
 	});
 
+	it("covers current Chinese tutorial entries for the integrated reader", () => {
+		const serialized = JSON.stringify(EPUB_TUTORIAL_CONTENT_BY_LANG["zh-CN"]);
+
+		expect(serialized).toContain("双窗模式");
+		expect(serialized).toContain("PDF 阅读器");
+		expect(serialized).toContain("AI 阅读");
+		expect(serialized).toContain("阅读包导入导出");
+		expect(serialized).toContain("模型来源");
+		expect(serialized).toContain("书架右键菜单");
+		expect(serialized).toContain("墨迹");
+	});
+
 	it("preserves technical tutorial fields across localized bodies", () => {
 		const englishWorkflow = enUSTutorial.workflow[2];
 		for (const lang of LOCALIZED_LANGS) {
